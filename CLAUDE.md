@@ -28,7 +28,7 @@ Three exceptions come from the same reasoning.
 Three measurements in the sibling `marketlake` repository produced this rule, and they are cited here as the evidence behind it rather than as facts about this repo.
 
 1. Its daemon slice stood at 43 issues closed and 32 open while its read-layer slice stood at 0 closed.
-2. Its lake held 9,839,816 captured rows and no supported way to read any of them.
+2. Its lake held 9,839,816 rows captured on a single day and no supported way to read any of them.
 3. Several rounds of work hardened an overflow column that was non-null on zero of 9,846,266 sealed rows.
 
 Ranking by severity never runs out of work, because any path with no test behind it can be called a failure waiting to happen. That is how three rounds of hardening reached one capture path while the data stayed unreadable.
@@ -52,7 +52,7 @@ A correction goes on the issue, because a spawned session reads the issue and re
 
 Where the audit finds the code contradicting the issue, the issue still decides what the deliverable is, per the tracker directive above. What changes is that the code's stated reason becomes something the issue answers in advance rather than something the work runs into halfway through.
 
-The price is a pass over the files before work starts, paid on issues whose files have moved.
+The price is a pass over the files before work starts, paid on issues whose files have moved. The same evidence that sets the trigger also bounds it. In the repo the rule came from, two audits found something, both on issues naming code that was still moving that day, and seventy closed issues before them are not cited.
 
 ## Writing style
 
@@ -85,20 +85,23 @@ One lesson is worth keeping in view. Reviews armor what exists. They rarely ask 
 
 Every `.md` file must pass markdownlint, which CI runs on every pull request. The rules that bite most: use real headings, never a bold line as a heading (MD036). No trailing whitespace (MD009). No stacked blank lines (MD012). End the file with exactly one newline (MD047). Table delimiter rows use single-space padding, so `| --- |` and never `|---|` (MD060). Escape an "approximately" tilde in prose as `\~`, since a bare tilde can render as strikethrough on some surfaces. Code fences are exempt.
 
-After any edit, sweep:
-
-```bash
-rg -n --pcre2 '(?<![\s~\\`<])~' *.md docs/*.md
-rg -n '\|-{1,}\|' *.md docs/*.md
-```
+markdownlint has no rule for the tilde or for a table whose rows are tight throughout, so `tests/test_markdown_hygiene.py` carries both. Run `uv run pytest` after editing prose. It reads every Markdown file the repo owns and blanks fenced blocks and backtick spans first, which a grep cannot do: a grep for these patterns reports the sentence that documents them.
 
 When a heading changes, verify the Contents anchors still resolve.
+
+## Running things
+
+[README.md](README.md) carries the local commands and the steps for seeding a
+new repo from this template. `scripts/setup-repo.sh` applies the ruleset,
+the labels and CodeQL to a repository, reading them from
+`.github/rulesets/default.json` and `.github/labels.json`. Take `DRY_RUN=1`
+first if you want to see what it would send.
 
 ## Cross-surface consistency
 
 A repo drifts when two surfaces describe the same thing and only one gets updated. The fix is to give each surface exactly one job, so nothing is stated twice.
 
-- **The test suite is the single authority for any number the prose quotes.** Every quoted figure traces to an assertion. Prose states these numbers and never derives them.
+- **The test suite is the single authority for any number the prose quotes.** Prose states these numbers and never derives them. A document that recomputes a number is a second implementation of the calculation, and the two drift without either one looking wrong. This is the only place that rule is stated. Module 1 in [docs/optional-policies.md](docs/optional-policies.md) carries what it costs in practice, not the rule itself.
 - **The design doc is the single authority for reasoning.** Code comments point at it rather than restating it.
 - **The issue is the single authority for unbuilt scope**, per the tracker directive above.
 
@@ -106,7 +109,10 @@ A repo drifts when two surfaces describe the same thing and only one gets update
      The sibling `trading-strategies` repo's list is the worked example: line
      anchors of the form `file.py#L12`, symbol names cited in prose, pinned
      numbers, figure embeds, and generated artifacts that must be regenerated
-     rather than hand-edited. Delete this section if the repo has one surface. -->
+     rather than hand-edited.
+
+     Delete this comment and keep everything else under this heading. The two
+     paragraphs below it apply to every repo, however many surfaces it has. -->
 
 Before reporting a code change done, sweep the prose surfaces for what the change could have invalidated, and end the response with a short **Consistency sweep** note listing what was checked, what was updated, and what is still stale. For a pure-internal refactor that moves no line numbers and changes no observable behavior, say "no prose-facing surfaces affected" so it is clear the check was considered rather than forgotten.
 
@@ -152,10 +158,10 @@ Verify by executing, not by reading. Mutate the code and confirm a test fails. A
 
 So watch the run rather than assume it. `gh pr checks <n> --watch` blocks until every check settles, and `gh pr view <n> --json statusCheckRollup` says what each one concluded. When a check fails, read its log, fix the cause, and push again, in the same session and without waiting to be asked. A red check the owner finds first is work handed over unfinished.
 
-Two measurements make the rule sharper than "look for a green tick".
+Two behaviours make the rule sharper than "look for a green tick", and each was measured on a pull request in the `marketlake` repo this rule came from.
 
-1. **A conflicting pull request gets no run at all.** A `pull_request` workflow builds the merge ref, and a branch that conflicts has none, so no run is created. An absent check reads as a short rollup rather than as a failure, so count what ran instead of scanning for red.
-2. **Green goes stale.** A run is computed against one merge ref, and a later merge to the base replaces it. Re-read the rollup whenever the base has moved.
+1. **A conflicting pull request gets no run at all.** A `pull_request` workflow builds the merge ref, and a branch that conflicts has none, so no run is created. PR #414 there showed three green CodeQL entries and no `test` run whatsoever. An absent check reads as a short rollup rather than as a failure, so count what ran instead of scanning for red.
+2. **Green goes stale.** A run is computed against one merge ref, and a later merge to the base replaces it. PR #433 there read green after the branch had already conflicted underneath it. Re-read the rollup whenever the base has moved.
 
 Fix the cause rather than the symptom. A lint rule that fails on one file usually fails on its siblings, so sweep for the class. Re-running a job changes nothing the second time unless the failure was the runner rather than the code. Where a failure comes from another branch's merge rather than from this change, say so on the pull request instead of absorbing an unrelated fix into it.
 
@@ -186,4 +192,6 @@ PR bodies use Markdown section headings, not a wall of prose. Lead with `## Why`
        1. Research pins, for a repo whose prose quotes measured numbers.
        2. Cross-surface sweeps, for a repo with generated artifacts.
 
-     Delete this heading if the repo needs neither. -->
+     Paste the module's text under this heading, adapt its names to the repo,
+     and keep the heading. Delete the heading only if the repo needs neither
+     module. -->

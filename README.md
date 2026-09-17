@@ -23,7 +23,10 @@ from whichever copy it was cloned off.
 - **[.github/rulesets/default.json](.github/rulesets/default.json)** makes
   `main` require a pull request, a squash merge, linear history, CodeQL, and
   both status checks. It is the ruleset both sibling repos run, with the
-  required checks retargeted and the stale-green gap closed.
+  required checks retargeted. It takes trading-strategies' setting for
+  `strict_required_status_checks_policy` rather than marketlake's, so a branch
+  must be current with `main` before it merges and a green run computed
+  against a stale merge ref cannot carry it through.
 - **[.github/labels.json](.github/labels.json)** is the label set the triage
   rule in CLAUDE.md expects to exist.
 - **[.github/dependabot.yml](.github/dependabot.yml)** groups minor and patch
@@ -49,14 +52,26 @@ cd new-repo
 scripts/setup-repo.sh l3a0/new-repo
 ```
 
-Then do the four things nothing can guess.
+Then do the five things nothing can guess.
 
 1. Fill the premise slot at the top of `CLAUDE.md` and the premise section in
-   `docs/design.md`. Every later ranking decision appeals to it.
-2. Rename `src/project/` and update the `packages` entry in `pyproject.toml`.
-3. Create one milestone per slice, named as `docs/build-plan.md` names them.
-4. Decide whether either module in `docs/optional-policies.md` applies, move
-   what does into `CLAUDE.md`, and delete the file.
+   `docs/design.md`. Every later ranking decision appeals to it, so it comes
+   first.
+2. Replace `README.md` wholesale. This one describes the template, not your
+   project, and a seeded repo that keeps it tells its readers to create a repo
+   from the repo they are already looking at.
+3. Rename `src/project/`, and update `packages`, `name` and `description` in
+   `pyproject.toml`.
+4. Create one milestone per slice, named as `docs/build-plan.md` names them.
+5. Decide on both modules in `docs/optional-policies.md`, move what applies
+   into the **Repo-specific policy** heading in `CLAUDE.md`, and delete the
+   file.
+
+Then check the work is finished. Every remaining hit is a slot nobody filled:
+
+```bash
+git grep -nE 'PROJECT_NAME|TEMPLATE:|TODO|src/project'
+```
 
 ## Running the checks locally
 
@@ -73,7 +88,10 @@ two sweeps it cannot do run in the test suite.
 ## Why the checks are required rather than advisory
 
 A ruleset that lists no required status check leaves a red job blocking
-nothing. marketlake merged 43 pull requests in that state, and a rollup with
-no failures in it reads the same as a rollup that passed, so nothing about the
-pull request page says the gate is open. This template requires both checks
-from the first commit.
+nothing, and a rollup with no failures in it reads the same as a rollup that
+passed, so nothing on the pull request page says the gate is open.
+
+marketlake ran that way for its whole life until 2026-09-17, when it added a
+required check. 199 of its 209 merged pull requests landed before that, none
+of them having to pass anything. This template requires both checks from the
+first commit instead.

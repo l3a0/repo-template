@@ -1,9 +1,12 @@
 # Optional policy modules
 
 Two policies that only some repositories need. Neither belongs in every repo,
-so neither ships inside `CLAUDE.md`. When a repo needs one, move it into the
-**Repo-specific policy** section of `CLAUDE.md`, adapt the names to the repo,
-and delete it from here. When the repo needs neither, delete this file.
+so neither ships inside `CLAUDE.md`.
+
+Decide on both, then delete this whole file. A module the repo needs goes
+under the **Repo-specific policy** heading in `CLAUDE.md`, with its names
+adapted. A module it does not need is simply gone, and the template still
+holds the text if it turns out to be needed later.
 
 Both come out of the `trading-strategies` repository, where each was written
 after the failure it prevents had already happened once.
@@ -14,12 +17,10 @@ Take this module when the repo's prose quotes measured numbers. A backtest
 result, a benchmark, a reproduction of a published figure, a survey count: any
 number a reader could check, and that moves when the code moves.
 
-### The test is the single authority for a quoted number
+### Re-pinning a number moves the prose that quotes it
 
-Every quoted figure traces to an assertion in the test suite. Prose states
-these numbers and never derives them. A document that recomputes a number is a
-second implementation of the calculation, and the two drift without either one
-looking wrong.
+The single-authority rule itself is stated once, under Cross-surface
+consistency in `CLAUDE.md`. What follows here is what it costs in practice.
 
 When a regression test is re-pinned, the prose that quotes it moves in the same
 change. Grep the rounded and spelled-out forms too, since a narrative quotes

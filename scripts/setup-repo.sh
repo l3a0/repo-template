@@ -45,9 +45,12 @@ done
 
 dry_run="${DRY_RUN:-}"
 
+# The dry-run line goes to stderr. Every call site redirects this function's
+# stdout to /dev/null to hide gh's own output, and that redirection swallowed
+# the announcement too, so a preview run was indistinguishable from a live one.
 run() {
   if [[ -n "$dry_run" ]]; then
-    echo "[dry-run] $*"
+    echo "[dry-run] $*" >&2
     return 0
   fi
   "$@"
@@ -56,11 +59,35 @@ run() {
 echo "== $repo =="
 
 # --- Ruleset -----------------------------------------------------------------
+# Read the rulesets before anything else, because this is the first call that
+# proves the repo resolves and that the token carries admin scope. `gh api`
+# writes an error body to stdout, so a discarded exit status puts a 404
+# document into the id and the script reports "updating ruleset (id {...})"
+# before dying on the next call, half applied.
+if ! rulesets_json="$(gh api "repos/$repo/rulesets" 2>/dev/null)"; then
+  echo "cannot read rulesets for $repo." >&2
+  echo "Check the name is right and that your token has admin access." >&2
+  exit 1
+fi
+
 # Match on the name rather than an id, since an id belongs to one repository
-# and this file is copied between them.
-ruleset_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$ruleset_file")"
-existing_id="$(gh api "repos/$repo/rulesets" --jq \
-  ".[] | select(.name == \"$ruleset_name\") | .id" 2>/dev/null | head -1 || true)"
+# and this file is copied between them. Repository rulesets only: an org can
+# hand down an inherited ruleset of the same name, and writing to its id fails.
+read -r ruleset_name existing_id <<<"$(
+  python3 - "$ruleset_file" "$rulesets_json" <<'PY'
+import json
+import sys
+
+name = json.load(open(sys.argv[1]))["name"]
+rulesets = json.loads(sys.argv[2])
+ids = [
+    str(ruleset["id"])
+    for ruleset in rulesets
+    if ruleset.get("name") == name and ruleset.get("source_type", "Repository") == "Repository"
+]
+print(name, ids[0] if ids else "")
+PY
+)"
 
 if [[ -n "$existing_id" ]]; then
   echo "updating ruleset '$ruleset_name' (id $existing_id)"
@@ -71,25 +98,48 @@ else
 fi
 
 # --- Labels ------------------------------------------------------------------
+# The records land in a temp file rather than arriving through a pipe or a
+# process substitution. Neither of those is covered by `set -o pipefail` on the
+# reading side, so a labels file that failed to parse printed a traceback,
+# created nothing, and still exited 0.
+#
+# Fields are NUL-separated because a tab-separated read collapses runs of tabs
+# and splits on a newline inside a description, which silently turns one label
+# into two and invents a second with an empty colour.
+labels_stream="$(mktemp)"
+trap 'rm -f "$labels_stream"' EXIT
+
+python3 - "$labels_file" >"$labels_stream" <<'PY'
+import json
+import sys
+
+for label in json.load(open(sys.argv[1])):
+    for field in ("name", "color", "description"):
+        sys.stdout.write(label[field])
+        sys.stdout.write("\0")
+PY
+
 # `gh label create --force` updates an existing label rather than failing, so
 # the same call covers both cases. Labels the repo already has and this file
 # does not name are left alone, because deleting one detaches it from every
 # issue that carries it.
-while IFS=$'\t' read -r name color description; do
+label_count=0
+while IFS= read -r -d '' name \
+  && IFS= read -r -d '' color \
+  && IFS= read -r -d '' description; do
   echo "label: $name"
   run gh label create "$name" \
     --repo "$repo" \
     --color "$color" \
     --description "$description" \
     --force >/dev/null
-done < <(python3 - "$labels_file" <<'PY'
-import json
-import sys
+  label_count=$((label_count + 1))
+done <"$labels_stream"
 
-for label in json.load(open(sys.argv[1])):
-    print(f"{label['name']}\t{label['color']}\t{label['description']}")
-PY
-)
+if [[ "$label_count" -eq 0 ]]; then
+  echo "no labels were applied. $labels_file parsed to nothing." >&2
+  exit 1
+fi
 
 # --- Code scanning -----------------------------------------------------------
 # The ruleset carries a code_scanning rule naming CodeQL, and that rule needs
@@ -108,14 +158,12 @@ if ! run gh api --method PATCH "repos/$repo/code-scanning/default-setup" \
 fi
 
 # --- Reserved human steps ----------------------------------------------------
+# A pointer rather than a copy. This script is kept and re-run by every repo
+# seeded from the template, so a list written out here goes stale the moment a
+# repo renames its package, and then tells its owner to rename a directory
+# that no longer exists.
 cat <<'NOTES'
 
-Done. Three steps stay with a human, because nothing here can guess them.
-
-1. Milestones. Create one per slice, named as docs/build-plan.md names them.
-   A filed issue needs a milestone or it appears in no slice view.
-2. The premise. Fill the slot at the top of CLAUDE.md and the premise section
-   in docs/design.md. Every ranking decision appeals to it, so it comes first.
-3. The package name. Rename src/project/ and update the `packages` entry in
-   pyproject.toml to match.
+Done with the GitHub side. The rest is in README.md, under
+"Starting a repo from it". Nothing here can guess those.
 NOTES

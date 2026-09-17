@@ -14,3 +14,7 @@ dist/
 
 # Editors / OS
 .DS_Store
+
+# Agent-local state. Per-clone, and never this repo's content.
+.claude/settings.local.json
+.claude/worktrees/

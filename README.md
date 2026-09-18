@@ -23,10 +23,14 @@ from whichever copy it was cloned off.
 - **[.github/rulesets/default.json](.github/rulesets/default.json)** makes
   `main` require a pull request, a squash merge, linear history, CodeQL, and
   both status checks. It is the ruleset both sibling repos run, with the
-  required checks retargeted. It takes trading-strategies' setting for
-  `strict_required_status_checks_policy` rather than marketlake's, so a branch
-  must be current with `main` before it merges and a green run computed
-  against a stale merge ref cannot carry it through.
+  required checks retargeted and, since 2026-09-18, marketlake's setting for
+  `strict_required_status_checks_policy` rather than trading-strategies'. It is
+  off, so a branch merges without being brought current with `main` first.
+  Requiring it stopped a green run computed against a stale merge ref from
+  carrying a branch through, and it charged every open branch another round of
+  checks whenever anything else merged. Re-reading a rollup once the base has
+  moved, which `CLAUDE.md` already requires, covers the same failure on the
+  branches where the base actually matters.
 - **[.github/labels.json](.github/labels.json)** is the label set the triage
   rule in CLAUDE.md expects to exist.
 - **[.github/dependabot.yml](.github/dependabot.yml)** groups minor and patch

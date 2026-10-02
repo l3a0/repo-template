@@ -304,10 +304,11 @@ def test_every_markdown_file_passes_the_prose_sweeps(path: Path) -> None:
 #
 # Where this came from. The helper and the test class below are copied from
 # tests/test_markdown_hygiene.py in l3a0/quantitative-trading, at commit
-# 11e7a63, the last commit to change them there. They landed here in pull
-# request 19. A squash merge creates its commit only when it merges, so the
-# pull request is the name this comment can carry, and it resolves to one
-# commit on main. Nothing in them changed on the way over. This file already
+# 11e7a63, the last commit to change them there. They landed in
+# l3a0/repo-template in pull request 19, named by repository because a repo
+# seeded from the template inherits this file with fresh history. The ruleset
+# there allows only squash merges, so that pull request is one commit on its
+# main. Nothing in them changed on the way over. This file already
 # imported blank_code and markdown_files and defined REPO_ROOT the same way.
 # The blank_code here is written differently from the sibling's, but it blanks
 # the same characters and keeps every newline and line length, which the

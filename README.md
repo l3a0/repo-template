@@ -74,7 +74,7 @@ Then do the five things nothing can guess.
 Then check the work is finished. Every remaining hit is a slot nobody filled:
 
 ```bash
-git grep -nE 'PROJECT_NAME|TEMPLATE:|TODO|src/project'
+git grep -nE 'PROJECT_NAME|OWNER/REPO|TEMPLATE:|TODO|src/project'
 ```
 
 ## Running the checks locally

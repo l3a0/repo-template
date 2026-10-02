@@ -72,6 +72,18 @@ Clarity comes first. Write plain sentences a reader understands on one read. Pre
 
 **Cut what carries nothing.** Throat-clearing, significance-announcing pivots, self-effort asides, hedging, redundancy, decorative modifiers that survive the subtraction test, unsubstantiated superlatives, reversal scaffolding, reassurance tags, and a closing moral that restates the heading. The global file carries the worked examples for each.
 
+<!-- TEMPLATE: replace OWNER/REPO in the two link forms below with this
+     repository's owner and name, such as l3a0/new-repo. -->
+
+**Link every issue and pull request number (owner directive, 2026-09-26).** In a chat reply, a message to another session, or a Markdown file in this repository, each number is a Markdown link: `[#NN](https://github.com/OWNER/REPO/issues/NN)` for an issue and `[PR #NN](https://github.com/OWNER/REPO/pull/NN)` for a pull request. A number written out in prose, like "issue 52", takes the same link around the words. Link every mention, not only the first, including numbers inside lists, tables and summaries. A bare `#NN` in chat is text the owner has to copy into a browser, and GitHub renders a bare `#NN` in a repository file as plain text too. A report that links its first number and leaves the rest bare fails the same way. A number that belongs to another repository links there.
+
+The prefix still matters. Issues and pull requests share one number space, so a bare number cannot tell the reader whether it names scope or work in review. An issue is `#NN` and a pull request is `PR #NN`.
+
+Two places keep the bare form.
+
+1. **GitHub's own text.** In an issue body, a comment, a pull request body or a commit message, GitHub links a bare `#NN` on its own, and a closing keyword needs the number right after it.
+2. **Code and quotations.** A command, a code span, a file name or a quoted commit subject stays exactly as written, because a link inside it breaks it.
+
 ## The design doc carries the reasoning
 
 Two conventions keep [docs/design.md](docs/design.md) usable as the project grows.
@@ -160,9 +172,9 @@ So watch the run rather than assume it. `gh pr checks <n> --watch` blocks until 
 
 Three behaviours make the rule sharper than "look for a green tick". The first two were measured on pull requests in the `marketlake` repo this rule came from, and the third on this template's own first day.
 
-1. **A conflicting pull request gets no run at all.** A `pull_request` workflow builds the merge ref, and a branch that conflicts has none, so no run is created. PR #414 there showed three green CodeQL entries and no `test` run whatsoever. An absent check reads as a short rollup rather than as a failure, so count what ran instead of scanning for red.
-2. **Green goes stale.** A run is computed against one merge ref, and a later merge to the base replaces it. PR #433 there read green after the branch had already conflicted underneath it. Re-read the rollup whenever the base has moved.
-3. **Red goes stale the same way, and costs more.** A failure inherited from the base survives in the rollup after the base has been fixed. This template's PR #3 carried a red `test` check from a run computed 25 seconds before the pull request that fixed its base merged. Rebasing made it green, and a monitor reading the older snapshot reported the failure again afterwards. A red check is a claim about one merge ref at one moment, so re-read it before acting, and check whether the pull request has already merged before fixing anything.
+1. **A conflicting pull request gets no run at all.** A `pull_request` workflow builds the merge ref, and a branch that conflicts has none, so no run is created. [PR #414](https://github.com/l3a0/marketlake/pull/414) there showed three green CodeQL entries and no `test` run whatsoever. An absent check reads as a short rollup rather than as a failure, so count what ran instead of scanning for red.
+2. **Green goes stale.** A run is computed against one merge ref, and a later merge to the base replaces it. [PR #433](https://github.com/l3a0/marketlake/pull/433) there read green after the branch had already conflicted underneath it. Re-read the rollup whenever the base has moved.
+3. **Red goes stale the same way, and costs more.** A failure inherited from the base survives in the rollup after the base has been fixed. This template's [PR #3](https://github.com/l3a0/repo-template/pull/3) carried a red `test` check from a run computed 25 seconds before the pull request that fixed its base merged. Rebasing made it green, and a monitor reading the older snapshot reported the failure again afterwards. A red check is a claim about one merge ref at one moment, so re-read it before acting, and check whether the pull request has already merged before fixing anything.
 
 Fix the cause rather than the symptom. A lint rule that fails on one file usually fails on its siblings, so sweep for the class. Re-running a job changes nothing the second time unless the failure was the runner rather than the code. Where a failure comes from another branch's merge rather than from this change, say so on the pull request instead of absorbing an unrelated fix into it.
 
@@ -176,11 +188,11 @@ No automation supplies the first two. The same applies to an issue a spawned ses
 
 **Close an issue only when nothing is left in it.** Before a PR closes an issue, move whatever that PR does not do into its own issue. A piece described only inside a body goes when the body closes, and nothing surfaces it again.
 
-While a piece is outstanding, a PR writes `Part of #NN` and the closing keyword waits for the PR that leaves nothing. GitHub reads the keyword only when the number follows it immediately, so `Closes #101` closes and `Closes the second half of #101` closes nothing at all.
+While a piece is outstanding, a PR writes `Part of #NN` and the closing keyword waits for the PR that leaves nothing. GitHub reads the keyword only when the number follows it immediately, so `Closes the second half of #101` closes nothing at all. The keyword also has to be plain text, and a code span around it defeats it the same way. Rendered, a code span and plain text differ only in font, so reading the body back does not distinguish them. `gh pr view <n> --json closingIssuesReferences` does, and an empty result on a pull request that means to close something is the signal to fix the body before merging.
 
 An issue whose pieces have all been split has no finishing PR left, so close it by hand and name where each piece went. Do the same when two PRs are open against one issue, because merge order decides which lands last and neither body can know it. A split leaves code comments pointing at the parent for work that moved, so repoint those in the PR that splits. A comment naming a closed issue in the past tense records what happened rather than pointing anywhere, and it stays.
 
-PR titles use a Conventional Commits prefix. The form is `type(scope): summary`. Types in use: `docs`, `feat`, `fix`, `refactor`, `chore`, `ci`, `perf`. Add a scope in parens when it sharpens the title, like `docs(CLAUDE.md)`. Drop it when none does, like a plain `docs:` for a whole-doc change.
+PR titles use a Conventional Commits prefix. The form is `type(scope): summary`. `gh pr list --state merged --json title` reports which prefixes this repo has used, rather than a list here that goes stale on the first unfamiliar one. Add a scope in parens when it sharpens the title, like `docs(CLAUDE.md)`. Drop it when none does, like a plain `docs:` for a whole-doc change.
 
 PR bodies use Markdown section headings, not a wall of prose. Lead with `## Why`, then `## What`. Add situational sections after as the change needs them, like `## Scope`, `## Notes`, or `## Evidence`. The body's prose obeys the writing-style rules above. So clear, short sentences and no em dashes. End every body with the footer line: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 

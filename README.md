@@ -45,7 +45,7 @@ from whichever copy it was cloned off.
 - **[docs/optional-policies.md](docs/optional-policies.md)** holds two policy
   modules that only some repos need, ready to move into CLAUDE.md.
 - **[tests/test_markdown_hygiene.py](tests/test_markdown_hygiene.py)** runs the
-  two prose sweeps CLAUDE.md names, so they fail the suite rather than waiting
+  prose checks CLAUDE.md names, so they fail the suite rather than waiting
   for someone to remember the command.
 
 ## Starting a repo from it
@@ -87,7 +87,7 @@ uv run pytest
 ```
 
 markdownlint has no Python package, so it runs in CI rather than locally. The
-two sweeps it cannot do run in the test suite.
+prose checks it cannot do run in the test suite.
 
 ## Why the checks are required rather than advisory
 

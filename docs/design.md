@@ -39,14 +39,24 @@ Each slice lives on the tracker as three things.
 
 1. A milestone with the slice's name, so a filed issue has one to take.
 2. A parent issue holding what the slice leaves usable and the tests that show
-   it works.
-3. One sub-issue per deliverable, each with a "blocked by" link to whatever it
-   waits on.
+   it works, each stated as what a test executes rather than what the code
+   looks like.
+3. One sub-issue per deliverable.
+
+A sub-issue that cannot start until another finishes gets a "blocked by" link
+to it, and a slice's parent issue that waits on another slice gets one to that
+slice's parent issue. Name only the dependencies that are real. An invented
+dependency is how a plan quietly becomes a layered build.
 
 Order the slices by what the ranking rule in [CLAUDE.md](../CLAUDE.md)
 decides: what is missing from the shortest path to a product someone can use
 goes first. Then ship it, use it, and let what breaks set the order after
 that.
+
+<!-- TEMPLATE: link the current slice's parent issue, and update the line when
+     the next slice starts. -->
+
+Slice 1 is TODO, on TODO issue link.
 
 ## Vocabulary
 
@@ -85,5 +95,5 @@ once rather than re-argued.
 
 | Cut | Why |
 | --- | --- |
-| A build-plan doc listing each slice's deliverables and tests | It restated scope the tracker holds, so the two would drift. A slice's tests are its parent issue's acceptance criteria, and what each deliverable waits on is its sub-issue's "blocked by" links. The rule for cutting a slice is the one part GitHub cannot hold, and it lives in [How work is cut and ordered](#how-work-is-cut-and-ordered) |
+| A build-plan doc listing each slice's deliverables and tests | It would restate scope the tracker holds, so the two would drift. A slice's tests are its parent issue's acceptance criteria, and what each deliverable waits on is its sub-issue's "blocked by" links. The rule for cutting a slice is the one part GitHub cannot hold, and it lives in [How work is cut and ordered](#how-work-is-cut-and-ordered) |
 | TODO | TODO |

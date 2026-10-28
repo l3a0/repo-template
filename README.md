@@ -65,9 +65,9 @@ Then do the five things nothing can guess.
    from the repo they are already looking at.
 3. Rename `src/project/`, and update `packages`, `name` and `description` in
    `pyproject.toml`.
-4. Create the first slice on the tracker: a milestone, and a parent issue
-   holding what the slice leaves usable and its acceptance tests, as
-   `docs/design.md`'s `## How work is cut and ordered` says.
+4. Create the first slice on the tracker, in the three parts
+   `docs/design.md`'s `## How work is cut and ordered` lists, and link its
+   parent issue in that section's slot.
 5. Decide on both modules in `docs/optional-policies.md`, move what applies
    into the **Repo-specific policy** heading in `CLAUDE.md`, and delete the
    file.

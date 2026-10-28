@@ -7,6 +7,7 @@
 ## Contents
 
 - [Premise](#premise)
+- [How work is cut and ordered](#how-work-is-cut-and-ordered)
 - [Vocabulary](#vocabulary)
 - [Configuration](#configuration)
 - [Considered and rejected](#considered-and-rejected)
@@ -27,6 +28,25 @@
      CLAUDE.md protects. -->
 
 TODO.
+
+## How work is cut and ordered
+
+A slice is the smallest set of deliverables that leaves the product usable by
+someone at the end of it. Not a layer, and not a subsystem. A slice that ends
+with a component nobody can run is a slice cut the wrong way.
+
+Each slice lives on the tracker as three things.
+
+1. A milestone with the slice's name, so a filed issue has one to take.
+2. A parent issue holding what the slice leaves usable and the tests that show
+   it works.
+3. One sub-issue per deliverable, each with a "blocked by" link to whatever it
+   waits on.
+
+Order the slices by what the ranking rule in [CLAUDE.md](../CLAUDE.md)
+decides: what is missing from the shortest path to a product someone can use
+goes first. Then ship it, use it, and let what breaks set the order after
+that.
 
 ## Vocabulary
 
@@ -65,4 +85,5 @@ once rather than re-argued.
 
 | Cut | Why |
 | --- | --- |
+| A build-plan doc listing each slice's deliverables and tests | It restated scope the tracker holds, so the two would drift. A slice's tests are its parent issue's acceptance criteria, and what each deliverable waits on is its sub-issue's "blocked by" links. The rule for cutting a slice is the one part GitHub cannot hold, and it lives in [How work is cut and ordered](#how-work-is-cut-and-ordered) |
 | TODO | TODO |

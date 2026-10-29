@@ -214,6 +214,13 @@ LINK_REF = re.compile(rf"\[#(\d{{1,{MAX_DIGITS}}})\]\(([^()\s]*)\)")
 # An issue's or pull request's address, with anything after the number, such
 # as a comment's `#issuecomment-5` anchor, a query or a `/files` tab.
 ISSUE_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/(?:issues|pull)/(\d+)(?:[/#?]\S*)?")
+# The opening of a link, `[#N](`, whatever follows it. A link `LINK_REF` cannot
+# read, such as one whose address carries a title, a leading space or a
+# parenthesis, still names an address, so its `#N` must not reach `BARE_REF`
+# and be read as an issue here. It runs once over the line, so it stays
+# linear. A number longer than `MAX_DIGITS` is no reference, as in `LINK_REF`,
+# so such a link is left to read as an after line naming nothing.
+OPEN_LINK = re.compile(rf"\[#\d{{1,{MAX_DIGITS}}}\]\(")
 REPO_REF = re.compile(rf"(?<![\w.-])([\w.-]+/[\w.-]+)#{REF_NUMBER}")
 BARE_REF = re.compile(rf"(?<![\w/.-])#{REF_NUMBER}")
 
@@ -874,9 +881,15 @@ def after_refs(rest: str, repo: str) -> tuple[set[int], set[str]]:
        ``https://github.com``, such as a relative ``../issues/4``, is refused
        as naming another repository. A link to ``issues/04`` is refused as a
        disagreement.
-    3. A link ``LINK_REF`` does not read, such as ``[#3](url "title")``,
-       ``[#3]( url)`` or ``[#3][ref]``, still reads as ``#3``, whatever its
-       address names.
+    3. A reference-style link such as ``[#3][ref]`` reads as ``#3``,
+       whatever its reference names, because nothing on the line says where
+       it points.
+
+    A link that opens with ``[#N](`` and that ``LINK_REF`` cannot read, such
+    as ``[#3](url "title")``, ``[#3]( url)`` or an address holding a
+    parenthesis, is refused as naming another repository. Its address cannot
+    be checked, and read as a bare ``#N`` it could name an issue here it does
+    not mean.
     """
     named: set[int] = set()
     refused: set[str] = set()
@@ -892,6 +905,9 @@ def after_refs(rest: str, repo: str) -> tuple[set[int], set[str]]:
         return "\0"
 
     rest = LINK_REF.sub(link, rest)
+    rest, opened = OPEN_LINK.subn("\0", rest)
+    if opened:
+        refused.add("Board after, naming another repository")
     for m in REPO_REF.finditer(rest):
         if in_repo({"repository": {"nameWithOwner": m.group(1)}}, repo):
             named.add(int(m.group(2)))

@@ -126,7 +126,9 @@ git rm -r .github/workflows/build-board.yml scripts/build_board.py \
 
 A seeded repository can give its board its own tab icon. Commit an `.ico`
 file, for example at `.github/board/favicon.ico`, and name it in the caller's
-job. Left out, the board shows the template's icon.
+job. Left out, the board shows the template's icon. The caller's pin has to
+be at or after the template commit that added the `icon` input, because a
+caller passing an input the called workflow does not declare fails.
 
 ```yaml
     uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>

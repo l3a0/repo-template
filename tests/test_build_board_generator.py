@@ -1661,8 +1661,8 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     assert used == allowed
     assert "TITLE: ${{ inputs.title }}" in _called()
     assert '--title "$TITLE"' in _called()
-    icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}", _called(), re.M)
-    assert [line.strip() for line in icon] == ["", "ICON:"]
+    icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
+    assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
 
 def test_the_called_workflow_checks_out_its_own_commit() -> None:
@@ -1690,12 +1690,36 @@ def test_the_called_workflow_checks_out_its_own_commit() -> None:
     assert "python3 template/scripts/build_board.py measure" in deploy_job
 
 
+def test_both_inputs_are_optional_strings_that_default_to_empty() -> None:
+    """Protects every caller that sets no input.
+
+    The template's own board passes neither input, and a seeded repository
+    sets only what it needs. A required input, or a default naming a file,
+    would fail every such run. An empty title gives ``<name> build board``,
+    and an empty icon serves the template's. The README and the
+    update-build-board skill name the icon input by the key declared here.
+    """
+    inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+    blocks = re.split(r"^      (\w+):\n", inputs, flags=re.M)[1:]
+    declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
+    assert list(declared) == ["title", "icon"]
+    for block in declared.values():
+        assert "        type: string\n" in block
+        assert '        default: ""' in block
+        assert "required" not in block
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
+    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert "`with: icon: <path>`" in skill
+
+
 def test_nothing_checks_out_a_pull_requests_code() -> None:
     """Protects the write token ``pull_request_target`` runs with.
 
-    The caller's checkout takes the default ref and only its own workflow
-    file. The template's checkouts take the workflow's own commit. No other
-    ``ref:`` appears, so no step can check out a pull request's head.
+    The caller's checkout takes the default ref, and only its own workflow
+    file and the icon its ``icon`` input names. The template's checkouts take
+    the workflow's own commit. No other ``ref:`` appears, so no step can check
+    out a pull request's head.
     """
     flow = _called()
     assert flow.count("uses: actions/checkout@") == 3
@@ -1762,8 +1786,9 @@ CALLER_USES = re.compile(
 def test_the_caller_calls_the_shared_workflow_by_ref() -> None:
     """Protects the line a seeded repository changes and nothing else.
 
-    A seeded repository copies the caller and changes only this ref, to a full
-    commit SHA of the template. The template calls ``main``, so its own board
+    A seeded repository copies the caller and changes this ref, to a full
+    commit SHA of the template, adding only a ``with:`` block for the inputs
+    it sets. The template calls ``main``, so its own board
     runs the shared path through the same remote form a seeded repository
     uses. The update-build-board skill reads the ref with the same pattern.
     """
@@ -1894,16 +1919,20 @@ def test_the_page_published_is_the_checked_in_one() -> None:
     assert "--workflow caller/.github/workflows/board.yml" in flow
 
 
-def _add_the_page(tmp_path: Path, icon: str) -> subprocess.CompletedProcess[str]:
+def _add_the_page(
+    tmp_path: Path, icon: str, *, page: bool = True
+) -> subprocess.CompletedProcess[str]:
     """Runs the step that adds the page, in a folder laid out as the runner's."""
     step = _called().split("- name: Add the page", 1)[1].split("\n      - ", 1)[0]
     script = step.split("run: |\n", 1)[1]
     skill = tmp_path / "template" / ".claude" / "skills" / "update-build-board"
     skill.mkdir(parents=True)
-    (skill / "board.html").write_text("page")
+    if page:
+        (skill / "board.html").write_text("page")
     (skill / "favicon.ico").write_bytes(b"template icon")
     (tmp_path / "caller" / ".github" / "board").mkdir(parents=True)
     (tmp_path / "caller" / ".github" / "board" / "favicon.ico").write_bytes(b"caller icon")
+    (tmp_path / "caller" / ".github" / "board" / "tab icon.ico").write_bytes(b"spaced icon")
     (tmp_path / "_site").mkdir()
     return subprocess.run(
         ["bash", "-e", "-c", script],
@@ -1934,16 +1963,29 @@ def test_the_icon_is_published_where_the_page_links_it(tmp_path: Path) -> None:
     assert (tmp_path / "_site" / "favicon.ico").read_bytes() == b"template icon"
 
 
-def test_the_callers_icon_takes_the_templates_place(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("icon", "served"),
+    [(".github/board/favicon.ico", b"caller icon"), (".github/board/tab icon.ico", b"spaced icon")],
+    ids=["plain", "space"],
+)
+def test_the_callers_icon_takes_the_templates_place(
+    tmp_path: Path, icon: str, served: bytes
+) -> None:
     """Protects a repository's own tab icon, named by the ``icon`` input.
 
-    Every board is served from one origin per owner and several are open at
-    once, so a repository may give its board its own icon. The caller's file
-    replaces the template's, under the name the page links.
+    One owner's boards share one origin and several are open at once, so a
+    repository may give its board its own icon. The caller's file replaces the
+    template's, under the name the page links. A path with a space in it is
+    one file, which only a quoted ``$ICON`` keeps it.
     """
-    run = _add_the_page(tmp_path, ".github/board/favicon.ico")
+    run = _add_the_page(tmp_path, icon)
     assert run.returncode == 0, run.stderr
-    assert (tmp_path / "_site" / "favicon.ico").read_bytes() == b"caller icon"
+    assert (tmp_path / "_site" / "favicon.ico").read_bytes() == served
+
+
+def test_a_missing_page_fails_the_run(tmp_path: Path) -> None:
+    """Protects the board from deploying an icon with no page beside it."""
+    assert _add_the_page(tmp_path, "", page=False).returncode != 0
 
 
 def test_a_missing_icon_fails_the_run(tmp_path: Path) -> None:

@@ -4,7 +4,8 @@ name: Board
 # .github/workflows/build-board.yml in l3a0/repo-template carries out. A
 # repository seeded from the template copies this file unchanged except for the
 # ref on the `uses:` line, which it pins to a full commit SHA of
-# l3a0/repo-template. The template itself calls `main`, so its own board runs
+# l3a0/repo-template, and a `with:` block for the inputs it sets, such as
+# `title` or `icon`. The template itself calls `main`, so its own board runs
 # the shared path before any seeded repository pins it.
 #
 # Provenance: the triggers, permissions and concurrency group of

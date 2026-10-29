@@ -12,9 +12,11 @@ sections the board's page draws. Two failures matter more than any other here.
    would publish a board with no pull requests.
 
 Each test feeds the generator a fake GitHub that answers its queries from
-fixtures, so nothing here touches the network. The last tests run the page on
-what the generator wrote, and check the workflows and the setup script that
-publish it.
+fixtures, so no test of the generator touches the network. The last tests run
+the page on what the generator wrote, and check the workflows and the setup
+script that publish it. Five of those read the update-build-board skill, which
+lives in the ``l3a0`` Claude Code plugin rather than here, so they fetch it from
+GitHub at the plugin commit ``PLUGIN_COMMIT`` names.
 
 Provenance: ported from ``tests/test_build_board_generator.py`` in
 l3a0/quantitative-trading at commit ``6da0ee3``, landed here by the pull
@@ -29,12 +31,15 @@ the rules they protect.
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -57,6 +62,39 @@ CALLED = REPO_ROOT / ".github" / "workflows" / "build-board.yml"
 SETUP = REPO_ROOT / "scripts" / "setup-repo.sh"
 REPO = "octo-org/octo-repo"
 NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
+
+# The update-build-board skill shares formats with the generator and the
+# workflows here, and it lives in l3a0/claude-plugins. The tests read it at
+# this commit, the 0.5.0 release. A change here to a format the skill states
+# fails them until the plugin releases a matching skill and this pin moves to
+# it, which is the plugin's rule that a generator's format change ships with a
+# plugin release in the same step.
+PLUGIN_COMMIT = "37555c51743277d7ab92f29d571349de0858a60a"
+PLUGIN_SKILL = (
+    "https://raw.githubusercontent.com/l3a0/claude-plugins/"
+    f"{PLUGIN_COMMIT}/skills/update-build-board/SKILL.md"
+)
+
+
+@functools.cache
+def _skill() -> str:
+    """The plugin's update-build-board skill at ``PLUGIN_COMMIT``.
+
+    An offline local run skips the tests that read it. CI sets ``CI``, and
+    there a failed fetch fails the test, so the check cannot vanish from the
+    run that gates a merge. An answer from GitHub that is not the file, such
+    as a 404 for a pin naming no such commit or path, fails everywhere.
+    """
+    try:
+        with urllib.request.urlopen(PLUGIN_SKILL, timeout=30) as response:
+            return response.read().decode("utf-8")
+    except urllib.error.HTTPError:
+        raise
+    except OSError as error:
+        if os.environ.get("CI"):
+            raise
+        pytest.skip(f"cannot fetch the plugin's skill: {error}")
+
 
 _spec = importlib.util.spec_from_file_location("build_board", SCRIPT)
 bb = importlib.util.module_from_spec(_spec)
@@ -1463,7 +1501,7 @@ def test_the_stale_threshold_is_the_longest_gap_plus_ten_hours_for_a_dropped_run
 
 def test_the_skill_quotes_the_allowance_the_script_adds() -> None:
     """Protects the skill's data table from a second copy of the allowance."""
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    skill = _skill()
     assert f"a {bb.SCHEDULE_DELAY_ALLOWANCE}-minute allowance" in skill
 
 
@@ -1709,7 +1747,7 @@ def test_both_inputs_are_optional_strings_that_default_to_empty() -> None:
         assert "required" not in block
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    skill = _skill()
     assert "`with: icon: <path>`" in skill
 
 
@@ -1794,7 +1832,7 @@ def test_the_caller_calls_the_shared_workflow_by_ref() -> None:
     """
     refs = CALLER_USES.findall(_workflow())
     assert refs == ["main"]
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    skill = _skill()
     sed = re.search(r"PIN=\"\$\(sed -nE 's#(.+?)#\\1#p' \.github/workflows/board\.yml\)\"", skill)
     assert sed, "the skill reads no pin from the caller"
     pattern = sed.group(1).replace("([^ ]+)", "(\\S+)").replace("^ *", "^ *")
@@ -1816,7 +1854,7 @@ NO_RUN_WORDING = re.compile(r"blocked[- ]by|dependenc|sub-?issue|child issue", r
 
 def _moments() -> list[str]:
     """The numbered moments under the skill's "What a session sets, and when"."""
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    skill = _skill()
     section = skill.split("\n## What a session sets, and when\n", 1)[1].split("\n## ", 1)[0]
     listed = section.split("\nNothing else needs setting.", 1)[0]
     return re.split(r"\n(?=\d+\. \*\*)", listed)[1:]
@@ -1839,7 +1877,7 @@ def test_a_change_that_starts_no_run_names_the_dispatch() -> None:
     for moment in moments:
         if NO_RUN_WORDING.search(moment):
             assert "dispatch the board" in moment.lower(), moment.split("\n", 1)[0]
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    skill = _skill()
     assert f"\n{DISPATCH}\n" in skill
     assert f"{DISPATCH} --ref" not in skill
     assert re.search(r"^  workflow_dispatch:\s*$", _workflow(), re.M)

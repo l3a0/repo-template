@@ -5,7 +5,8 @@
 // dropped inside a nested array still parses, and a sentence that renders
 // perfectly can still say something false. So the check is to execute the
 // script and read what it produced. Two things run it on this stub: the
-// skill's harness, against a board.json built from GitHub, and
+// harness in the l3a0 plugin's update-build-board skill, against a
+// board.json built from GitHub, and
 // tests/test_build_board.py, which holds what the page draws with no data, an
 // empty board.json, a partial one and a fixture board.
 //

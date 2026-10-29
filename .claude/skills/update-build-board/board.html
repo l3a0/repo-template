@@ -288,7 +288,8 @@ let ISS = "", PRU = "";
    l3a0/repo-template rebuilds it from GitHub on every issue, comment and pull
    request change and on a schedule, by running scripts/build_board.py. No
    session writes it. A session sets the labels, links and marker lines the
-   script reads, and the update-build-board skill says which.
+   script reads, and the update-build-board skill in the l3a0 plugin says
+   which.
 
    The file holds six sections, state, prs, working, planned, next and tracker.
    Each is { schema: 1, items: [...] }, except state, which is

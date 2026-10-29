@@ -480,10 +480,10 @@ function source() {
    built from the tracker. That happened once, and the fix was to file the
    issue rather than to give the page a second source of truth.
 
-   `linked` is GitHub's own closingIssuesReferences. The Action writes an
-   entry only for an issue GitHub links or a `Part of` reference names, so
-   `linked` is false exactly when `partOf` is true, and the page does not read
-   it. A closing keyword written inside a code span, where GitHub does not read
+   `linked` is GitHub's own closingIssuesReferences to an issue in this
+   repository. The Action writes an entry only for an issue GitHub links or a
+   `Part of` reference names, so `linked` is false exactly when `partOf` is
+   true, and the page does not read it. A closing keyword written inside a code span, where GitHub does not read
    it, gives the branch no entry at all, and
    `gh pr view <n> --json closingIssuesReferences` remains the check on a body.
 

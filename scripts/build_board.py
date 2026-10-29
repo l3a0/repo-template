@@ -29,9 +29,10 @@ It writes the six sections the page reads.
    from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
    native "blocked by" links, and ``after`` from a ``Board after:`` line in the
    body.
-3. ``prs``, one item per pull request and issue it names, with its state, its
-   checks at the current head, whether GitHub registered the closing link, and
-   whether the owner posted a review.
+3. ``prs``, one item per pull request and each issue in this repository it
+   names, with its state, its checks at the current head, whether GitHub
+   registered a closing link to that issue, and whether the owner posted a
+   review.
 4. ``working``, one item per issue carrying a ``working:build`` or
    ``working:decompose`` label, which a session sets while it holds the card.
 5. ``planned``, one item per issue with an owner comment carrying a
@@ -52,14 +53,37 @@ takes the lowest band, or ``build`` for both ``working:`` labels, and lists the
 conflict in the job summary rather than failing, because one stray label would
 otherwise freeze the whole board.
 
-Two of its rules exist because the repository is public.
+A marker line the board does not use is listed in the job summary too, since
+the summary is the only place a mistyped or misplaced marker surfaces. Each
+listing is a phrase in the generator's own words, held by ``Notes``.
+
+1. ``Marker lines not read``, for a line in the owner's text that looks meant
+   as a marker and is not read, such as ``Board order: first``.
+2. ``Marker lines refused``, for a line read and then refused, such as a
+   verdict in a comment the owner did not write.
+3. ``Markers dropped``, for a marker read and then not used.
+4. ``Finished plans with no verdict after them``, for an issue whose newest
+   ``## Plan audit, pass N`` heading came after its newest verdict.
+
+Four of its rules exist because the repository is public.
 
 1. ``reviewed`` reads a comment opening with ``## Review``, and ``planned`` a
    comment carrying a ``Board verdict:`` line, only when its author
    association is ``OWNER``. Anyone can comment, and a stranger's comment would
    otherwise move a card. Labels and links need triage access, so they need no
    such filter.
-2. Nothing here reads the event that started the run. Every fact comes from
+2. With ``--owner-body-lines=true``, a ``Board order:`` or ``Board after:``
+   line counts only in the body of an issue the owner opened, and a
+   stranger's is listed as refused. Anyone can open an issue. The input is off
+   by default, because a card ranks only with a ``band:N`` label, which needs
+   triage access, so a stranger's line moves only the stranger's own card.
+3. A number read from a marker line or a ``Part of`` reference carries at
+   most ``MAX_DIGITS`` digits. Anyone can write a ``Board after:`` line, and a
+   longer number there would otherwise stop every run until someone edited
+   the issue, because Python refuses to turn more than 4,300 digits into an
+   ``int``. A longer order would be written as ``Infinity``, which the page
+   cannot read.
+4. Nothing here reads the event that started the run. Every fact comes from
    the API, so an issue title never reaches a shell, and two runs started by
    different events build the same board from the same state.
 
@@ -95,6 +119,16 @@ from pathlib import Path
 
 SCHEMA = 1
 
+# The most digits an order, a pass count or a reference may carry. JavaScript
+# reads every number as a double, which holds any integer up to 15 digits
+# exactly. Past that a number can stop being one: a 400-digit order is
+# infinity, which JSON cannot carry, and past 4,300 digits Python's `int()`
+# raises. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+MAX_DIGITS = 15
+# A reference's number: up to `MAX_DIGITS` digits, then a word boundary, so a
+# longer number is no reference at all rather than one `int()` cannot read.
+REF_NUMBER = rf"(\d{{1,{MAX_DIGITS}}})\b"
+
 # A `Part of` reference, read the way GitHub reads a closing keyword: anywhere
 # in a pull request's body, with `#` and the number right after it, and never
 # inside a code span or a fenced code block. Sessions write the phrase
@@ -104,8 +138,9 @@ SCHEMA = 1
 # prose such as "merged in PR 488, part of 458" names another pull request's
 # issue and is not one. A sentence mentioning the phrase in passing counts
 # unless a code span holds it, as a closing keyword does. `pr_items` strips the
-# code before matching.
-PART_OF = re.compile(r"\bPart of #(\d+)\b")
+# code before matching. A number longer than ``MAX_DIGITS`` is no reference at
+# all, rather than one ``int()`` cannot read.
+PART_OF = re.compile(rf"\bPart of #{REF_NUMBER}")
 
 # A review comment opens with a line reading `## Review`, which the l3a0
 # plugin's update-build-board skill states as the convention. "## Reviewer" is not one.
@@ -123,16 +158,76 @@ AFTER = re.compile(r"^[ \t]*Board after:(.*)$", re.MULTILINE)
 BAND = re.compile(r"^band:(\d+)$")
 WORKING = {"working:build": "build", "working:decompose": "decompose"}
 
+# A line that looks meant as a marker. It starts, after whitespace, any of
+# `>*_+-` and any list number such as `1.` or `1)`, with "board" and the
+# marker's kind in any case. The kind must then end the line, or be followed by
+# optional `*` or `_`, optional whitespace, and a `:`, a digit or a `#`. So
+# `Board order 3`, `Board Order: 3` and `**Board order**: 3` are near misses,
+# while prose such as "Board orders form one sequence" or "Board after the
+# merge" is not a marker at all. Every line `VERDICT`, `ORDER` or `AFTER`
+# matches also matches this one, so the reads walk these lines and list each
+# one they do not use, rather than a second scan deciding what was read.
+# Matching anywhere on a line instead would list prose about the markers on
+# every run. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+MARKER_LINE = re.compile(
+    r"^(?:[^\S\n]|[>*_+-]|\d{1,9}[.)])*board[^\S\n]+(order|verdict|after)"
+    r"(?:[*_]*[^\S\n]*[:#\d]|[*_]*[^\S\n]*$)",
+    re.MULTILINE | re.IGNORECASE,
+)
+MARKER_NAME = {"order": "Board order", "verdict": "Board verdict", "after": "Board after"}
+# A marker line's kind, read from its first letter. Under `re.IGNORECASE` a
+# Turkish dotted or dotless i matches the `i` in "verdict", and lowering the
+# whole word turns `İ` into two characters, which names no kind. None of the
+# three kinds starts with an i.
+MARKER_KIND = {"o": "order", "v": "verdict", "a": "after"}
+
+# The heading each plan-audit pass opens with, per the update-build-board
+# skill. A pass newer than an issue's newest verdict is a plan that finished
+# with no verdict.
+PASS_HEADING = re.compile(r"^[ \t]*## Plan audit, pass \d+", re.MULTILINE)
+
+# The references a `Board after:` line can name: `#N`, `owner/name#N`, and the
+# link form `[#N](url)`. A bare number is not one. `REF_NUMBER` reads a
+# number longer than `MAX_DIGITS` as no reference at all. Ported from
+# l3a0/marketlake's generator at commit ``cc9d3432``, with one change. The
+# link's address there was `[^)\s]*`, which runs to the end of the line from
+# every `[#N](` that no `)` closes, so a line of `[#1](` repeated costs time
+# that grows with the square of its length. Anyone can write a body, and a
+# 65,000-character line of that shape took 9.6 s. Leaving `(` out of the
+# address stops each try at the next `[#N](`, and the same line took 1.1 ms.
+LINK_REF = re.compile(rf"\[#(\d{{1,{MAX_DIGITS}}})\]\(([^()\s]*)\)")
+# An issue's or pull request's address, with anything after the number, such
+# as a comment's `#issuecomment-5` anchor, a query or a `/files` tab.
+ISSUE_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/(?:issues|pull)/(\d+)(?:[/#?]\S*)?")
+REPO_REF = re.compile(rf"(?<![\w.-])([\w.-]+/[\w.-]+)#{REF_NUMBER}")
+BARE_REF = re.compile(rf"(?<![\w/.-])#{REF_NUMBER}")
+
 # A fenced code block, opened by three or more backticks or tildes and closed
 # by the same run, or left open to the end of the text. A comment quoting the
-# verdict format inside a fence would otherwise read as a verdict.
+# verdict format inside a fence would otherwise read as a verdict. The opening
+# run is possessive, `{3,}+`, so it never gives back a character. A greedy run
+# on a last line of backticks with no newline after it tried every shorter
+# run in turn, each scanning to the end of the line, so the time grew with
+# the square of its length: about 3 s for 65,536 backticks. `unfenced` runs
+# on every body and comment, a stranger's included, before anything checks
+# who wrote it. The possessive run reads the same fences, and the same line
+# took 0.3 ms.
 FENCE = re.compile(
-    r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.MULTILINE | re.DOTALL
+    r"^[ \t]*(`{3,}+|~{3,}+)[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.MULTILINE | re.DOTALL
 )
 
 
 def unfenced(text: str) -> str:
-    """The text with every fenced code block removed, so no line in one is read."""
+    """The text with line endings made ``\\n`` and every fenced code block removed.
+
+    GitHub's web editor saves ``\\r\\n``. A marker line read with the ``\\r``
+    still on it fails its ``[ \\t]*$``, so an order or a verdict the owner
+    edited in a browser would be lost with nothing said, and a fence's closing
+    line would never match, so the fence would remove the rest of the text. A
+    marker inside a fence quotes the format rather than setting anything, so no
+    line in one is read.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     return FENCE.sub("", text)
 
 
@@ -177,9 +272,8 @@ def outside_code(text: str) -> str:
     GitHub does not read a closing keyword written inside either, so a ``Part
     of`` reference written inside one does not count here either.
     """
-    # GitHub's web editor saves `\r\n`, which the fence's `$` and the blank
-    # line between paragraphs would otherwise never match.
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # `unfenced` turns `\r\n` into `\n` first, so the blank line between
+    # paragraphs matches in a body GitHub's web editor saved.
     return "\n\n".join(_spans_out(p) for p in PARAGRAPH.split(unfenced(text)))
 
 
@@ -235,7 +329,7 @@ PAGE_INFO = "pageInfo{hasNextPage endCursor}"
 PR_FIELDS = f"""
 fragment pr on PullRequest {{
   id number state body isCrossRepository
-  closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number}}}}
+  closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
   comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
   commits(last:1){{nodes{{commit{{statusCheckRollup{{id
     contexts(first:100){{{PAGE_INFO} nodes{{__typename
@@ -251,14 +345,14 @@ query($owner:String!, $name:String!, $after:String) {{
     issues(states:OPEN, first:100, after:$after, orderBy:{{field:CREATED_AT, direction:ASC}}) {{
       totalCount {PAGE_INFO}
       nodes {{
-        id number title body
+        id number title body authorAssociation
         milestone{{title}}
         labels(first:100){{{PAGE_INFO} nodes{{name}}}}
         blockedBy(first:100){{{PAGE_INFO} nodes{{number state repository{{nameWithOwner}}}}}}
         subIssues{{totalCount}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
         closedByPullRequestsReferences(first:100, includeClosedPrs:true){{
-          {PAGE_INFO} nodes{{number}}}}
+          {PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
         timelineItems(itemTypes:[CROSS_REFERENCED_EVENT], first:100){{{PAGE_INFO} nodes{{
           ... on CrossReferencedEvent{{source{{
             ... on PullRequest{{number repository{{nameWithOwner}}}}}}}}}}}}
@@ -299,7 +393,7 @@ NESTED = {
         "Issue",
         "closedByPullRequestsReferences",
         "includeClosedPrs:true",
-        "number",
+        "number repository{nameWithOwner}",
     ),
     "timelineItems": (
         "Issue",
@@ -307,7 +401,12 @@ NESTED = {
         "itemTypes:[CROSS_REFERENCED_EVENT]",
         "... on CrossReferencedEvent{source{... on PullRequest{number repository{nameWithOwner}}}}",
     ),
-    "closingIssuesReferences": ("PullRequest", "closingIssuesReferences", "", "number"),
+    "closingIssuesReferences": (
+        "PullRequest",
+        "closingIssuesReferences",
+        "",
+        "number repository{nameWithOwner}",
+    ),
     "comments": ("PullRequest", "comments", "", "authorAssociation body"),
     "contexts": (
         "StatusCheckRollup",
@@ -504,21 +603,51 @@ def _rollup(gql: Gql, pr: dict, unknown: set[str]) -> list[list[str]]:
     return out
 
 
+def in_repo(node: dict | None, repo: str) -> bool:
+    """Whether an issue or pull request GitHub listed belongs to ``repo``.
+
+    A closing link, a cross-reference or a "blocked by" link can name an issue
+    or pull request in another repository, whose number means nothing here.
+    Read as this repository's, it would fetch an unrelated pull request of the
+    same number, stop the run when there is none, or draw a branch on the
+    wrong card.
+
+    A null entry, or one with no repository, reads as another repository's.
+    That does not break the rule that the run fails closed. ``GhGraphql``
+    stops the run on any response carrying GraphQL errors, so a null here is
+    one GitHub sent with no error, an entry the token cannot read. The build
+    job's token reads every issue and pull request in the caller's repository,
+    so such an entry is never this repository's, and dropping it loses
+    nothing from the board.
+
+    The names are compared without case, because GitHub treats an owner and a
+    repository named in any case as the same one. The run's own name and
+    ``nameWithOwner`` both come in GitHub's spelling, so only a reference a
+    person typed on a ``Board after:`` line, which ``after_refs`` reads, can
+    differ in case alone.
+    """
+    if not node:
+        return False
+    name = (node.get("repository") or {}).get("nameWithOwner") or ""
+    return name.lower() == repo.lower()
+
+
 def pr_items(
     gql: Gql,
     pr: dict,
     open_issues: set[int],
+    repo: str,
     unknown: set[str],
     working: frozenset[int] = frozenset(),
 ) -> list[dict]:
     """One item per open issue the pull request names, or none at all.
 
-    A pull request names an issue through GitHub's closing link or through a
-    ``Part of`` reference anywhere in its body outside a code span or a fenced
-    code block. One that names no open issue gets no item, because a branch
-    with no card has nowhere to be drawn and a null issue would make the page
-    refuse the whole section. One that closes two issues gets two items,
-    because the page keys pull requests by issue.
+    A pull request names an issue through a closing link to an issue in this
+    repository, or through a ``Part of`` reference anywhere in its body outside
+    a code span or a fenced code block. One that names no open issue gets no
+    item, because a branch with no card has nowhere to be drawn and a null
+    issue would make the page refuse the whole section. One that closes two
+    issues gets two items, because the page keys pull requests by issue.
 
     A pull request opened from a fork gets no item either. Anyone can open one
     on a public repository, and its ``Part of`` reference or closing keyword
@@ -541,6 +670,7 @@ def pr_items(
     closing = {
         n["number"]
         for n in _all_nodes(gql, pr["id"], "closingIssuesReferences", pr["closingIssuesReferences"])
+        if in_repo(n, repo)
     }
     part_of = {int(m) for m in PART_OF.findall(outside_code(pr.get("body") or ""))}
     named = sorted((closing | part_of) & open_issues)
@@ -585,10 +715,11 @@ def _referenced_prs(gql: Gql, issue: dict, repo: str) -> set[int]:
             "closedByPullRequestsReferences",
             issue["closedByPullRequestsReferences"],
         )
+        if in_repo(n, repo)
     }
     for event in _all_nodes(gql, issue["id"], "timelineItems", issue["timelineItems"]):
-        source = (event or {}).get("source") or {}
-        if "number" in source and source.get("repository", {}).get("nameWithOwner") == repo:
+        source = (event or {}).get("source")
+        if in_repo(source, repo) and "number" in source:
             numbers.add(source["number"])
     return numbers
 
@@ -611,6 +742,142 @@ def _prs_by_number(gql: Gql, owner: str, name: str, numbers: list[int]) -> list[
     return found
 
 
+class Notes:
+    """What the job summary lists about the markers, each as ``(issue, phrase)``.
+
+    ``unread`` holds a line that looks meant as a marker and is not read,
+    ``refused`` a line read and then refused, and ``dropped`` a marker read and
+    then not used. Every phrase is the generator's own words. None carries a
+    line's text, because a refused line is a stranger's, and a ``|`` in it
+    would break the summary's table.
+    """
+
+    def __init__(self) -> None:
+        self.unread: set[tuple[int, str]] = set()
+        self.refused: set[tuple[int, str]] = set()
+        self.dropped: set[tuple[int, str]] = set()
+
+
+def _marker_lines(text: str) -> list[tuple[str, str, int]]:
+    """Each line of already unfenced text that looks meant as a marker, with its
+    kind and the offset where the line starts."""
+    found = []
+    offset = 0
+    for line in text.split("\n"):
+        m = MARKER_LINE.match(line)
+        if m:
+            found.append((MARKER_KIND[m.group(1)[0].lower()], line, offset))
+        offset += len(line) + 1
+    return found
+
+
+def _short(number: str) -> bool:
+    """Whether a number carries no more than ``MAX_DIGITS`` digits."""
+    return sum(ch.isdigit() for ch in number) <= MAX_DIGITS
+
+
+def after_refs(rest: str, repo: str) -> tuple[set[int], set[str]]:
+    """The issues in ``repo`` that the text after ``Board after:`` names, and the
+    summary phrase for each kind of reference it refused.
+
+    A reference to another repository is refused, whether written
+    ``owner/name#N`` or as a link whose address names another repository. Read
+    as a bare ``#N``, its number would match an issue here it does not mean,
+    the trap ``in_repo`` keeps ``needs`` out of. A link whose text names one
+    number and whose address names another is refused too, because nothing
+    says which one was meant. A refused reference leaves the rest of its line
+    read. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+
+    Three behaviours come with the port, and each is named on
+    l3a0/repo-template#48 rather than listed in the summary.
+
+    1. A ``#N`` right after a word character, ``/``, ``-`` or ``.`` is not
+       read and not listed, so ``#3/#4`` reads 3 and ``repo-template#3 #4``
+       reads 4.
+    2. A link whose address is not an issue or pull request address on
+       ``https://github.com``, such as a relative ``../issues/4``, is refused
+       as naming another repository. A link to ``issues/04`` is refused as a
+       disagreement.
+    3. A link ``LINK_REF`` does not read, such as ``[#3](url "title")``,
+       ``[#3]( url)`` or ``[#3][ref]``, still reads as ``#3``, whatever its
+       address names.
+    """
+    named: set[int] = set()
+    refused: set[str] = set()
+
+    def link(m: re.Match[str]) -> str:
+        url = ISSUE_URL.fullmatch(m.group(2))
+        if not url or not in_repo({"repository": {"nameWithOwner": url.group(1)}}, repo):
+            refused.add("Board after, naming another repository")
+        elif url.group(2) != m.group(1):
+            refused.add("Board after, link and number disagree")
+        else:
+            named.add(int(m.group(1)))
+        return "\0"
+
+    rest = LINK_REF.sub(link, rest)
+    for m in REPO_REF.finditer(rest):
+        if in_repo({"repository": {"nameWithOwner": m.group(1)}}, repo):
+            named.add(int(m.group(2)))
+        else:
+            refused.add("Board after, naming another repository")
+    rest = REPO_REF.sub("\0", rest)
+    named |= {int(x) for x in BARE_REF.findall(rest)}
+    return named, refused
+
+
+def read_body(
+    n: int, body: str, owner: bool, *, notes: Notes, repo: str, owner_only: bool = False
+) -> tuple[list[str], set[int]]:
+    """The ``Board order:`` values and the issues ``Board after:`` lines name in a body.
+
+    Each is read as ``ORDER`` and ``AFTER`` read it, from the body with its
+    fenced blocks removed, and the after lines through ``after_refs``. A body
+    anyone wrote sets both, as it always has, unless ``owner_only`` is set.
+    Then a body the owner did not write, which ``owner`` says, sets neither,
+    and each kind of line ``ORDER`` or ``AFTER`` matches in it is listed as
+    refused. The ``--owner-body-lines`` input sets ``owner_only``.
+
+    In a body the owner wrote, a line that looks meant as a marker and is not
+    read is listed as unread. That covers an order or after line the grammar
+    fails, an order longer than ``MAX_DIGITS``, an after line naming no issue,
+    and a verdict line, which counts only in a comment. A stranger's near
+    misses are not listed, so a stranger cannot fill the summary. A reference
+    ``after_refs`` refuses is listed as refused whoever wrote it, which adds at
+    most two entries an issue. An after line naming only the card itself is
+    listed as dropped.
+    """
+    text = unfenced(body)
+    if owner_only and not owner:
+        for kind, marker in (("order", ORDER), ("after", AFTER)):
+            if marker.search(text):
+                notes.refused.add((n, f"{MARKER_NAME[kind]}, not the owner's"))
+        return [], set()
+    orders: list[str] = []
+    after: set[int] = set()
+    for kind, line, _ in _marker_lines(text):
+        if kind == "order":
+            m = ORDER.match(line)
+            if m and _short(m.group(1)):
+                orders.append(m.group(1))
+                continue
+        elif kind == "after":
+            m = AFTER.match(line)
+            if m:
+                named, refused = after_refs(m.group(1), repo)
+                after |= named
+                notes.refused |= {(n, phrase) for phrase in refused}
+                # A card cannot wait on itself, so `tracker_card` leaves a
+                # line naming only the card itself with nothing to set.
+                if named == {n} and not refused:
+                    notes.dropped.add((n, "Board after, naming itself"))
+                if named or refused:
+                    continue
+        if owner:
+            notes.unread.add((n, MARKER_NAME[kind]))
+    return orders, after
+
+
 def tracker_card(
     gql: Gql,
     issue: dict,
@@ -619,6 +886,8 @@ def tracker_card(
     repo: str,
     conflicts: list[str],
     kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
+    *,
+    after: set[int],
 ) -> dict:
     """One open issue as the card the page draws.
 
@@ -629,6 +898,8 @@ def tracker_card(
     it names none, as the page reads it as optional. The board's own labels are
     drawn as the rank chip and the busy stripe, so they are left off the card's
     label chips. An issue claiming two kinds takes the first and is reported.
+    ``after`` holds the issues the body's ``Board after:`` lines name, which
+    ``read_body`` reads.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
@@ -641,42 +912,63 @@ def tracker_card(
         "label": issue["title"],
         "kind": (kinds or ["ready"])[0],
         "needs": sorted(
-            {
-                b["number"]
-                for b in blockers
-                if b["state"] == "OPEN" and (b.get("repository") or {}).get("nameWithOwner") == repo
-            }
+            {b["number"] for b in blockers if in_repo(b, repo) and b["state"] == "OPEN"}
             & open_issues
         ),
         "labels": [x for x in names if not BAND.match(x) and x not in WORKING],
     }
-    lines = AFTER.findall(unfenced(issue.get("body") or ""))
-    after = {int(m) for line in lines for m in re.findall(r"#(\d+)\b", line)}
-    after = sorted((after & open_issues) - {n})
-    if after:
-        card["after"] = after
+    later = sorted((after & open_issues) - {n})
+    if later:
+        card["after"] = later
     return card
 
 
-def latest_verdict(comments: list[dict]) -> tuple[str, int] | None:
-    """The newest decompose verdict among the owner's comments on an issue.
+def latest_verdict(
+    comments: list[dict], *, n: int, notes: Notes
+) -> tuple[tuple[str, int] | None, bool]:
+    """The newest decompose verdict among the owner's comments on an issue, and
+    whether a plan-audit pass came after it.
 
     A loop run again on the same issue writes a new verdict, so the last one
-    wins. GitHub lists comments oldest first.
+    wins. GitHub lists comments oldest first. Only a comment whose
+    ``authorAssociation`` is ``OWNER`` counts, for a verdict and for a pass
+    heading alike. A stranger's line that ``VERDICT`` reads is listed as
+    refused, while a stranger's near miss is not listed at all, so a stranger
+    cannot fill the summary. A stranger's pass heading counts for nothing. In
+    an owner's comment, a line that looks meant as a marker and is not read is
+    listed as unread, which includes an order or after line, since those count
+    only in a body, and a pass count longer than ``MAX_DIGITS``. A verdict not
+    read leaves the one before it standing.
+
+    A plan finished with no verdict when the owner's newest ``## Plan audit,
+    pass N`` heading comes after the newest verdict, or when a heading exists
+    and no verdict does. Positions are (comment index, offset in the comment),
+    so an exit comment headed as the last pass and ending with the verdict is
+    not one.
     """
     found = None
-    for c in comments:
+    verdict_at = last_pass = (-1, -1)
+    for i, c in enumerate(comments):
+        text = unfenced(c.get("body") or "")
         if c.get("authorAssociation") != "OWNER":
+            if VERDICT.search(text):
+                notes.refused.add((n, "Board verdict, not the owner's"))
             continue
-        for ready, passes in VERDICT.findall(unfenced(c.get("body") or "")):
-            found = (ready, int(passes))
-    return found
+        for heading in PASS_HEADING.finditer(text):
+            last_pass = (i, heading.start())
+        for kind, line, offset in _marker_lines(text):
+            m = VERDICT.match(line) if kind == "verdict" else None
+            if m and _short(m.group(2)):
+                found, verdict_at = (m.group(1), int(m.group(2))), (i, offset)
+            else:
+                notes.unread.add((n, MARKER_NAME[kind]))
+    return found, last_pass > verdict_at
 
 
 def rank_entry(
     n: int,
     names: list[str],
-    body: str,
+    orders: list[str],
     kind: str,
     verdict: tuple[str, int] | None,
     conflicts: list[str],
@@ -685,7 +977,10 @@ def rank_entry(
 
     ``ready`` has no home of its own. A finished plan says whether it is ready
     to build or waits on the owner, a card whose kind is a decision waits on
-    the owner, and any other card still needs a plan.
+    the owner, and any other card still needs a plan. ``orders`` holds the
+    values of the body's ``Board order:`` lines, which ``read_body`` reads. The
+    first one counts, and more than one is a conflict even when they are equal,
+    because an edit to the second copy would move nothing.
     """
     bands = sorted(int(m.group(1)) for x in names if (m := BAND.match(x)))
     if not bands:
@@ -697,9 +992,8 @@ def rank_entry(
         "band": bands[0],
         "ready": verdict[0] if verdict else ("decide" if kind == "decision" else "plan"),
     }
-    orders = ORDER.findall(unfenced(body))
     if orders:
-        if len(set(orders)) > 1:
+        if len(orders) > 1:
             conflicts.append(f"#{n} carries {len(orders)} order lines, read as {orders[0]}")
         value = float(orders[0])
         entry["order"] = int(value) if value.is_integer() else value
@@ -755,8 +1049,27 @@ def stale_after_minutes(longest_gap: int) -> int:
     return longest_gap + SCHEDULE_DELAY_ALLOWANCE
 
 
+def owner_only(owner_body_lines: str) -> bool:
+    """Whether a run reads body lines only from the owner, from its input.
+
+    The input is a string, as every input of the reusable workflow is, and only
+    empty or ``true`` is read. Any other value stops the run before GitHub is
+    read, so a misspelt one cannot leave strangers' lines counting with
+    nothing said.
+    """
+    if owner_body_lines not in {"", "true"}:
+        raise BoardError(f"owner-body-lines is {owner_body_lines!r}, and takes only empty or true")
+    return owner_body_lines == "true"
+
+
 def build(
-    gql: Gql, repo: str, longest_gap: int, now: datetime, title: str = "", data_label: str = ""
+    gql: Gql,
+    repo: str,
+    longest_gap: int,
+    now: datetime,
+    title: str = "",
+    data_label: str = "",
+    owner_body_lines: str = "",
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
 
@@ -766,9 +1079,12 @@ def build(
     into the board too, because the page builds every issue and pull request
     link from it and names no repository of its own. ``data_label`` is the
     label that marks a card waiting on data, and an empty one reads no such
-    kind. It is checked before anything is read from GitHub.
+    kind. ``owner_body_lines`` set to ``true`` reads ``Board order:`` and
+    ``Board after:`` lines only from an issue the owner opened. Both are
+    checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
+    owner_lines = owner_only(owner_body_lines)
     owner, name = repo.split("/", 1)
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
     open_issues = {i["number"] for i in issues}
@@ -778,12 +1094,19 @@ def build(
     planned = []
     ranked = []
     conflicts: list[str] = []
+    notes = Notes()
+    unfinished: list[tuple[int, str, list[str]]] = []
     data_carried = 0
     referenced: set[int] = set()
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
         names = [lb["name"] for lb in _all_nodes(gql, issue["id"], "labels", issue["labels"])]
-        card = tracker_card(gql, issue, names, open_issues, repo, conflicts, kinds_read)
+        body = issue.get("body") or ""
+        by_owner = issue.get("authorAssociation") == "OWNER"
+        orders, after = read_body(n, body, by_owner, notes=notes, repo=repo, owner_only=owner_lines)
+        card = tracker_card(
+            gql, issue, names, open_issues, repo, conflicts, kinds_read, after=after
+        )
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
 
@@ -794,13 +1117,18 @@ def build(
             working.append({"n": n, "kind": "build" if "build" in held else held[0]})
 
         comments = _all_nodes(gql, issue["id"], "issueComments", issue["issueComments"])
-        verdict = latest_verdict(comments)
+        verdict, finished = latest_verdict(comments, n=n, notes=notes)
+        if finished:
+            unfinished.append((n, card["kind"], names))
         if verdict:
             planned.append({"n": n, "passes": verdict[1], "ready": verdict[0]})
 
-        entry = rank_entry(n, names, issue.get("body") or "", card["kind"], verdict, conflicts)
+        entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts)
         if entry:
             ranked.append(entry)
+        elif orders:
+            # Only a banded card has a place in the priority order.
+            notes.dropped.add((n, "Board order on a card with no band"))
 
         referenced |= _referenced_prs(gql, issue, repo)
 
@@ -813,11 +1141,26 @@ def build(
     left_out = []
     busy = frozenset(w["n"] for w in working)
     for pr in open_prs + others:
-        items = pr_items(gql, pr, open_issues, unknown, busy)
+        items = pr_items(gql, pr, open_issues, repo, unknown, busy)
         if not items and pr["state"] == "OPEN":
             left_out.append(pr["number"])
         prs += items
     prs.sort(key=lambda p: (p["issue"], p["pr"]))
+    # A plan with an open pull request is being carried out, and one a decompose
+    # loop holds is still being written, so neither owes a verdict. A parent
+    # builds nothing, and a deferred card is one nobody should take. The kind
+    # is tested for a parent and the label for `deferred`, because a data label
+    # takes the kind ahead of `deferred`. The check needs `prs`, which is read
+    # after the issues.
+    building = {p["issue"] for p in prs if p["state"] == "open"}
+    no_verdict = [
+        n
+        for n, kind, names in unfinished
+        if kind != "parent"
+        and "deferred" not in names
+        and "working:decompose" not in names
+        and n not in building
+    ]
 
     board = {
         "state": {
@@ -844,10 +1187,19 @@ def build(
         "open_prs_left_out": sorted(left_out),
         "unknown_check_states": sorted(unknown),
         "label_conflicts": conflicts,
+        "unread": sorted(notes.unread),
+        "refused": sorted(notes.refused),
+        "dropped": sorted(notes.dropped),
+        "no_verdict": sorted(no_verdict),
         "data_label": data_label,
         "data_carried": data_carried,
     }
     return board, report
+
+
+def _listed(items: list[tuple[int, str]]) -> str:
+    """A summary row's items as ``#N phrase``, or ``none``."""
+    return "; ".join(f"#{n} {phrase}" for n, phrase in items) or "none"
 
 
 def _summary(lines: list[str]) -> None:
@@ -871,13 +1223,25 @@ def cmd_build(args: argparse.Namespace) -> None:
     gql = GhGraphql()
     now = datetime.now(UTC)
     board, report = build(
-        gql, args.repo, longest_gap_minutes(Path(args.workflow)), now, args.title, args.data_label
+        gql,
+        args.repo,
+        longest_gap_minutes(Path(args.workflow)),
+        now,
+        args.title,
+        args.data_label,
+        args.owner_body_lines,
     )
+    try:
+        # `allow_nan=False` refuses a number JavaScript's `JSON.parse` cannot
+        # read, which would leave the page drawing nothing. `MAX_DIGITS` leaves
+        # no read that writes one, so this guards a later change. The failed
+        # run keeps the last good board up and says why in the summary.
+        text = json.dumps(board, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except ValueError as e:
+        raise BoardError(f"board.json would carry a number JSON cannot hold: {e}") from e
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "board.json").write_text(
-        json.dumps(board, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
-    )
+    (out / "board.json").write_text(text, encoding="utf-8")
     updated = board["state"]["updatedAt"]
     _output("updated_at", updated)
     _summary(
@@ -899,6 +1263,13 @@ def cmd_build(args: argparse.Namespace) -> None:
             "| Check states mapped to neither way | "
             f"{', '.join(report['unknown_check_states']) or 'none'} |",
             f"| Labels or lines that disagree | {'; '.join(report['label_conflicts']) or 'none'} |",
+            # The l3a0 plugin's sync-prune-next skill reads these four rows by
+            # name, so a renamed row drops out of every status round.
+            f"| Marker lines not read | {_listed(report['unread'])} |",
+            f"| Marker lines refused | {_listed(report['refused'])} |",
+            f"| Markers dropped | {_listed(report['dropped'])} |",
+            "| Finished plans with no verdict after them | "
+            f"{', '.join(f'#{n}' for n in report['no_verdict']) or 'none'} |",
             # A misspelt data label matches nothing and fails no read, so the
             # count is what shows the caller's input reached the issues.
             "| Data label | "
@@ -990,6 +1361,11 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--title", default="", help="the page's heading, <name> build board if empty")
     b.add_argument(
         "--data-label", default="", help="the label marking a card waiting on data, none if empty"
+    )
+    b.add_argument(
+        "--owner-body-lines",
+        default="",
+        help="true to read order and after lines only from the owner's issues, empty for anyone's",
     )
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("measure", help="time how long a deployed board takes to be served")

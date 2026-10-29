@@ -18,7 +18,9 @@ name: Build board
 # repository serve its own tab icon in place of the template's. A `data-label`
 # input, added by the pull request that closes l3a0/repo-template#40, names
 # the label that marks a card waiting on data, which the page then draws in a
-# fourth column.
+# fourth column. An `owner-body-lines` input, added by the pull request that
+# closes l3a0/repo-template#48, reads order and after lines only from issues
+# the owner opened.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -67,6 +69,14 @@ on:
           data" column. Empty reads no such label.
         type: string
         default: ""
+      owner-body-lines:
+        description: >-
+          "true" reads a "Board order:" or "Board after:" line only in the
+          body of an issue the owner opened, and lists a stranger's as
+          refused in the job summary. Empty reads them from anyone's issue.
+          Any other value fails the run.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -111,12 +121,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ inputs.title }}
           DATA_LABEL: ${{ inputs.data-label }}
+          OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
           --workflow caller/.github/workflows/board.yml
           --title="$TITLE"
           --data-label="$DATA_LABEL"
+          --owner-body-lines="$OWNER_BODY_LINES"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

@@ -24,8 +24,9 @@
 // its names, because the page sets the build order's four-column grid with a
 // class, and a class nothing records is a layout no test can see. The pull
 // request that closes l3a0/repo-template#45 gave each element a `value` and an
-// `onchange`, because the page's milestone selector is a select whose value
-// says which milestone it draws.
+// `onchange`, so every element has the fields of the page's milestone
+// selector. They are only defaults: the page sets both on the selector before
+// anything reads them, and no test depends on them.
 var store = {};
 function mkClassList() {
   var names = [];

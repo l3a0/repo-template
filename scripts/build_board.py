@@ -218,6 +218,11 @@ def kind_labels(data_label: str) -> tuple[tuple[str, str], ...]:
 MILESTONE_NUMBER = "<n>"
 
 
+def milestone_title(issue: dict) -> str:
+    """An issue's whole milestone title, or the empty string for none."""
+    return (issue.get("milestone") or {}).get("title") or ""
+
+
 def milestone_short(title: str) -> str:
     """A milestone's title up to its first comma, stripped.
 
@@ -231,13 +236,15 @@ def milestone_short(title: str) -> str:
 def milestone_pattern(pattern: str) -> re.Pattern[str] | None:
     """The name a milestone default matches, or None when the input is empty.
 
-    ``<n>`` stands for a number and every other character for itself, so
-    ``v1.<n>`` does not match ``v1x2``. A pattern with no ``<n>`` matches one
-    name exactly. Two patterns are refused before GitHub is read, because the
-    run would otherwise publish a board that silently opens on every
-    milestone. One with two ``<n>`` has no single number to compare, and one
-    with a comma can match no name, since ``milestone_short`` cuts every name
-    at its first comma.
+    ``<n>`` stands for a number of at most 18 digits and every other character
+    for itself, so ``v1.<n>`` does not match ``v1x2``. The bound keeps
+    ``int()`` well short of Python's limit on the digits it converts, which a
+    milestone named with thousands of digits would otherwise pass. A pattern
+    with no ``<n>`` matches one name exactly. Two patterns are refused before
+    GitHub is read, because the run would otherwise publish a board that
+    silently opens on every milestone. One with two ``<n>`` has no single
+    number to compare, and one with a comma can match no name, since
+    ``milestone_short`` cuts every name at its first comma.
     """
     if not pattern:
         return None
@@ -250,7 +257,7 @@ def milestone_pattern(pattern: str) -> re.Pattern[str] | None:
             f"the milestone default {pattern!r} has a comma, and no milestone's short name can"
         )
     head, number, tail = pattern.partition(MILESTONE_NUMBER)
-    body = re.escape(head) + ("([0-9]+)" if number else "") + re.escape(tail)
+    body = re.escape(head) + ("([0-9]{1,18})" if number else "") + re.escape(tail)
     return re.compile(body)
 
 
@@ -702,7 +709,7 @@ def tracker_card(
     kinds = card_kinds(names, issue["subIssues"]["totalCount"], kinds_read)
     if len(kinds) > 1:
         conflicts.append(f"#{n} reads as {' and '.join(kinds)}, read as {kinds[0]}")
-    ms = (issue.get("milestone") or {}).get("title") or ""
+    ms = milestone_title(issue)
     card = {
         "n": n,
         "ms": milestone_short(ms) if cut else ms,
@@ -894,7 +901,7 @@ def build(
         # selector, so the run says which.
         titles: dict[str, set[str]] = {}
         for issue in issues:
-            full = (issue.get("milestone") or {}).get("title") or ""
+            full = milestone_title(issue)
             titles.setdefault(milestone_short(full), set()).add(full)
         for short, fulls in sorted(titles.items()):
             if len(fulls) > 1:
@@ -981,7 +988,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         now,
         args.title,
         args.data_label,
-        args.milestone_default,
+        milestone_default=args.milestone_default,
     )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

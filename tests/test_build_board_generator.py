@@ -673,6 +673,53 @@ def test_the_pattern_matches_its_literal_parts_exactly(
     assert bb.default_milestone(pattern, names) == chosen
 
 
+def test_a_number_too_long_to_convert_is_no_match() -> None:
+    """Protects a run from a milestone named with thousands of digits.
+
+    Python refuses to convert more than 4,300 digits to an int, so an
+    unbounded number would stop every run on that title. A number of more
+    than 18 digits matches no pattern, and the default falls to the next.
+    """
+    assert bb.default_milestone("MVP <n>", ["MVP " + "9" * 5000, "MVP 3"]) == "MVP 3"
+    assert bb.default_milestone("MVP <n>", ["MVP " + "1" * 19]) is None
+    assert bb.default_milestone("MVP <n>", ["MVP " + "1" * 18]) == "MVP " + "1" * 18
+
+
+def test_a_tie_opens_on_one_milestone_whatever_the_hash_seed() -> None:
+    """Protects two runs over the same issues from opening on different milestones.
+
+    ``default_milestone`` reads the names through a set, whose order follows
+    Python's string hash, which changes from one process to the next. Three
+    spellings of one number tie, so only the name breaking the tie keeps the
+    answer the same in every process.
+    """
+    code = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('bb', {str(SCRIPT)!r})\n"
+        "bb = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(bb)\n"
+        "print(bb.default_milestone('MVP <n>', ['MVP 4', 'MVP 04', 'MVP 004']))\n"
+    )
+    answers = {
+        subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": str(seed)},
+        ).stdout.strip()
+        for seed in range(8)
+    }
+    assert answers == {"MVP 004"}
+
+
+def test_the_short_name_is_stripped_on_both_sides() -> None:
+    """Protects a title written with spaces around its short name."""
+    assert bb.milestone_short(" MVP 4 , serve the bars") == "MVP 4"
+    assert bb.milestone_short("MVP 4") == "MVP 4"
+    assert bb.milestone_short("") == ""
+
+
 @pytest.mark.parametrize(
     ("pattern", "reason"),
     [
@@ -733,6 +780,7 @@ def test_a_milestone_default_cuts_each_title_and_names_the_milestone() -> None:
             issue(3, milestone="Round 1, gaps the first review found"),
             issue(4, milestone=None),
             issue(5, milestone="Backlog"),
+            issue(6, milestone="MVP 4 , serve the bars, then orders"),
         ],
         [],
     )
@@ -743,9 +791,13 @@ def test_a_milestone_default_cuts_each_title_and_names_the_milestone() -> None:
         "Round 1",
         "",
         "Backlog",
+        "MVP 4",
     ]
     assert board["state"]["milestoneDefault"] == "MVP 4"
-    assert report["label_conflicts"] == []
+    assert report["label_conflicts"] == [
+        'milestones "MVP 4 , serve the bars" and "MVP 4 , serve the bars, then orders" '
+        'both cut to "MVP 4"'
+    ]
     board, _ = build(gh, milestone_default="Slice <n>")
     assert board["state"]["milestoneDefault"] is None
 
@@ -755,16 +807,17 @@ def test_two_titles_cutting_to_one_name_are_reported() -> None:
 
     Two open milestones whose titles cut to one name would read as one entry
     in the selector, so the run lists them where the job summary lists what
-    disagrees, three of them as a group.
+    disagrees, three of them as a group. The groups and the titles in each
+    come out in name order, whatever order the issues were filed in.
     """
     gh = FakeGitHub(
         [
-            issue(1, milestone="MVP 4, serve the bars"),
-            issue(2, milestone="MVP 4, take orders"),
-            issue(3, milestone="MVP 4, take orders"),
-            issue(4, milestone="Slice 1, a"),
-            issue(5, milestone="Slice 1, b"),
-            issue(6, milestone="Slice 1"),
+            issue(1, milestone="Slice 1, b"),
+            issue(2, milestone="Slice 1"),
+            issue(3, milestone="Slice 1, a"),
+            issue(4, milestone="MVP 4, take orders"),
+            issue(5, milestone="MVP 4, take orders"),
+            issue(6, milestone="MVP 4, serve the bars"),
         ],
         [],
     )
@@ -821,6 +874,60 @@ def test_the_command_line_passes_the_milestone_default_through(
     assert bb.main([*argv, "--milestone-default=MVP <n>, x"]) == 1
     assert not (out / "board.json").exists()
     assert "build_board: the milestone default 'MVP <n>, x' has a comma" in summary.read_text()
+
+
+MILESTONE_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "milestones.json"
+
+
+def milestone_tracker() -> FakeGitHub:
+    """A repository whose milestone titles hold one comma, two, or none, and one with none."""
+    return FakeGitHub(
+        [
+            issue(1, milestone="Round 1, gaps the first review found", labels=("band:1",)),
+            issue(2, milestone="Round 1, the second pass", blocked_by=((1, "OPEN"),)),
+            issue(3, milestone="MVP 4, serve the bars, then orders", labels=("decision",)),
+            issue(4, milestone="MVP 4", labels=("working:build",)),
+            issue(5, milestone=None, labels=()),
+            issue(
+                6,
+                milestone="Slice 1",
+                sub_issues=2,
+                comments=(("OWNER", "Board verdict: build after 2 passes"),),
+            ),
+        ],
+        [pull(20, closes=(4,))],
+    )
+
+
+@pytest.mark.parametrize("argv", [[], ["--milestone-default="]], ids=["left out", "empty"])
+def test_with_no_milestone_default_the_board_is_the_bytes_the_base_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    """Protects every caller that names no milestone default from a board that moves.
+
+    ``MILESTONE_GOLDEN`` is the ``board.json`` that the command line at
+    l3a0/repo-template commit cf2959a3, before the input existed, wrote for
+    ``milestone_tracker``. This run has to write the same bytes, read as the
+    command line writes them, whether the input is left out or passed empty
+    as the workflow passes it.
+    """
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return NOW
+
+    fake = milestone_tracker()
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setattr(bb, "datetime", Frozen)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    base = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+    assert bb.main([*base, *argv]) == 0
+    written = (out / "board.json").read_bytes()
+    assert written == MILESTONE_GOLDEN.read_bytes().removesuffix(b"\n")
 
 
 def test_the_page_opens_on_the_milestone_the_generator_names(tmp_path: Path) -> None:

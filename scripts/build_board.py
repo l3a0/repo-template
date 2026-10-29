@@ -542,10 +542,10 @@ def pr_items(
 
     A pull request names an issue through a closing link to an issue in this
     repository, or through a ``Part of`` reference anywhere in its body outside
-    a code span or a fenced code block. One that names no open issue gets no item, because a branch
-    with no card has nowhere to be drawn and a null issue would make the page
-    refuse the whole section. One that closes two issues gets two items,
-    because the page keys pull requests by issue.
+    a code span or a fenced code block. One that names no open issue gets no
+    item, because a branch with no card has nowhere to be drawn and a null
+    issue would make the page refuse the whole section. One that closes two
+    issues gets two items, because the page keys pull requests by issue.
 
     A pull request opened from a fork gets no item either. Anyone can open one
     on a public repository, and its ``Part of`` reference or closing keyword

@@ -70,14 +70,13 @@ NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
-# this commit, the head of l3a0/claude-plugins pull request 34, which releases
-# 0.5.1. The pin moves to that pull request's merge commit once it merges. A
-# change here to a marker, a label or a string these tests compare with the
-# skill fails them until the plugin
-# releases a skill that matches and this pin moves to it. Any other format
+# this commit, the 0.5.1 release, which l3a0/claude-plugins pull request 34
+# merged. A change here to a marker, a label or a string these tests compare
+# with the skill fails them until the plugin releases a skill that matches and
+# this pin moves to it. Any other format
 # change rests on the plugin's own rule that a generator's format change ships
 # with a plugin release in the same step.
-PLUGIN_COMMIT = "dae089001f3c86c7190fd23d0eb59b5eaea02e0d"
+PLUGIN_COMMIT = "af7b6924bddbccf6e148072594d60cacf9da51af"
 PLUGIN_FILES = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/update-build-board/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.

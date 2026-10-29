@@ -2,11 +2,20 @@
 #
 # Apply this template's GitHub-side policy to a repository.
 #
-# Two things live on GitHub rather than in tracked files, so a fresh clone of
-# the template carries neither: the branch ruleset that makes `main` require a
-# pull request, and the label set that the triage rule in CLAUDE.md expects to
-# exist. This script applies both, reading them from .github/rulesets/default.json
-# and .github/labels.json so the repo's own files stay the source of truth.
+# Five things live on GitHub rather than in tracked files, so a fresh clone of
+# the template carries none of them.
+#
+# 1. The branch ruleset that makes `main` require a pull request, read from
+#    .github/rulesets/default.json.
+# 2. The label set that the triage rule in CLAUDE.md and the build board
+#    expect to exist, read from .github/labels.json.
+# 3. CodeQL's default setup, which the ruleset's code scanning rule waits on.
+# 4. GitHub Pages, with GitHub Actions as its source, which the build board's
+#    reusable workflow deploys to.
+# 5. The github-pages environment, limited to deploying from `main`.
+#
+# Reading the first two from the repo's own files keeps those files the source
+# of truth.
 #
 # It is idempotent. Running it twice updates in place rather than duplicating.
 #
@@ -163,6 +172,51 @@ if ! run gh api --method PATCH "repos/$repo/code-scanning/default-setup" \
   --raw-field 'languages[]=python' >/dev/null 2>&1; then
   echo "  could not configure CodeQL. It needs code pushed and a language" >&2
   echo "  GitHub recognises, so re-run this script after the first push." >&2
+fi
+
+# --- Pages -------------------------------------------------------------------
+# The build board's reusable workflow publishes the board on GitHub Pages
+# through the github-pages environment, and its deploy job has nowhere to go
+# until Pages is on with GitHub Actions as its source rather than a branch.
+# The site is read first, so a repository already set that way is left alone
+# and one publishing from a branch is switched.
+#
+# The exit status decides whether a site exists, not the output. A repository
+# with no site answers 404, and `gh` prints that error's JSON body to stdout,
+# where `--jq` never runs, so the output alone would read as a source type.
+if ! pages_type="$(gh api "repos/$repo/pages" --jq .build_type 2>/dev/null)"; then
+  pages_type=""
+fi
+if [[ -z "$pages_type" ]]; then
+  echo "pages: enabling, source GitHub Actions"
+  run gh api --method POST "repos/$repo/pages" -f build_type=workflow >/dev/null
+elif [[ "$pages_type" != "workflow" ]]; then
+  echo "pages: switching source from $pages_type to GitHub Actions"
+  run gh api --method PUT "repos/$repo/pages" -f build_type=workflow >/dev/null
+else
+  echo "pages: already on, source GitHub Actions"
+fi
+
+# --- The github-pages environment --------------------------------------------
+# The board's triggers all run on `main`, and a run from any other branch must
+# not reach the site. GitHub creates the environment when Pages first deploys,
+# so the script creates it here instead, limits it to custom branch policies,
+# and adds a policy for `main` unless one exists. A policy already there for
+# another branch is left alone, because removing one is the owner's call.
+echo "environment: github-pages, deploys from main"
+run gh api --method PUT "repos/$repo/environments/github-pages" \
+  -F 'deployment_branch_policy[protected_branches]=false' \
+  -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
+if ! branch_policies="$(gh api "repos/$repo/environments/github-pages/deployment-branch-policies" \
+  --jq '.branch_policies[] | select(.type == "branch") | .name' 2>/dev/null)"; then
+  branch_policies=""
+fi
+if grep -qx main <<<"$branch_policies"; then
+  echo "environment: main already allowed"
+else
+  echo "environment: allowing main"
+  run gh api --method POST "repos/$repo/environments/github-pages/deployment-branch-policies" \
+    -f name=main -f type=branch >/dev/null
 fi
 
 # --- Reserved human steps ----------------------------------------------------

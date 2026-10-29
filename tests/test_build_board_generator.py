@@ -149,14 +149,24 @@ def issue(
     blocked_by: tuple[tuple, ...] = (),
     sub_issues: int = 0,
     comments: tuple[tuple[str, str], ...] = (),
+    colors: dict[str, str] | None = None,
 ) -> dict:
+    """One open issue as GitHub returns it.
+
+    A label carries a ``color`` field only when ``colors`` names it, so a
+    fixture built without ``colors`` fails any generator that reads the field
+    where no input asked for it.
+    """
+    colors = colors or {}
     return {
         "id": f"I{n}",
         "number": n,
         "title": title or f"Issue {n}",
         "body": body,
         "milestone": {"title": milestone} if milestone is not None else None,
-        "labels": conn([{"name": x} for x in labels]),
+        "labels": conn(
+            [{"name": x} | ({"color": colors[x]} if x in colors else {}) for x in labels]
+        ),
         "blockedBy": conn([blocker(*b) for b in blocked_by]),
         "subIssues": {"totalCount": sub_issues},
         "issueComments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
@@ -251,8 +261,12 @@ class FakeGitHub:
         return {"rateLimit": {"cost": 1}, "repository": found}
 
 
-def build(gh: FakeGitHub, data_label: str = "") -> tuple[dict, dict]:
-    return bb.build(gh, REPO, 30, NOW, data_label=data_label)
+def build(
+    gh: FakeGitHub, data_label: str = "", label_colors: str = "", sort_labels: str = ""
+) -> tuple[dict, dict]:
+    return bb.build(
+        gh, REPO, 30, NOW, data_label=data_label, label_colors=label_colors, sort_labels=sort_labels
+    )
 
 
 def prs_of(board: dict) -> list[dict]:
@@ -590,6 +604,203 @@ def test_the_command_line_passes_the_data_label_through(
     assert "build_board: the data label 'deferred' is a label the board already reads" in (
         summary.read_text()
     )
+
+
+# ---- Label chips: GitHub's colours and name order ----
+
+# The state keys a board carried before ``label-colors`` existed, in the order
+# the generator writes them. ``board.json`` is written in insertion order, so a
+# key added here changes the bytes every caller publishes.
+STATE_KEYS = [
+    "schema",
+    "repo",
+    "title",
+    "updatedAt",
+    "issues",
+    "source",
+    "longestGapMinutes",
+    "staleAfterMinutes",
+]
+
+
+def test_with_neither_label_input_the_board_is_the_one_it_was() -> None:
+    """Protects every caller that sets neither ``label-colors`` nor ``sort-labels``.
+
+    The labels keep the order GitHub returns, and ``state`` carries exactly the
+    keys it carried before, so no ``labelColors``. The fixtures' labels carry no
+    ``color`` field, so a generator reading it on this path would fail here.
+    Passing both inputs empty writes the same board as passing neither.
+    """
+    gh = lambda: FakeGitHub(  # noqa: E731
+        [issue(1, labels=("test", "deferred", "band:1", "enhancement"))], []
+    )
+    board, _ = build(gh())
+    assert card(board, 1)["labels"] == ["test", "deferred", "enhancement"]
+    assert list(board["state"]) == STATE_KEYS
+    assert build(gh(), label_colors="", sort_labels="")[0] == board
+
+
+def test_sort_labels_puts_each_cards_labels_in_name_order() -> None:
+    """Protects the chip order a caller setting ``sort-labels`` gets.
+
+    GitHub returns an issue's labels in the order they were added. The sort is
+    Python's code-point order, so a capital sorts ahead of a lower-case letter,
+    and the board's own labels are still left off. Sorting writes no colours.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("test", "deferred")),
+            issue(2, labels=("working:build", "question", "band:2", "Bug", "accessibility")),
+        ],
+        [],
+    )
+    board, _ = build(gh, sort_labels="true")
+    assert card(board, 1)["labels"] == ["deferred", "test"]
+    assert card(board, 2)["labels"] == ["Bug", "accessibility", "question"]
+    assert list(board["state"]) == STATE_KEYS
+
+
+def test_label_colors_writes_each_card_labels_colour_lower_cased() -> None:
+    """Protects the map the page fills each chip from under ``label-colors``.
+
+    The map holds each label a card draws, keyed by name in sorted order, with
+    GitHub's colour lower-cased, since GitHub returns some in capitals. The
+    board's own labels draw no chip, so they are left out, and so is a colour
+    that is not six hex digits, which the page would write into a style
+    attribute. The labels keep GitHub's order, because colouring sorts nothing.
+    """
+    gh = FakeGitHub(
+        [
+            issue(
+                1,
+                labels=("opentofu", "band:1", "working:build", "broken", "short"),
+                colors={
+                    "opentofu": "F9DB4E",
+                    "band:1": "ededed",
+                    "working:build": "0e8a16",
+                    "broken": "zzzzzz",
+                    "short": "fff",
+                },
+            ),
+            issue(2, labels=("enhancement",), colors={"enhancement": "a2eeef"}),
+        ],
+        [],
+    )
+    board, _ = build(gh, label_colors="true")
+    assert board["state"]["labelColors"] == {"enhancement": "a2eeef", "opentofu": "f9db4e"}
+    assert list(board["state"]["labelColors"]) == ["enhancement", "opentofu"]
+    assert list(board["state"]) == [*STATE_KEYS, "labelColors"]
+    assert card(board, 1)["labels"] == ["opentofu", "broken", "short"]
+
+
+def test_a_label_read_on_a_later_page_carries_its_colour() -> None:
+    """Protects the colour of a label past an issue's first hundred.
+
+    The first page of labels comes with the issue, and the rest are read again
+    from where it stopped. Both reads select ``color`` beside ``name``, or a
+    label read on a later page would draw the page's own colour.
+    """
+    first = issue(1, labels=("enhancement",), colors={"enhancement": "a2eeef"})
+    first["labels"]["pageInfo"]["hasNextPage"] = True
+    later = conn([{"name": "question", "color": "D876E3"}], cursor="c2")
+    gh = FakeGitHub([first], [], nested={("I1", "labels", "c1"): later})
+    board, _ = build(gh, label_colors="true")
+    assert board["state"]["labelColors"] == {"enhancement": "a2eeef", "question": "d876e3"}
+    assert "nodes{name color}" in bb.ISSUES_QUERY
+    assert [q for q in gh.calls if "node(id:$id)" in q] == [
+        "query($id:ID!, $after:String) { node(id:$id) { ... on Issue { labels: labels(first:100, "
+        "after:$after) { pageInfo{hasNextPage endCursor} nodes{ name color } } } } }"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--label-colors", "yes"),
+        ("--label-colors", "True"),
+        ("--sort-labels", "name"),
+        ("--sort-labels", "false"),
+    ],
+)
+def test_a_label_input_other_than_empty_or_true_stops_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, value: str
+) -> None:
+    """Protects a caller from a board that quietly ignores its input.
+
+    Each input takes empty or ``true``. Any other value stops the run before
+    it reads GitHub, and the reason goes under ``## Board run failed`` in the
+    job summary, where the run's page shows it, since the run stops the same
+    way until someone edits the caller.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+    assert bb.main([*argv, f"{flag}={value}"]) == 1
+    assert fake.calls == []
+    assert not (out / "board.json").exists()
+    name = flag.removeprefix("--")
+    assert summary.read_text() == (
+        "## Board run failed\n\n"
+        f"build_board: the {name} input {value!r} is neither empty nor true\n"
+    )
+
+
+def test_the_command_line_passes_the_label_inputs_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the two label inputs on their way from the workflow to the board.
+
+    The workflow passes each as a flag joined to its value by ``=``, whether or
+    not the caller set it, so an empty value has to read as off.
+    """
+    fake = FakeGitHub([issue(1, labels=("test", "deferred"), colors={"test": "5319E7"})], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def written() -> dict:
+        return json.loads((out / "board.json").read_text())
+
+    assert bb.main([*argv, "--label-colors=true", "--sort-labels=true"]) == 0
+    assert written()["state"]["labelColors"] == {"test": "5319e7"}
+    assert written()["tracker"]["items"][0]["labels"] == ["deferred", "test"]
+    assert bb.main([*argv, "--label-colors=", "--sort-labels="]) == 0
+    assert "labelColors" not in written()["state"]
+    assert written()["tracker"]["items"][0]["labels"] == ["test", "deferred"]
+
+
+def test_the_page_fills_the_chips_the_generator_coloured(tmp_path: Path) -> None:
+    """Protects the join between the colour map and the chip that reads it.
+
+    A map the generator writes under a key the page does not read would leave
+    every chip in the page's own colours, and neither half's tests would see it.
+    The band label ranks the card, so the page's short view draws it.
+    """
+    gh = FakeGitHub(
+        [
+            issue(
+                1,
+                labels=("band:1", "replication", "enhancement"),
+                colors={"band:1": "ededed", "replication": "1D76DB"},
+            )
+        ],
+        [],
+    )
+    board, _ = build(gh, label_colors="true", sort_labels="true")
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    drawn = ids["flow"]["html"] + ids["board"]["html"]
+    assert (
+        '<b style="color:#2F7F86">enhancement</b>'
+        '<b style="background:#1d76db;border-color:#1d76db;color:#000">replication</b>'
+    ) in drawn
 
 
 # ---- The judgement fields, from labels, links and lines ----
@@ -1821,6 +2032,8 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.title",
                 "inputs.icon",
                 "inputs.data-label",
+                "inputs.label-colors",
+                "inputs.sort-labels",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -1838,11 +2051,11 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     field expanded into a step as critical, which the ruleset refuses to merge.
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
-    of which a stranger writes. ``inputs.title``, ``inputs.icon`` and
-    ``inputs.data-label`` are written by the caller's own file. Each reaches
-    the shell only through an environment variable, and the icon also names a
-    file for the caller's checkout, which is an action's input rather than
-    shell.
+    of which a stranger writes. ``inputs.title``, ``inputs.icon``,
+    ``inputs.data-label``, ``inputs.label-colors`` and ``inputs.sort-labels``
+    are written by the caller's own file. Each reaches the shell only through
+    an environment variable, and the icon also names a file for the caller's
+    checkout, which is an action's input rather than shell.
     """
     used = set(re.findall(r"\$\{\{\s*([^}]*?)\s*\}\}", path.read_text(encoding="utf-8")))
     assert used == allowed
@@ -1851,6 +2064,13 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     data = re.findall(r"^(.*)\$\{\{\s*inputs\.data-label\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in data] == [("DATA_LABEL:", "")]
     assert '--data-label="$DATA_LABEL"' in _called()
+    for key, env, flag in (
+        ("label-colors", "LABEL_COLORS", "--label-colors"),
+        ("sort-labels", "SORT_LABELS", "--sort-labels"),
+    ):
+        uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
+        assert [(before.strip(), after) for before, after in uses] == [(f"{env}:", "")]
+        assert f'{flag}="${env}"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
@@ -1887,13 +2107,16 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     only what it needs. A required input, or a default naming a file or a
     label, would fail or change every such run. An empty title gives
     ``<name> build board``, an empty icon serves the template's, and an empty
-    data label reads no ``data`` kind. The README and the l3a0 plugin's
-    update-build-board skill name the inputs by the keys declared here.
+    data label reads no ``data`` kind, and an empty ``label-colors`` or
+    ``sort-labels`` leaves the chips as they were. The README and the l3a0
+    plugin's update-build-board skill name the inputs by the keys declared
+    here. The README quotes ``"true"``, because a bare ``true`` in YAML is a
+    boolean and the inputs are strings.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
     declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
-    assert list(declared) == ["title", "icon", "data-label"]
+    assert list(declared) == ["title", "icon", "data-label", "label-colors", "sort-labels"]
     for block in declared.values():
         assert "        type: string\n" in block
         assert '        default: ""' in block
@@ -1901,6 +2124,8 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
     assert f"    with:\n      data-label: {DATA_LABEL}\n" in readme
+    assert '    with:\n      label-colors: "true"\n' in readme
+    assert '    with:\n      sort-labels: "true"\n' in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
     assert f"`with: data-label: {DATA_LABEL}`" in _skill()

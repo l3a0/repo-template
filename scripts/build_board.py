@@ -208,6 +208,23 @@ def kind_labels(data_label: str) -> tuple[tuple[str, str], ...]:
     return ((data_label, "data"), *KIND_LABELS)
 
 
+def switch(name: str, value: str) -> bool:
+    """An on-or-off input, which is empty for off and ``true`` for on.
+
+    Any other value stops the run rather than guessing, because a caller who
+    wrote ``yes`` or ``name`` meant something, and reading it as off would
+    publish a board that silently ignores the caller's file.
+    """
+    if value not in ("", "true"):
+        raise BoardError(f"the {name} input {value!r} is neither empty nor true")
+    return value == "true"
+
+
+# A label's colour as GitHub stores it, once lower-cased. The page writes it
+# into a style attribute, so anything else is left out of the board.
+HEX_COLOUR = re.compile(r"^[0-9a-f]{6}$")
+
+
 # GitHub reports a check as an uppercase enum, and the page knows four
 # lowercase words. Passed through as they come, every state reads as green,
 # because the page counted only `failure`, `running` and `neutral`. So each
@@ -253,7 +270,7 @@ query($owner:String!, $name:String!, $after:String) {{
       nodes {{
         id number title body
         milestone{{title}}
-        labels(first:100){{{PAGE_INFO} nodes{{name}}}}
+        labels(first:100){{{PAGE_INFO} nodes{{name color}}}}
         blockedBy(first:100){{{PAGE_INFO} nodes{{number state repository{{nameWithOwner}}}}}}
         subIssues{{totalCount}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
@@ -292,7 +309,7 @@ BATCH = 50
 # a pull request's are both `comments` on GitHub, so the issue's go under an
 # alias to keep the two apart.
 NESTED = {
-    "labels": ("Issue", "labels", "", "name"),
+    "labels": ("Issue", "labels", "", "name color"),
     "blockedBy": ("Issue", "blockedBy", "", "number state repository{nameWithOwner}"),
     "issueComments": ("Issue", "comments", "", "authorAssociation body"),
     "closedByPullRequestsReferences": (
@@ -619,6 +636,7 @@ def tracker_card(
     repo: str,
     conflicts: list[str],
     kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
+    sort_labels: bool = False,
 ) -> dict:
     """One open issue as the card the page draws.
 
@@ -628,7 +646,9 @@ def tracker_card(
     number means nothing here, so it is dropped too. ``after`` is left out when
     it names none, as the page reads it as optional. The board's own labels are
     drawn as the rank chip and the busy stripe, so they are left off the card's
-    label chips. An issue claiming two kinds takes the first and is reported.
+    label chips. Those chips keep the order GitHub returns, which is the order
+    the labels were added, unless ``sort_labels`` asks for name order. An issue
+    claiming two kinds takes the first and is reported.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
@@ -650,6 +670,8 @@ def tracker_card(
         ),
         "labels": [x for x in names if not BAND.match(x) and x not in WORKING],
     }
+    if sort_labels:
+        card["labels"] = sorted(card["labels"])
     lines = AFTER.findall(unfenced(issue.get("body") or ""))
     after = {int(m) for line in lines for m in re.findall(r"#(\d+)\b", line)}
     after = sorted((after & open_issues) - {n})
@@ -756,7 +778,14 @@ def stale_after_minutes(longest_gap: int) -> int:
 
 
 def build(
-    gql: Gql, repo: str, longest_gap: int, now: datetime, title: str = "", data_label: str = ""
+    gql: Gql,
+    repo: str,
+    longest_gap: int,
+    now: datetime,
+    title: str = "",
+    data_label: str = "",
+    label_colors: str = "",
+    sort_labels: str = "",
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
 
@@ -766,9 +795,14 @@ def build(
     into the board too, because the page builds every issue and pull request
     link from it and names no repository of its own. ``data_label`` is the
     label that marks a card waiting on data, and an empty one reads no such
-    kind. It is checked before anything is read from GitHub.
+    kind. ``label_colors`` and ``sort_labels`` are each empty or ``true``.
+    The first writes ``state.labelColors``, each card label's colour as GitHub
+    stores it, and the second sorts each card's labels by name. All three are
+    checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
+    colours_wanted = switch("label-colors", label_colors)
+    by_name = switch("sort-labels", sort_labels)
     owner, name = repo.split("/", 1)
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
     open_issues = {i["number"] for i in issues}
@@ -779,13 +813,20 @@ def build(
     ranked = []
     conflicts: list[str] = []
     data_carried = 0
+    colours: dict[str, str] = {}
     referenced: set[int] = set()
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
-        names = [lb["name"] for lb in _all_nodes(gql, issue["id"], "labels", issue["labels"])]
-        card = tracker_card(gql, issue, names, open_issues, repo, conflicts, kinds_read)
+        nodes = _all_nodes(gql, issue["id"], "labels", issue["labels"])
+        names = [lb["name"] for lb in nodes]
+        card = tracker_card(gql, issue, names, open_issues, repo, conflicts, kinds_read, by_name)
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
+        if colours_wanted:
+            for lb in nodes:
+                colour = str(lb.get("color") or "").lower()
+                if lb["name"] in card["labels"] and HEX_COLOUR.match(colour):
+                    colours[lb["name"]] = colour
 
         held = [WORKING[x] for x in names if x in WORKING]
         if held:
@@ -836,6 +877,10 @@ def build(
         "next": {"schema": SCHEMA, "items": ranked},
         "tracker": {"schema": SCHEMA, "items": tracker},
     }
+    # Written only when the caller asks, so a board without the input is the
+    # same document it was before the input existed.
+    if colours_wanted:
+        board["state"]["labelColors"] = dict(sorted(colours.items()))
     report = {
         "open_issues": len(issues),
         "open_prs": len(open_prs),
@@ -871,7 +916,14 @@ def cmd_build(args: argparse.Namespace) -> None:
     gql = GhGraphql()
     now = datetime.now(UTC)
     board, report = build(
-        gql, args.repo, longest_gap_minutes(Path(args.workflow)), now, args.title, args.data_label
+        gql,
+        args.repo,
+        longest_gap_minutes(Path(args.workflow)),
+        now,
+        args.title,
+        args.data_label,
+        args.label_colors,
+        args.sort_labels,
     )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -990,6 +1042,12 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--title", default="", help="the page's heading, <name> build board if empty")
     b.add_argument(
         "--data-label", default="", help="the label marking a card waiting on data, none if empty"
+    )
+    b.add_argument(
+        "--label-colors", default="", help="true to colour label chips from GitHub, empty not to"
+    )
+    b.add_argument(
+        "--sort-labels", default="", help="true to sort each card's labels by name, empty not to"
     )
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("measure", help="time how long a deployed board takes to be served")

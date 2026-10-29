@@ -18,7 +18,10 @@ name: Build board
 # repository serve its own tab icon in place of the template's. A `data-label`
 # input, added by the pull request that closes l3a0/repo-template#40, names
 # the label that marks a card waiting on data, which the page then draws in a
-# fourth column.
+# fourth column. Two on-or-off inputs, `label-colors` and `sort-labels`, added
+# by the pull request that closes l3a0/repo-template#41, fill each label chip
+# with the colour GitHub stores for the label and sort each card's labels by
+# name.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -67,6 +70,19 @@ on:
           data" column. Empty reads no such label.
         type: string
         default: ""
+      label-colors:
+        description: >-
+          "true" fills each label chip with the colour GitHub stores for that
+          label. Empty draws the page's own colours, where a label the page
+          does not know draws faint.
+        type: string
+        default: ""
+      sort-labels:
+        description: >-
+          "true" sorts each card's labels by name. Empty keeps the order
+          GitHub returns, which is the order the labels were added.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -111,12 +127,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ inputs.title }}
           DATA_LABEL: ${{ inputs.data-label }}
+          LABEL_COLORS: ${{ inputs.label-colors }}
+          SORT_LABELS: ${{ inputs.sort-labels }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
           --workflow caller/.github/workflows/board.yml
           --title="$TITLE"
           --data-label="$DATA_LABEL"
+          --label-colors="$LABEL_COLORS"
+          --sort-labels="$SORT_LABELS"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

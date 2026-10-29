@@ -395,6 +395,81 @@ def test_a_data_card_draws_in_a_fourth_column(tmp_path: Path) -> None:
     )
 
 
+def _chips(tmp_path: Path, labels: list[str], colours: object) -> str:
+    """The raw HTML of every card a board draws, with one card's labels and the state's map.
+
+    Fixture issue 90501 carries ``labels``. ``colours`` is written as
+    ``state.labelColors``, as the generator writes it under the reusable
+    workflow's ``label-colors`` input.
+    """
+    docs = _with_fields(fixture_docs(), 90501, labels=labels)
+    docs["state"]["labelColors"] = colours
+    ids = draw(tmp_path, docs, page=_show_all_page(tmp_path))
+    return ids["flow"]["html"] + ids["board"]["html"]
+
+
+def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None:
+    """Protects the chip a caller setting ``label-colors`` gets.
+
+    GitHub's colour is a chip background, so the chip is filled with it and
+    lettered in black or white, whichever has the higher contrast. The two
+    meet at a relative luminance of 0.179, so ``757575``, at 0.178, letters in
+    white and ``767676``, at 0.181, in black. Pure red, green and blue tell
+    each channel's weight apart. Each colour is drawn exactly as the map holds
+    it, after a ``#``.
+    """
+    colours = {
+        "enhancement": "a2eeef",
+        "bug": "b60205",
+        "grey-dark": "757575",
+        "grey-light": "767676",
+        "red": "ff0000",
+        "green": "00ff00",
+        "blue": "0000ff",
+    }
+    drawn = _chips(tmp_path, list(colours), colours)
+    ink = {
+        "enhancement": "#000",
+        "bug": "#fff",
+        "grey-dark": "#fff",
+        "grey-light": "#000",
+        "red": "#000",
+        "green": "#000",
+        "blue": "#fff",
+    }
+    for label, hex_ in colours.items():
+        chip = f'<b style="background:#{hex_};border-color:#{hex_};color:{ink[label]}">{label}</b>'
+        assert chip in drawn
+
+
+@pytest.mark.parametrize(
+    "colours",
+    [
+        {"test": "000;background:url(x)"},
+        {"test": "5319E7"},
+        {"test": "fff"},
+        {"test": 5319},
+        {"other": "a2eeef"},
+        ["a2eeef"],
+        "a2eeef",
+    ],
+    ids=["style", "upper-case", "three-digits", "number", "no-entry", "list", "string"],
+)
+def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
+    tmp_path: Path, colours: object
+) -> None:
+    """Protects the style attribute from a value the document should not hold.
+
+    The page writes the colour into a style attribute, so it checks each value
+    itself rather than trusting the generator. A value that is not six
+    lower-case hex digits, a label the map has no entry for, or a map that is
+    not an object draws the ``LABEL_HUE`` chip, and the board is not refused.
+    """
+    drawn = _chips(tmp_path, ["test"], colours)
+    assert '<b style="color:#5319e7">test</b>' in drawn
+    assert '<b style="background:' not in drawn
+
+
 @pytest.mark.parametrize("where", ["hidden", "in flight"])
 def test_the_fourth_column_follows_the_tracker_rather_than_the_view(
     tmp_path: Path, where: str

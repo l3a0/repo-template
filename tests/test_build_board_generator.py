@@ -803,6 +803,17 @@ def test_the_page_and_the_generator_accept_the_same_colours() -> None:
     assert found == [f"^{bb.HEX_COLOUR.pattern}$"]
 
 
+def test_label_colors_with_no_coloured_label_writes_an_empty_map() -> None:
+    """Protects the map's presence, which follows the input rather than its contents.
+
+    A caller that sets ``label-colors`` gets ``state.labelColors`` even when no
+    card draws a label with a usable colour, so the key says the input reached
+    the generator.
+    """
+    board, _ = build(FakeGitHub([issue(1, labels=("test",))], []), label_colors="true")
+    assert board["state"]["labelColors"] == {}
+
+
 def test_a_label_read_on_a_later_page_carries_its_colour() -> None:
     """Protects the colour of a label past an issue's first hundred.
 

@@ -418,8 +418,13 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
     black, so the threshold is 0.179 rather than 0.18. ``0075dc``, at 0.1789,
     letters in white only because a channel at or below 0.04045 is scaled
     linearly, as WCAG's formula says, rather than raised to the power 2.4.
-    Pure red, green and blue tell each channel's weight apart. Each colour is
-    drawn exactly as the map holds it, after a ``#``.
+    Three more sit within a millionth of the threshold, so any change to the
+    formula's constants moves one across it. ``488409``, at 0.1789997, and
+    ``018901``, at 0.1789996, letter in white. Each has a channel near the
+    0.04045 cut-off and its 12.92 divisor. ``0a874b``, at 0.1790048, letters in
+    black and moves with red's weight. Pure red, green and blue tell each
+    channel's weight apart. Each colour is drawn exactly as the map holds it,
+    after a ``#``.
     """
     colours = {
         "enhancement": "a2eeef",
@@ -431,6 +436,9 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
         "red": "ff0000",
         "green": "00ff00",
         "blue": "0000ff",
+        "near-cut-off": "488409",
+        "near-divisor": "018901",
+        "near-red-weight": "0a874b",
     }
     drawn = _chips(tmp_path, list(colours), colours)
     ink = {
@@ -443,6 +451,9 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
         "red": "#000",
         "green": "#000",
         "blue": "#fff",
+        "near-cut-off": "#fff",
+        "near-divisor": "#fff",
+        "near-red-weight": "#000",
     }
     for label, hex_ in colours.items():
         chip = f'<b style="background:#{hex_};border-color:#{hex_};color:{ink[label]}">{label}</b>'
@@ -456,12 +467,27 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
         ("test", {"test": "5319E7"}, "#5319e7"),
         ("test", {"test": "fff"}, "#5319e7"),
         ("test", {"test": 5319}, "#5319e7"),
+        ("test", {"test": 123456}, "#5319e7"),
+        ("test", {"test": "a2eeef;background:url(x)"}, "#5319e7"),
+        ("test", {"test": "url(x);a2eeef"}, "#5319e7"),
         ("test", {"other": "a2eeef"}, "#5319e7"),
         ("test", None, "#5319e7"),
         ("0", ["a2eeef"], "var(--faint)"),
         ("0", "a2eeef", "var(--faint)"),
     ],
-    ids=["style", "upper-case", "three-digits", "number", "no-entry", "null", "list", "string"],
+    ids=[
+        "style",
+        "upper-case",
+        "three-digits",
+        "number",
+        "six-digit-number",
+        "colour-then-style",
+        "style-then-colour",
+        "no-entry",
+        "null",
+        "list",
+        "string",
+    ],
 )
 def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
     tmp_path: Path, label: str, colours: object, before: str
@@ -472,13 +498,28 @@ def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
     itself rather than trusting the generator. A value that is not six
     lower-case hex digits, a label the map has no entry for, or a map that is
     null or not an object draws the ``LABEL_HUE`` chip, and the board is not
-    refused.
-    A list or a string has an own key ``0``, so the label ``0`` tells a map
-    that is not an object from one that is.
+    refused. Six good digits with style text before or after them fail too,
+    because the pattern is anchored at both ends, and so does a number,
+    because only a string is a colour. A list or a string has an own key
+    ``0``, so the label ``0`` tells a map that is not an object from one that
+    is.
     """
     drawn = _chips(tmp_path, [label], colours)
     assert f'<b style="color:{before}">{label}</b>' in drawn
     assert '<b style="background:' not in drawn
+
+
+@pytest.mark.parametrize("colours", [{"a<b&c": "a2eeef"}, {}], ids=["filled", "fallback"])
+def test_a_chip_escapes_its_label(tmp_path: Path, colours: dict) -> None:
+    """Protects the page from a label name written as markup.
+
+    Anyone with triage access names a label, and the page writes the name
+    into its HTML. Both kinds of chip, filled with GitHub's colour or drawn
+    from ``LABEL_HUE``, escape it.
+    """
+    drawn = _chips(tmp_path, ["a<b&c"], colours)
+    assert "a&lt;b&amp;c</b>" in drawn
+    assert "a<b&c" not in drawn
 
 
 @pytest.mark.parametrize("where", ["hidden", "in flight"])

@@ -248,7 +248,7 @@
 <div class="wrap">
   <div class="mast">
     <h1 id="title">Build board</h1>
-    <span class="sub" id="sub">what is in flight, and what to take next</span>
+    <span class="sub" id="sub"></span>
   </div>
   <div class="strip" id="strip"></div>
   <div class="caveat warn" id="source" hidden></div>
@@ -459,7 +459,10 @@ function source() {
 /* The strip carries two things: the open issue count and the stamp. A figure
    about the repository itself, such as a test count or the commit `main`
    stands at, says nothing about what to take next, which is the question this
-   page answers, and measuring one goes stale the moment anything merges. */
+   page answers, and measuring one goes stale the moment anything merges. The
+   strip still leaves that commit out. The footer and the "Live updates
+   stopped" banner name it only for a caller that sets default-branch-head, as
+   a record of what the board was built against. */
 
 /* One entry per open branch, plus a merged or closed one while its issue stays
    open, because the card still says what became of it. The generator keeps
@@ -625,7 +628,9 @@ function ago(iso) {
 
 /* The lines a caller can set through the reusable workflow's inputs. Each is
    drawn on every draw, from the board when it carries the line and from the
-   page otherwise, so a later board without one puts the page's own back. */
+   page otherwise, so a later board without one puts the page's own back.
+   SUBTITLE is the only copy of the page's own subtitle. The markup's span is
+   empty, and render() fills it while no board is drawn. */
 const SUBTITLE = "what is in flight, and what to take next";
 /* A note is a list of pieces the generator parsed from the caller's text, each
    { text } or { text, href }. The page escapes each piece and draws an address
@@ -1883,13 +1888,18 @@ function inFlight(ctx) {
    page wrapper makes `hidden` win over a section's own display rule. The strip
    sits outside those sections, so it is emptied: a first live draw that throws
    after strip() has run rolls back to no data, and the strip would otherwise
-   keep that draw's count beside a banner saying no board data is shown. */
+   keep that draw's count beside a banner saying no board data is shown. The
+   subtitle goes back to the page's own for the same reason. */
 function render() {
   ["flightsec", "ordersec", "foot", "repnote"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.hidden = NONE;
   });
-  if (NONE) { document.getElementById("strip").innerHTML = ""; source(); return; }
+  if (NONE) {
+    document.getElementById("strip").innerHTML = "";
+    document.getElementById("sub").innerHTML = esc(SUBTITLE);
+    source(); return;
+  }
   readShowAll(); strip(); source(); buildOrder(); more(); stamped();
 }
 adopt(FALLBACK);

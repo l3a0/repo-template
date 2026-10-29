@@ -25,7 +25,7 @@ name: Build board
 # 2. `note` adds a paragraph below the strip, whose only markup is
 #    `[words](https://...)`.
 # 3. `default-branch-head`, set to `true`, names the commit the default branch
-#    stands at in the footer.
+#    stands at in the footer and the "Live updates stopped" banner.
 #
 # Every input is a string that defaults to empty, and an empty one leaves the
 # board as it was.
@@ -93,8 +93,8 @@ on:
         default: ""
       default-branch-head:
         description: >-
-          true names the commit the default branch stands at in the footer,
-          for one more request a run. Empty names none. Any other value fails
+          true names the commit the default branch stands at in the footer
+          and the "Live updates stopped" banner, for one more request a run. Empty names none. Any other value fails
           the run.
         type: string
         default: ""

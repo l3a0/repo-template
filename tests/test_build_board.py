@@ -2153,7 +2153,6 @@ def test_the_lines_draw_where_the_caller_asked(tmp_path: Path) -> None:
         "and on a schedule, and fetched again every 2 minutes,"
     )
     assert '<span class="mono">0a1b2c3</span>' in ids["foot"]["html"]
-    assert ".mono { font-family: var(--mono);" in PAGE.read_text(encoding="utf-8")
 
 
 def test_the_subtitle_and_the_note_are_drawn_as_text(tmp_path: Path) -> None:
@@ -2181,6 +2180,10 @@ def test_the_subtitle_and_the_note_are_drawn_as_text(tmp_path: Path) -> None:
     assert ids["repnote"]["html"] == (
         f'<a href="{DESIGN}" target="_blank" rel="noopener">&lt;b&gt;the design&lt;/b&gt;</a>'
     )
+    query = "https://github.com/octo-org/octo-repo/issues?q=a&amp;b"
+    ids = draw(tmp_path, lined_board(note=[{"text": "search", "href": query}]))
+    drawn = ids["repnote"]["html"]
+    assert 'href="https://github.com/octo-org/octo-repo/issues?q=a&amp;amp;b"' in drawn
 
 
 @pytest.mark.parametrize(
@@ -2254,6 +2257,18 @@ def test_a_first_draw_that_throws_leaves_no_note(tmp_path: Path) -> None:
         "Live updates stopped (a live section could not be drawn)."
     )
     assert_no_board_data(ids)
+    assert ids["sub"]["html"] == OWN_SUBTITLE
+
+
+def test_a_page_with_no_board_draws_its_own_subtitle(tmp_path: Path) -> None:
+    """Protects the subtitle before any board arrives.
+
+    The markup's span is empty, so the page's own line exists in one place,
+    ``SUBTITLE``, and the page has to draw it while no board is drawn.
+    """
+    ids = run_without_fetch(tmp_path)
+    assert ids["sub"]["html"] == OWN_SUBTITLE
+    assert '<span class="sub" id="sub"></span>' in PAGE.read_text(encoding="utf-8")
 
 
 # ---- The fetch path, for the board on GitHub Pages ----

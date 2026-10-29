@@ -982,9 +982,9 @@ def cmd_build(args: argparse.Namespace) -> None:
         now,
         args.title,
         args.data_label,
-        args.subtitle,
-        args.note,
-        args.default_branch_head,
+        subtitle=args.subtitle,
+        note=args.note,
+        default_branch_head=args.default_branch_head,
     )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

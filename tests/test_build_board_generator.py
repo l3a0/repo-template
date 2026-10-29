@@ -595,8 +595,57 @@ def test_a_caller_setting_no_line_gets_the_board_it_got_before() -> None:
     assert set(board["state"]) == BEFORE_KEYS
     assert json.dumps(empty) == json.dumps(board)
     assert passed_empty.calls == left_out.calls
+    # One page of open issues, one page of open pull requests, and one batch
+    # for the merged pull request 7 that issue 1 names.
     assert len(left_out.calls) == 3
     assert not any("defaultBranchRef" in q for q in left_out.calls)
+
+
+# The board.json the generator at l3a0/repo-template commit cf2959a3, the last
+# before these inputs, wrote for `every_case()` at `NOW` under `GOLDEN_CRON`.
+# It was written once by running that commit's scripts/build_board.py, taken
+# with `git show cf2959a3:scripts/build_board.py`, through its own `main()`.
+# The file is never rewritten from the code under test, because a golden
+# written by the head would compare the head with itself.
+GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "lines.json"
+GOLDEN_CRON = 'on:\n  schedule:\n    - cron: "8,38 * * * *"\n'
+
+
+class FixedNow(datetime):
+    """``datetime`` whose ``now`` is ``NOW``, so a run's stamp is fixed."""
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return NOW
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [[], ["--subtitle=", "--note=", "--default-branch-head="]],
+    ids=["left-out", "passed-empty"],
+)
+def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lines: list[str]
+) -> None:
+    """Protects every current caller's board.json, byte for byte.
+
+    The generator at cf2959a3 wrote ``GOLDEN`` from the same tracker before the
+    three inputs existed. The head, with none of them set, has to write the
+    same bytes to the file it publishes. The workflow passes every flag
+    whether or not the caller set it, so passing them empty counts too.
+    """
+    fake = every_case()
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setattr(bb, "datetime", FixedNow)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    workflow = tmp_path / "board.yml"
+    workflow.write_text(GOLDEN_CRON, encoding="utf-8")
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(workflow), "--out", str(out)]
+    assert bb.main([*argv, *lines]) == 0
+    assert (out / "board.json").read_bytes() == GOLDEN.read_bytes()
 
 
 def test_the_subtitle_reaches_the_state() -> None:
@@ -1405,6 +1454,23 @@ def test_one_run_makes_a_request_per_page_and_no_more() -> None:
     assert len(prs_of(board)) == 115
 
 
+def test_every_top_level_query_asks_what_it_cost() -> None:
+    """Protects the job summary's GraphQL points row.
+
+    ``GhGraphql`` sums the ``rateLimit{cost}`` each answer carries, so a
+    top-level query that does not ask for it spends points the summary never
+    counts. That covers the three query constants and the batch that reads
+    pull requests by number, which the run builds as it goes.
+    """
+    for query in (bb.ISSUES_QUERY, bb.OPEN_PRS_QUERY, bb.HEAD_QUERY):
+        assert "rateLimit{cost}" in query
+    gh = FakeGitHub([issue(1, mentioned_by=(7,))], [pull(7, state="MERGED", body="Part of #1")])
+    _with(gh, default_branch_head="true")
+    top = [q for q in gh.calls if "node(id:$id)" not in q]
+    assert len(top) == 4
+    assert all("rateLimit{cost}" in q for q in top)
+
+
 def test_a_nested_list_longer_than_a_page_is_read_to_its_end() -> None:
     """Protects a list GitHub cut at its page size.
 
@@ -1931,15 +1997,9 @@ def test_a_schedule_it_cannot_read_stops_the_run(tmp_path: Path, lines: str) -> 
 # ---- The page, on what the generator wrote ----
 
 
-def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
-    """Protects the join between the two halves.
-
-    A field the generator leaves out, or writes in a shape the page refuses,
-    blanks the board, and neither half's own tests would notice. So the page
-    runs on the generator's output, built from a tracker holding every case
-    above at once.
-    """
-    gh = FakeGitHub(
+def every_case() -> FakeGitHub:
+    """A tracker holding every case above at once."""
+    return FakeGitHub(
         [
             issue(10, mentioned_by=(20,)),
             issue(11, milestone=None, labels=()),
@@ -1963,7 +2023,17 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
             pull(23, closes=(13,), contexts=(check("test", "TIMED_OUT"),)),
         ],
     )
-    board, _ = build(gh)
+
+
+def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
+    """Protects the join between the two halves.
+
+    A field the generator leaves out, or writes in a shape the page refuses,
+    blanks the board, and neither half's own tests would notice. So the page
+    runs on the generator's output, built from a tracker holding every case
+    above at once.
+    """
+    board, _ = build(every_case())
     board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ids, _ = run_fetch_page(tmp_path, [served(board)])
     assert text(ids, "strip").startswith("7 open issues")
@@ -1975,6 +2045,33 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
     assert "review in progress" in text(ids, "flow")
     assert "plan complete, 3 passes" in text(ids, "flow")
     assert cards(ids, "board") == {14}
+
+
+def test_the_page_draws_the_three_lines_the_generator_writes(tmp_path: Path) -> None:
+    """Protects the join for the subtitle, the note and the default branch's head.
+
+    The generator writes the note as pieces and the head as seven characters,
+    and the page draws each only in the shape it checks for, so a change to
+    either half's shape would leave the line off the page with no test failing.
+    """
+    board, _ = bb.build(
+        every_case(),
+        REPO,
+        30,
+        NOW,
+        subtitle="the order of work on the lake",
+        note=f"Read [the design doc]({LINK_A}) first.",
+        default_branch_head="true",
+    )
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    assert ids["sub"]["html"] == "the order of work on the lake"
+    assert not ids["repnote"]["hidden"]
+    assert ids["repnote"]["html"] == (
+        f'Read <a href="{LINK_A}" target="_blank" rel="noopener">the design doc</a> first.'
+    )
+    assert text(ids, "foot").startswith("Built from GitHub against the default branch at 0a1b2c3 ")
+    assert '<span class="mono">0a1b2c3</span>' in ids["foot"]["html"]
 
 
 def test_a_board_with_no_open_issues_draws_nothing(tmp_path: Path) -> None:

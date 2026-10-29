@@ -189,6 +189,9 @@ icon gives.
       default-branch-head: "true"
 ```
 
+To move the pin back before that commit, remove those lines in the same
+change.
+
 To take a later fix, move the SHA in the caller. The skills and the generator
 share the label names and line formats, so a skill newer or older than the
 pinned generator tells a session to set something the board does not read.

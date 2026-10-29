@@ -669,6 +669,7 @@ def test_a_band_label_puts_the_card_in_the_priority_order() -> None:
         {"issue": 2, "band": 1, "ready": "plan", "order": 22},
         {"issue": 3, "band": 5, "ready": "plan"},
     ]
+    assert '"order":22}' in json.dumps(board["next"], separators=(",", ":"))
 
 
 def test_the_boards_own_labels_are_left_off_the_cards_chips() -> None:
@@ -760,8 +761,8 @@ def test_a_working_label_marks_the_session_on_the_card() -> None:
 def test_labels_that_disagree_take_one_value_and_are_reported() -> None:
     """Protects the board from freezing on one stray label.
 
-    Two bands take the lower, both session labels take ``build``, and two order
-    lines take the first, and the job summary lists each.
+    Two bands take the lower, both session labels take ``build`` in either
+    order, and two order lines take the first, and the job summary lists each.
     """
     gh = FakeGitHub(
         [
@@ -776,6 +777,8 @@ def test_labels_that_disagree_take_one_value_and_are_reported() -> None:
     board, report = build(gh)
     assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
     assert board["working"]["items"] == [{"n": 1, "kind": "build"}]
+    swapped = FakeGitHub([issue(1, labels=("working:build", "working:decompose"))], [])
+    assert build(swapped)[0]["working"]["items"] == [{"n": 1, "kind": "build"}]
     assert report["label_conflicts"] == [
         "#1 carries both working labels, read as build",
         "#1 carries 2 band labels, read as band:1",

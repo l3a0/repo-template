@@ -332,12 +332,12 @@ def test_the_show_all_choice_is_kept_per_repository(tmp_path: Path) -> None:
     one storage. The page reads and writes its choice under a key naming the
     repository, so a choice stored for another repository is not read.
     """
-    ours = draw(
-        tmp_path, fixture_docs(), page=_storage_page(tmp_path, "board-all:octo-org/octo-repo")
-    )
-    assert text(ours, "more").startswith("Showing all")
-    theirs = draw(tmp_path, fixture_docs(), page=_storage_page(tmp_path, "board-all:other/repo"))
-    assert text(theirs, "more").startswith("Showing the 1 ranked card")
+    page = _storage_page(tmp_path, "board-all:someone/one")
+    one, two = fixture_docs(), fixture_docs()
+    one["state"]["repo"] = "someone/one"
+    two["state"]["repo"] = "someone/two"
+    assert text(draw(tmp_path, one, page=page), "more").startswith("Showing all")
+    assert text(draw(tmp_path, two, page=page), "more").startswith("Showing the 1 ranked card")
 
 
 def test_the_build_order_draws_three_columns(tmp_path: Path) -> None:

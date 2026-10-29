@@ -632,12 +632,14 @@ def labels_github() -> FakeGitHub:
     Labels arrive out of name order and carry GitHub's colours, in either case.
     The issues also carry a band, a working label, a data-looking label, a
     verdict, an order line, after lines and "blocked by" links, and the pull
-    requests close, reference and review them.
+    requests close, reference and review them. One title is not ASCII, so the
+    file's encoding is compared too.
     """
     return FakeGitHub(
         [
             issue(
                 1,
+                title="Colour the façade's chips",
                 labels=("test", "deferred", "band:1", "enhancement"),
                 colors={"test": "5319E7", "deferred": "ededed", "band:1": "c2e0c6"},
                 body="Board order: 2\nBoard after: #3\n",
@@ -879,6 +881,12 @@ def test_the_command_line_passes_the_label_inputs_through(
 
     assert bb.main([*argv, "--label-colors=true", "--sort-labels=true"]) == 0
     assert written()["state"]["labelColors"] == {"test": "5319e7"}
+    assert written()["tracker"]["items"][0]["labels"] == ["deferred", "test"]
+    assert bb.main([*argv, "--label-colors=true"]) == 0
+    assert written()["state"]["labelColors"] == {"test": "5319e7"}
+    assert written()["tracker"]["items"][0]["labels"] == ["test", "deferred"]
+    assert bb.main([*argv, "--sort-labels=true"]) == 0
+    assert "labelColors" not in written()["state"]
     assert written()["tracker"]["items"][0]["labels"] == ["deferred", "test"]
     assert bb.main([*argv, "--label-colors=", "--sort-labels="]) == 0
     assert "labelColors" not in written()["state"]

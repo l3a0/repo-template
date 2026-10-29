@@ -2160,7 +2160,8 @@ def test_the_subtitle_and_the_note_are_drawn_as_text(tmp_path: Path) -> None:
 
     The subtitle and every piece of the note are escaped, the words of a link
     included, and an address that is not https draws as text rather than as a
-    link, whatever the generator let through.
+    link, whatever the generator let through. That covers an http address and
+    one that only carries ``https://`` after another scheme.
     """
     ids = draw(
         tmp_path,
@@ -2170,11 +2171,15 @@ def test_the_subtitle_and_the_note_are_drawn_as_text(tmp_path: Path) -> None:
                 {"text": "<script>alert(1)</script>"},
                 {"text": "click", "href": "javascript:alert(1)"},
                 {"text": "quoted", "href": 'https://a"onmouseover="alert(1)'},
+                {"text": "smuggled", "href": "javascript:alert(1)//https://a"},
+                {"text": "plain", "href": "http://example.com"},
             ],
         ),
     )
     assert ids["sub"]["html"] == "&lt;script&gt;alert(1)&lt;/script&gt;"
-    assert ids["repnote"]["html"] == "&lt;script&gt;alert(1)&lt;/script&gt;clickquoted"
+    assert ids["repnote"]["html"] == (
+        "&lt;script&gt;alert(1)&lt;/script&gt;clickquotedsmuggledplain"
+    )
     assert "<a" not in ids["repnote"]["html"]
     ids = draw(tmp_path, lined_board(note=[{"text": "<b>the design</b>", "href": DESIGN}]))
     assert ids["repnote"]["html"] == (
@@ -2239,6 +2244,10 @@ def test_the_stopped_banner_names_the_head_the_board_was_built_against(tmp_path:
         "0a1b2c3</span>. "
     ) in ids["source"]["html"]
     ids, _ = run_fetch_page(tmp_path, [served(fixture_board(updatedAt=_iso(5))), down])
+    assert "What is shown is the last live data, measured 5 min ago. " in text(ids, "source")
+    # A head the footer would not name is not named here either.
+    upper = lined_board(updatedAt=_iso(5), main="0A1B2C3")
+    ids, _ = run_fetch_page(tmp_path, [served(upper), down])
     assert "What is shown is the last live data, measured 5 min ago. " in text(ids, "source")
 
 

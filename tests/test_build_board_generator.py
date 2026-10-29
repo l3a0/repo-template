@@ -688,8 +688,9 @@ LINK_B = "https://github.com/octo-org/octo-repo/blob/main/docs/build-plan.md"
             ],
         ),
         ("[brackets] and (parentheses) alone", [{"text": "[brackets] and (parentheses) alone"}]),
+        (f"[a] [b]({LINK_A})", [{"text": "[a] "}, {"text": "b", "href": LINK_A}]),
     ],
-    ids=["text", "one-link", "two-links", "line-breaks", "no-link"],
+    ids=["text", "one-link", "two-links", "line-breaks", "no-link", "bracket-then-link"],
 )
 def test_a_note_is_parsed_into_text_and_link_pieces(note: str, pieces: list[dict]) -> None:
     """Protects the note's one form of markup, parsed once here so the page only escapes.
@@ -711,8 +712,10 @@ def test_a_note_is_parsed_into_text_and_link_pieces(note: str, pieces: list[dict
         'https://github.com/a"onmouseover="alert(1)',
         "https://github.com/a b",
         "https://",
+        "https://github.com/a<b",
+        "",
     ],
-    ids=["javascript", "http", "relative", "quote", "space", "no-host"],
+    ids=["javascript", "http", "relative", "quote", "space", "no-host", "angle", "empty"],
 )
 def test_a_note_linking_anywhere_but_https_stops_the_run(href: str) -> None:
     """Protects every reader's browser from a link the caller did not mean to draw.
@@ -755,17 +758,41 @@ def test_a_default_branch_head_other_than_true_stops_the_run(value: str) -> None
     assert gh.calls == []
 
 
-def test_a_missing_default_branch_head_stops_the_run() -> None:
+@pytest.mark.parametrize(
+    "head",
+    [None, "not-a-commit-at-all", HEAD.upper()],
+    ids=["missing", "not-hex", "upper-case"],
+)
+def test_a_missing_default_branch_head_stops_the_run(head: str | None) -> None:
     """Protects the footer from naming a commit the run never read.
 
     A repository GitHub answers with no default branch would leave the footer
     saying it was built against nothing, so the run stops and the last good
-    board stays up.
+    board stays up. An answer that is not a lower-case hex commit stops it
+    too, because the page names only seven lower-case hex characters.
     """
-    gh = FakeGitHub([issue(1)], [], head=None)
+    gh = FakeGitHub([issue(1)], [], head=head)
     with pytest.raises(bb.BoardError, match="no default branch head"):
         _with(gh, default_branch_head="true")
     assert [q for q in gh.calls if "defaultBranchRef" in q] == [bb.HEAD_QUERY]
+
+
+def test_a_repository_github_does_not_return_stops_the_run() -> None:
+    """Protects the run from a null repository, which would otherwise raise AttributeError."""
+    with pytest.raises(bb.BoardError, match="no default branch head"):
+        bb.head_commit(lambda query, variables: {"repository": None}, "octo-org", "octo-repo")
+
+
+def test_a_refused_note_stops_the_run_before_the_head_is_read() -> None:
+    """Protects a caller asking for the head from a request a refused note wastes.
+
+    Every input is checked before anything is read from GitHub, so a note
+    that is refused sends no request, even the head's.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="not an https:// address"):
+        _with(gh, note="See [x](http://example.com).", default_branch_head="true")
+    assert gh.calls == []
 
 
 def test_the_command_line_passes_the_three_lines_through(
@@ -808,6 +835,25 @@ def test_the_command_line_passes_the_three_lines_through(
     assert bb.main([*argv, "--note=[x](http://example.com)"]) == 1
     assert not (out / "board.json").exists()
     assert "build_board: the note links to 'http://example.com'" in summary.read_text()
+
+
+def test_the_command_line_with_none_of_the_three_flags_reads_no_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects a caller pinned before the inputs, whose workflow passes no flag.
+
+    Each flag defaults to empty, so a run given none of them sends no request
+    for the default branch and writes the keys it wrote before.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    assert bb.main(["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]) == 0
+    assert set(json.loads((out / "board.json").read_text())["state"]) == BEFORE_KEYS
+    assert not any("defaultBranchRef" in q for q in fake.calls)
 
 
 def test_the_command_line_passes_the_data_label_through(

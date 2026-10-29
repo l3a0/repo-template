@@ -161,6 +161,37 @@ The run's job summary names the data label and counts the open issues
 carrying it, so a misspelt label shows up as a count of zero. To move the pin
 back before that commit, remove the `data-label` line in the same change.
 
+A seeded repository can also give the board three lines of its own. Each
+needs a pin at or after the template commit that added it, for the reason the
+icon gives.
+
+1. `subtitle` replaces the line under the heading, "what is in flight, and
+   what to take next".
+2. `note` adds one paragraph below the strip, such as a sentence pointing at
+   the design doc. It is plain text, and `[words](https://...)` is its only
+   markup. Runs of whitespace read as one space, so a folded `>-` block reads
+   as written. Use one whenever the note holds a colon followed by a space,
+   which a plain YAML value refuses. A link to anything but an `https://`
+   address fails the run, and the job summary says why.
+3. `default-branch-head`, set to `"true"`, names the commit the default branch
+   stands at in the footer and in the "Live updates stopped" banner. It costs
+   one more GraphQL request a run.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      subtitle: the order of work on the first release
+      note: >-
+        What each deliverable is for lives in
+        [the design doc](https://github.com/OWNER/REPO/blob/main/docs/design.md).
+        The order below follows the ranking rule: what the premise protects
+        first.
+      default-branch-head: "true"
+```
+
+To move the pin back before that commit, remove those lines in the same
+change.
+
 A repository that works toward one milestone at a time can open its board on
 that milestone. Name it in the caller's job, with `<n>` standing for a
 number. The page then draws a milestone selector above the board and opens on

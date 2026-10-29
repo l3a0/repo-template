@@ -371,7 +371,7 @@ function adopt(src) {
   PRU = `https://github.com/${STATE.repo}/pull/`;
   NEXT_SORTED = NEXT.slice().sort((a, b) =>
     a.band - b.band ||
-    (a.order || 50) - (b.order || 50) ||
+    (a.order ?? 50) - (b.order ?? 50) ||
     READY_RANK[a.ready] - READY_RANK[b.ready] ||
     a.issue - b.issue);
 }

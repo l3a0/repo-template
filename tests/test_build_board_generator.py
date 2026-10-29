@@ -1759,6 +1759,40 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
     assert cards(ids, "board") == {14}
 
 
+def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(tmp_path: Path) -> None:
+    """Protects a card at ``Board order: 0`` from sorting as if it had none.
+
+    The generator writes ``order: 0`` for that line, and the page gives a card
+    with no order 50. A fallback that treats 0 as missing puts the card at 0
+    behind the one with no order. Three cards in one band, at 60, with no order
+    and at 0, also fail a default of 0 or of 999, so the test covers the
+    documented default of 50 as well. The rank chip and the column both read
+    the same sorted list, so both are checked.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("band:1",), body="Board order: 60\n"),
+            issue(2, labels=("band:1",)),
+            issue(3, labels=("band:1",), body="Board order: 0\n"),
+        ],
+        [],
+    )
+    board, _ = build(gh)
+    assert [(it["issue"], it.get("order")) for it in board["next"]["items"]] == [
+        (1, 60),
+        (2, None),
+        (3, 0),
+    ]
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    raw = ids["board"]["html"]
+    chip = r'data-n="(\d+)".*?<span class="rk" title="priority order">(\d+)</span>'
+    chips = {int(n): int(rank) for n, rank in re.findall(chip, raw, re.S)}
+    assert chips == {3: 1, 2: 2, 1: 3}
+    column = raw.split('<div class="col k0')[1].split('<div class="col k')[0]
+    assert [int(n) for n in re.findall(r'data-n="(\d+)"', column)] == [3, 2, 1]
+
+
 def test_a_board_with_no_open_issues_draws_nothing(tmp_path: Path) -> None:
     """Protects the page's refusal of an empty tracker, which it keeps."""
     board, _ = build(FakeGitHub([], []))

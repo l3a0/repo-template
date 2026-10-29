@@ -161,6 +161,26 @@ The run's job summary names the data label and counts the open issues
 carrying it, so a misspelt label shows up as a count of zero. To move the pin
 back before that commit, remove the `data-label` line in the same change.
 
+A repository that works toward one milestone at a time can open its board on
+that milestone. Name it in the caller's job, with `<n>` standing for a
+number. The page then draws a milestone selector above the board and opens on
+the lowest-numbered open milestone the name matches, so `MVP <n>` opens on
+`MVP 4` while `MVP 4` has open issues and on `MVP 5` once it closes. Each
+milestone's title is cut at its first comma, so "MVP 4, serve the bars" is
+listed as `MVP 4`. A reader's own choice is kept per browser. Left out, the
+board draws no selector and keeps whole titles. The pin has to be at or after
+the template commit that added the `milestone-default` input, for the reason
+the icon gives.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      milestone-default: MVP <n>
+```
+
+The run's job summary names the milestone the board opens on, or says the
+name matches no open milestone, which is where a misspelt name shows up.
+
 To take a later fix, move the SHA in the caller. The skills and the generator
 share the label names and line formats, so a skill newer or older than the
 pinned generator tells a session to set something the board does not read.

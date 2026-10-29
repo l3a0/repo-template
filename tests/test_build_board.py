@@ -26,7 +26,10 @@ takes from the board, and docstrings citing that repository's history were
 restated as the rules they protect. The pull request that closes
 l3a0/repo-template#40 brought the column back for a board holding a ``data``
 card, with the ``data`` cases of the same file at l3a0/quantitative-trading
-commit ``4755ac62``.
+commit ``4755ac62``. The pull request that closes l3a0/repo-template#45 added
+the milestone selector's tests, porting the default and stored-choice cases
+of ``tests/component/test_board_page.py`` in l3a0/marketlake at commit
+``cc9d3432``, and taught the driver to read a select's value and change it.
 
 The engine is ``node`` where it is installed, which it is on GitHub's runners,
 and ``osascript -l JavaScript`` otherwise, which is JavaScriptCore and ships
@@ -88,14 +91,18 @@ def _page_script(page: Path) -> str:
 # which is how a test sees whether the page drew again. The result arrives after
 # the script's last line, so it is printed rather than returned: through
 # `console.log` in node and osascript, and through `print` in a bare
-# JavaScriptCore shell, which has no console. When the prelude names a card in
-# `__CLICK`, the driver clicks it after the last response, which is the only way
-# the chain bar renders anything but its hint.
+# JavaScriptCore shell, which has no console. When the prelude names a milestone
+# in `__SELECT`, the driver sets the milestone selector to it and fires its
+# change, as a reader picking an option does. When the prelude names a card in
+# `__CLICK`, the driver clicks it after that, which is the only way the chain
+# bar renders anything but its hint. A page whose storage shim keeps its writes
+# in `__STORED` reports what it stored.
 FETCH_DRIVER = """
 var __flush = async function () { for (var i = 0; i < 50; i++) { await null; } };
 var __MARK = "<!--first draw-->";
 (async function () {
-  var out = { error: null, ids: {}, fetches: __FETCHES, redrawn: null, title: null };
+  var out = { error: null, ids: {}, fetches: __FETCHES, redrawn: null, title: null,
+              stored: null };
   try {
     await __flush();
     document.getElementById("board").innerHTML += __MARK;
@@ -105,6 +112,11 @@ var __MARK = "<!--first draw-->";
       await __flush();
     }
     for (var h = 0; h < __HELD.length; h++) { __HELD[h](); await __flush(); }
+    if (typeof __SELECT === "string") {
+      store.mssel.value = __SELECT;
+      store.mssel.onchange();
+      await __flush();
+    }
     if (typeof __CLICK === "number") {
       store.board.onclick({ target: { closest: function (sel) {
         return sel === ".tk" ? { dataset: { n: String(__CLICK) } } : null; } } });
@@ -114,9 +126,10 @@ var __MARK = "<!--first draw-->";
   out.redrawn = __board.innerHTML.indexOf(__MARK) < 0;
   __board.innerHTML = __board.innerHTML.replace(__MARK, "");
   out.title = typeof document.title === "string" ? document.title : null;
+  if (typeof __STORED === "object") { out.stored = __STORED; }
   Object.keys(store).forEach(function (id) {
     out.ids[id] = { html: store[id].innerHTML, hidden: store[id].hidden === true,
-                    classes: store[id].classList.names.slice() };
+                    classes: store[id].classList.names.slice(), value: store[id].value };
   });
   var line = "BOARD_RESULT " + JSON.stringify(out);
   if (typeof console !== "undefined" && console.log) { console.log(line); } else { print(line); }
@@ -125,7 +138,9 @@ void 0;
 """
 
 
-def _fetch_prelude(responses: list[dict], click: int | None = None) -> str:
+def _fetch_prelude(
+    responses: list[dict], click: int | None = None, select: str | None = None
+) -> str:
     """A fake fetch serving ``responses`` in turn, and a timer list to fire.
 
     Each response is ``{"status": n, "body": text}``, or ``{"throw": true}``
@@ -158,26 +173,47 @@ def _fetch_prelude(responses: list[dict], click: int | None = None) -> str:
     ]
     if click is not None:
         lines.append(f"var __CLICK = {int(click)};")
+    if select is not None:
+        lines.append(f"var __SELECT = {json.dumps(select)};")
     return "\n".join(lines) + "\n"
+
+
+def run_page(
+    tmp_path: Path,
+    responses: list[dict],
+    *,
+    page: Path = PAGE,
+    click: int | None = None,
+    select: str | None = None,
+) -> dict:
+    """Execute the page on fetched responses, returning the driver's whole result."""
+    script = (
+        STUB.read_text(encoding="utf-8")
+        + _fetch_prelude(responses, click, select)
+        + _page_script(page)
+        + FETCH_DRIVER
+    )
+    return _execute(tmp_path, script)
 
 
 def run_fetch_page(
     tmp_path: Path, responses: list[dict], *, page: Path = PAGE, click: int | None = None
 ) -> tuple[dict, list[dict]]:
     """Execute the page on fetched responses, returning what it drew and fetched."""
-    script = (
-        STUB.read_text(encoding="utf-8")
-        + _fetch_prelude(responses, click)
-        + _page_script(page)
-        + FETCH_DRIVER
-    )
-    result = _execute(tmp_path, script)
+    result = run_page(tmp_path, responses, page=page, click=click)
     return result["ids"], result["fetches"]
 
 
-def draw(tmp_path: Path, docs: dict, *, page: Path = PAGE, click: int | None = None) -> dict:
+def draw(
+    tmp_path: Path,
+    docs: dict,
+    *,
+    page: Path = PAGE,
+    click: int | None = None,
+    select: str | None = None,
+) -> dict:
     """What the page draws from one board.json holding ``docs``."""
-    return run_fetch_page(tmp_path, [served(docs)], page=page, click=click)[0]
+    return run_page(tmp_path, [served(docs)], page=page, click=click, select=select)["ids"]
 
 
 def run_without_fetch(tmp_path: Path) -> dict:
@@ -245,8 +281,12 @@ def fixture_docs() -> dict[str, dict]:
 
 
 def assert_no_board_data(ids: dict) -> None:
-    """Nothing but the banner is drawn, so nothing renders as if it were data."""
-    for element in CONTENT:
+    """Nothing but the banner is drawn, so nothing renders as if it were data.
+
+    The milestone selector is hidden too, since its counts are figures about
+    the tracker.
+    """
+    for element in (*CONTENT, "msbar"):
         assert ids.get(element, {}).get("hidden"), f"{element} is not hidden"
     for element in ("strip", "flow", "board", "foot"):
         assert text(ids, element) == "", f"{element} drew {text(ids, element)!r}"
@@ -2372,3 +2412,410 @@ def test_a_copy_older_than_the_board_on_screen_is_not_drawn(tmp_path: Path) -> N
     ids, _ = run_fetch_page(tmp_path, [served(newer), served(fixture_board())])
     assert text(ids, "strip").startswith("6 open issues")
     assert text(ids, "source") == ""
+
+
+# ---- The milestone selector ----
+#
+# A board whose state carries ``milestoneDefault`` draws a selector and filters
+# both card sections to the chosen milestone. The generator writes that key
+# only when its caller names a milestone default, so a board without it is
+# every current caller's, and draws what it drew before.
+
+# The key a board with no milestone default leaves out of its state.
+NO_DEFAULT = object()
+
+
+def _ms_docs(
+    cards: list[tuple],
+    *,
+    default: object = "MVP 2",
+    ranked: tuple[int, ...] = (),
+    flying: tuple[int, ...] = (),
+) -> dict:
+    """A board of ``cards``, each ``(n, ms, kind, needs)``, naming ``default``.
+
+    ``ranked`` puts cards in the priority order, and ``flying`` gives each an
+    open pull request, which draws it in the In flight section.
+    """
+    docs = fixture_docs()
+    docs["tracker"]["items"] = [
+        {"n": n, "ms": ms, "label": f"Issue {n}", "kind": kind, "labels": [], "needs": list(needs)}
+        for n, ms, kind, needs in cards
+    ]
+    docs["next"]["items"] = [{"issue": n, "band": 1, "ready": "plan"} for n in ranked]
+    docs["prs"]["items"] = [
+        {
+            "pr": 100 + n,
+            "issue": n,
+            "state": "open",
+            "linked": True,
+            "reviewed": False,
+            "review": "no review posted",
+            "rollup": [["test", "success"]],
+        }
+        for n in flying
+    ]
+    docs["state"]["issues"]["open"] = len(cards)
+    if default is not NO_DEFAULT:
+        docs["state"]["milestoneDefault"] = default
+    return docs
+
+
+def _stored_page(tmp_path: Path, stored: dict[str, str]) -> Path:
+    """A copy of the page whose storage starts as ``stored`` and keeps its writes."""
+    page = tmp_path / "stored.html"
+    shim = (
+        f"var __STORED = {json.dumps(stored)};\n"
+        "var localStorage = {\n"
+        "  getItem: function (k) {\n"
+        "    return Object.prototype.hasOwnProperty.call(__STORED, k) ? __STORED[k] : null; },\n"
+        "  setItem: function (k, v) { __STORED[k] = String(v); } };"
+    )
+    page.write_text(
+        PAGE.read_text(encoding="utf-8").replace("<script>", "<script>\n" + shim, 1),
+        encoding="utf-8",
+    )
+    return page
+
+
+def _options(ids: dict) -> list[tuple[str, str]]:
+    """The selector's options, as each value and the text it shows."""
+    return [
+        (html.unescape(v), html.unescape(w))
+        for v, w in re.findall(r'<option value="([^"]*)">([^<]*)</option>', ids["mssel"]["html"])
+    ]
+
+
+MS_ALL = ",all"
+KEY = "board-ms:octo-org/octo-repo"
+
+
+def test_a_board_naming_no_milestone_default_draws_no_selector(tmp_path: Path) -> None:
+    """Protects every caller that names no milestone default from a change to its page.
+
+    The fixture's state carries no ``milestoneDefault``, so the selector is
+    hidden and empty, and every card the fixture draws is drawn, whatever
+    milestone it is in.
+    """
+    ids = draw(tmp_path, fixture_docs())
+    assert ids["msbar"]["hidden"]
+    assert ids["mssel"]["html"] == ""
+    assert ids["mscount"]["html"] == ""
+    assert cards(ids, "flow") == {90501}
+    assert cards(ids, "board") == {90502}
+    assert text(ids, "more") == (
+        "Showing the 1 ranked card. 3 other open issues are not in the priority order. Show all 4"
+    )
+
+
+@pytest.mark.parametrize("show_all", [False, True])
+def test_the_all_view_draws_what_a_board_with_no_selector_draws(
+    tmp_path: Path, show_all: bool
+) -> None:
+    """Protects the filter from changing anything while every milestone is chosen.
+
+    A board whose default matches nothing opens on All, and every sentence and
+    card then reads as it does on a board with no selector at all, including
+    the chain bar of a picked card.
+    """
+    page = _show_all_page(tmp_path) if show_all else PAGE
+    plain = draw(tmp_path, fixture_docs(), page=page, click=90502)
+    docs = fixture_docs()
+    docs["state"]["milestoneDefault"] = None
+    chosen = draw(tmp_path, docs, page=page, click=90502)
+    assert not chosen["msbar"]["hidden"]
+    assert chosen["mssel"]["value"] == MS_ALL
+    for element in plain:
+        if element not in {"msbar", "mssel", "mscount"}:
+            assert chosen[element]["html"] == plain[element]["html"], element
+
+
+def test_a_board_that_stops_naming_a_default_drops_the_selector(tmp_path: Path) -> None:
+    """Protects a live page from a selector the newer board no longer asks for.
+
+    The page sets the selector's visibility on every draw, so the second
+    board, with no key, hides it, empties it and draws every milestone again.
+    """
+    first = _ms_docs([(1, "MVP 2", "ready", ()), (2, "MVP 3", "ready", ())], ranked=(1, 2))
+    second = _ms_docs(
+        [(1, "MVP 2", "ready", ()), (2, "MVP 3", "ready", ())], ranked=(1, 2), default=NO_DEFAULT
+    )
+    second["state"]["updatedAt"] = "2026-10-01T12:30:00Z"
+    ids, _ = run_fetch_page(tmp_path, [served(first), served(second)])
+    assert ids["msbar"]["hidden"]
+    assert ids["mssel"]["html"] == ""
+    assert ids["mscount"]["html"] == ""
+    assert cards(ids, "board") == {1, 2}
+
+
+def test_the_selector_lists_each_milestone_with_its_count(tmp_path: Path) -> None:
+    """Protects the selector's options and the count beside it.
+
+    All comes first and no milestone last, with the rest sorted by name. The
+    empty milestone is a card with none, which the selector names "no
+    milestone". The count beside the selector reads the chosen milestone
+    against the whole board.
+    """
+    docs = _ms_docs(
+        [
+            (1, "MVP 2", "ready", ()),
+            (2, "MVP 2", "ready", ()),
+            (3, "", "ready", ()),
+            (4, "Alpha", "ready", ()),
+            (5, "MVP 3", "ready", ()),
+        ]
+    )
+    ids = draw(tmp_path, docs)
+    assert not ids["msbar"]["hidden"]
+    assert _options(ids) == [
+        (MS_ALL, "All (5)"),
+        ("Alpha", "Alpha (1)"),
+        ("MVP 2", "MVP 2 (2)"),
+        ("MVP 3", "MVP 3 (1)"),
+        ("", "no milestone (1)"),
+    ]
+    assert ids["mssel"]["value"] == "MVP 2"
+    assert text(ids, "mscount") == "2 of 5 open"
+
+
+@pytest.mark.parametrize(
+    ("default", "chosen"),
+    [("MVP 2", "MVP 2"), (None, MS_ALL), ("MVP 9", MS_ALL), (7, MS_ALL)],
+    ids=["named", "none matched", "no card carries it", "not a name"],
+)
+def test_the_page_opens_on_the_milestone_the_board_names(
+    tmp_path: Path, default: object, chosen: str
+) -> None:
+    """Protects the default, which the generator resolves and the page only reads.
+
+    A default no open card carries, or one that is not a name, opens on All
+    rather than on an empty milestone.
+    """
+    docs = _ms_docs([(1, "MVP 2", "ready", ()), (2, "MVP 3", "ready", ())], default=default)
+    assert draw(tmp_path, docs)["mssel"]["value"] == chosen
+
+
+@pytest.mark.parametrize(
+    ("stored", "milestones", "chosen"),
+    [
+        ({KEY: "MVP 2"}, ["MVP 4", "MVP 4", ""], "MVP 4"),
+        ({KEY: "MVP 5"}, ["MVP 4", "MVP 5", ""], "MVP 5"),
+        ({KEY: MS_ALL}, ["MVP 4", "MVP 4", ""], MS_ALL),
+        ({KEY: ""}, ["MVP 4", "MVP 4", ""], ""),
+        ({"board-ms:someone/else": "MVP 5"}, ["MVP 4", "MVP 5", ""], "MVP 4"),
+    ],
+    ids=[
+        "a closed milestone falls back",
+        "an open one is kept",
+        "All is kept",
+        "none is kept",
+        "another repository's is not read",
+    ],
+)
+def test_a_stored_choice_wins_while_its_milestone_is_open(
+    tmp_path: Path, stored: dict[str, str], milestones: list[str], chosen: str
+) -> None:
+    """Protects a reader's choice, which is kept per browser and per repository.
+
+    A stored milestone is drawn while an open card carries it, and the default
+    otherwise, so a choice of a milestone that has since closed falls back
+    without being forgotten. The key names the repository, because every board
+    an owner publishes shares one storage.
+    """
+    docs = _ms_docs([(n, ms, "ready", ()) for n, ms in enumerate(milestones, 1)], default="MVP 4")
+    result = run_page(tmp_path, [served(docs)], page=_stored_page(tmp_path, stored))
+    assert result["ids"]["mssel"]["value"] == chosen
+    assert result["stored"] == stored
+
+
+def test_choosing_a_milestone_draws_it_and_stores_the_choice(tmp_path: Path) -> None:
+    """Protects the reader's pick, which redraws the board and is kept per repository."""
+    docs = _ms_docs(
+        [(1, "MVP 2", "ready", ()), (2, "MVP 3", "ready", ()), (3, "MVP 3", "ready", ())],
+        ranked=(1, 2, 3),
+    )
+    result = run_page(tmp_path, [served(docs)], page=_stored_page(tmp_path, {}), select="MVP 3")
+    ids = result["ids"]
+    assert result["stored"] == {KEY: "MVP 3"}
+    assert ids["mssel"]["value"] == "MVP 3"
+    assert text(ids, "mscount") == "2 of 3 open"
+    assert cards(ids, "board") == {2, 3}
+
+
+# Three ranked cards in two milestones, an unranked one and a parent.
+FILTERED = [
+    (1, "MVP 2", "ready", ()),
+    (2, "MVP 2", "ready", ()),
+    (3, "MVP 3", "ready", ()),
+    (4, "MVP 2", "parent", ()),
+    (5, "MVP 3", "ready", ()),
+]
+
+
+def test_the_build_order_draws_the_chosen_milestone_and_its_parents(tmp_path: Path) -> None:
+    """Protects the build order and the line above it under one milestone.
+
+    Only MVP 2's cards are drawn. Its parent shows beside its ranked card,
+    because a parent is never ranked and its children name it as what they
+    serve, and the line counts it apart from the ranked card. On All no parent
+    is shown, as before.
+    """
+    ids = draw(tmp_path, _ms_docs(FILTERED, ranked=(1, 3)))
+    assert cards(ids, "board") == {1, 4}
+    assert text(ids, "more") == (
+        "Showing the 1 ranked card and 1 parent in MVP 2. 1 other open issue in MVP 2 is not "
+        "in the priority order. Show all 3"
+    )
+    ids = draw(tmp_path, _ms_docs(FILTERED, ranked=(1, 3), default=None))
+    assert cards(ids, "board") == {1, 3}
+    assert text(ids, "more") == (
+        "Showing the 2 ranked cards. 3 other open issues are not in the priority order. Show all 5"
+    )
+    ids = draw(tmp_path, _ms_docs(FILTERED, ranked=(1, 3)), page=_show_all_page(tmp_path))
+    assert cards(ids, "board") == {1, 2, 4}
+    assert text(ids, "more") == (
+        "Showing all 3 open issues in MVP 2 not in flight. Show only the ranked cards"
+    )
+
+
+def test_a_card_with_no_milestone_is_named_so(tmp_path: Path) -> None:
+    """Protects the sentences about the empty milestone from reading "in no milestone"."""
+    docs = _ms_docs([(1, "", "ready", ()), (2, "", "ready", ()), (3, "MVP 2", "ready", ())])
+    ids = draw(tmp_path, docs, page=_stored_page(tmp_path, {KEY: ""}))
+    assert cards(ids, "board") == set()
+    assert text(ids, "more") == (
+        "Showing the 0 ranked cards with no milestone. 2 other open issues with no milestone "
+        "are not in the priority order. Show all 2"
+    )
+    assert text(ids, "flownote") == (
+        "Nothing with no milestone is in flight. Every card with no milestone belongs to the "
+        "board below. 2 of them show only with Show all."
+    )
+
+
+def test_the_chain_bar_names_a_link_the_milestone_filter_hides(tmp_path: Path) -> None:
+    """Protects the chain bar from sending a reader to Show all for a card it cannot show.
+
+    #1 waits on #3, which is in MVP 3, and on #5, which is in MVP 3 and in
+    flight there, and #2 in MVP 2 waits on #1. Show all draws #2 and never
+    #3 or #5, so only #2 is counted as hidden in the short view, and the other
+    two are named with their milestone and the filter as the reason. A card in
+    flight in another milestone is not drawn here, so it is not counted as
+    drawn either.
+    """
+    docs = _ms_docs(
+        [
+            (1, "MVP 2", "ready", (3, 5)),
+            (2, "MVP 2", "ready", (1,)),
+            (3, "MVP 3", "ready", ()),
+            (5, "MVP 3", "ready", ()),
+        ],
+        ranked=(1,),
+        flying=(5,),
+    )
+    ids = draw(tmp_path, docs, click=1)
+    assert text(ids, "chainbar") == (
+        "#1 · waits on 2 · 1 waiting on it · 1 of them hidden, so press Show all to see it · "
+        "#3 (MVP 3) and #5 (MVP 3) are in another milestone, so the milestone filter hides "
+        "them Clear"
+    )
+    assert cards(ids, "flow") == set()
+    ids = draw(tmp_path, docs, click=1, page=_show_all_page(tmp_path))
+    assert text(ids, "chainbar") == (
+        "#1 · waits on 2 · 1 waiting on it · #3 (MVP 3) and #5 (MVP 3) are in another "
+        "milestone, so the milestone filter hides them Clear"
+    )
+
+
+def test_the_in_flight_section_and_its_note_name_the_chosen_milestone(tmp_path: Path) -> None:
+    """Protects the In flight section from drawing, or claiming, another milestone's cards.
+
+    #3 is in flight in MVP 3, so MVP 2 draws nothing in flight and its note
+    says so of MVP 2 alone. With #2 in flight in MVP 2 as well, the note's
+    closing sentence names MVP 2, because the board below draws no other
+    milestone. The flow legend explains only the cards it drew, so #3's
+    position chip is explained only on All.
+    """
+    docs = _ms_docs(FILTERED, ranked=(1, 3), flying=(3,))
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "flow") == set()
+    assert text(ids, "flownote") == (
+        "Nothing in MVP 2 is in flight. Every card in MVP 2 belongs to the board below. "
+        "1 of them shows only with Show all."
+    )
+    assert "where it sits in the order" not in text(ids, "flowkey")
+    docs = _ms_docs(FILTERED, ranked=(1, 3), flying=(2, 3))
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "flow") == {2}
+    assert text(ids, "flownote").endswith(
+        "Every other card in MVP 2 belongs to the board below, where the question is what is "
+        "behind what rather than whose move it is."
+    )
+    ids = draw(tmp_path, _ms_docs(FILTERED, ranked=(1, 3), flying=(2, 3), default=None))
+    assert cards(ids, "flow") == {2, 3}
+    assert "where it sits in the order" in text(ids, "flowkey")
+    assert "Every other card belongs to the board below" in text(ids, "flownote")
+
+
+def test_the_freeing_sentence_names_only_the_chosen_milestones_cards(tmp_path: Path) -> None:
+    """Protects the board note from naming a card the filter hides as freeing the most.
+
+    #3 in MVP 3 frees two cards and #1 in MVP 2 frees one. Under MVP 2 the
+    sentence names #1, and on All it names #3.
+    """
+    tracker = [
+        (1, "MVP 2", "ready", ()),
+        (2, "MVP 2", "ready", (1,)),
+        (3, "MVP 3", "ready", ()),
+        (4, "MVP 3", "ready", (3,)),
+        (5, "MVP 3", "ready", (3,)),
+    ]
+    page = _show_all_page(tmp_path)
+    note = _note(draw(tmp_path, _ms_docs(tracker), page=page))
+    assert "#1 is the single card whose landing frees the most, at 1 other." in note
+    note = _note(draw(tmp_path, _ms_docs(tracker, default=None), page=page))
+    assert "#3 is the single card whose landing frees the most, at 2 others." in note
+
+
+@pytest.mark.parametrize(
+    ("kinds", "ranked", "default", "reason"),
+    [
+        ({}, (3,), "MVP 2", "nothing in MVP 2 is ranked"),
+        (
+            {1: "deferred"},
+            (1, 3),
+            "MVP 2",
+            "nothing in MVP 2 left in the ranking is a card anybody can take",
+        ),
+        ({}, (), "MVP 2", "nothing left in the ranking is a card anybody can take"),
+        ({1: "deferred"}, (1,), "MVP 2", "nothing left in the ranking is a card anybody can take"),
+        ({1: "deferred"}, (1,), None, "nothing left in the ranking is a card anybody can take"),
+    ],
+    ids=[
+        "ranked elsewhere",
+        "deferred here, ranked elsewhere",
+        "nothing ranked",
+        "deferred here only",
+        "deferred on All",
+    ],
+)
+def test_the_order_note_says_why_no_card_in_the_milestone_carries_a_position(
+    tmp_path: Path, kinds: dict, ranked: tuple, default: object, reason: str
+) -> None:
+    """Protects the order note's reason from going false under a filter.
+
+    With the only ranked card in MVP 3, free to take there, the old sentence
+    said nothing in the ranking could be taken. Under MVP 2 it says nothing in
+    MVP 2 is ranked, and nothing in MVP 2 can be taken when MVP 2's ranked
+    cards are all deferred beside a ranked card elsewhere. Every other case
+    keeps the sentence it had.
+    """
+    tracker = [
+        (1, "MVP 2", kinds.get(1, "ready"), ()),
+        (2, "MVP 2", "ready", ()),
+        (3, "MVP 3", "ready", ()),
+    ]
+    note = text(draw(tmp_path, _ms_docs(tracker, ranked=ranked, default=default)), "ordernote")
+    assert note.endswith(
+        f"Priority is not a key today, because {reason}. Pick a card to trace its chain."
+    )

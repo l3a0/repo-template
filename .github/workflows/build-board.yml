@@ -18,7 +18,9 @@ name: Build board
 # repository serve its own tab icon in place of the template's. A `data-label`
 # input, added by the pull request that closes l3a0/repo-template#40, names
 # the label that marks a card waiting on data, which the page then draws in a
-# fourth column.
+# fourth column. A `milestone-default` input, added by the pull request that
+# closes l3a0/repo-template#45, draws a milestone selector on the page and
+# names the milestone it opens on.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -67,6 +69,14 @@ on:
           data" column. Empty reads no such label.
         type: string
         default: ""
+      milestone-default:
+        description: >-
+          The milestone the page opens on, where <n> stands for a number, such
+          as MVP <n> for the lowest-numbered open "MVP" milestone. Setting it
+          draws a milestone selector and cuts each milestone's title at its
+          first comma. Empty draws no selector and keeps whole titles.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -111,12 +121,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ inputs.title }}
           DATA_LABEL: ${{ inputs.data-label }}
+          MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
           --workflow caller/.github/workflows/board.yml
           --title="$TITLE"
           --data-label="$DATA_LABEL"
+          --milestone-default="$MILESTONE_DEFAULT"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

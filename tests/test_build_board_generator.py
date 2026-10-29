@@ -1463,17 +1463,22 @@ def compat_tracker() -> FakeGitHub:
 COMPAT = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "compat.json"
 
 
-def test_a_caller_that_sets_no_input_gets_the_board_it_got_before() -> None:
+def test_a_caller_that_sets_no_input_gets_the_board_it_got_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Protects every caller that sets no input from a board that moves.
 
     ``COMPAT`` is the ``board.json`` that the generator at l3a0/repo-template
     commit cf2959a3 wrote for ``compat_tracker``, and this run has to write the
-    same bytes. A stranger's lines still count, and a reference to this
-    repository by name still reads, until a caller sets ``owner-body-lines``.
+    same bytes. The file is read as the command line writes it, so a change to
+    how it is written fails here too. A stranger's lines still count, and a
+    reference to this repository by name still reads, until a caller sets
+    ``owner-body-lines``.
     """
-    board, _ = build(compat_tracker())
-    written = json.dumps(board, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    assert written == COMPAT.read_text(encoding="utf-8").removesuffix("\n")
+    monkeypatch.setattr(bb, "datetime", FrozenNow)
+    summary_of(monkeypatch, tmp_path, compat_tracker())
+    written = (tmp_path / "site" / "board.json").read_bytes()
+    assert written == COMPAT.read_bytes().removesuffix(b"\n")
 
 
 # ---- Marker lines from strangers, other repositories and long numbers ----
@@ -1717,6 +1722,21 @@ HERE = "https://github.com/octo-org/octo-repo"
         ("other/repo#3 [#4](https://github.com/o/r/issues/5)", None, [OTHER]),
         (f"other/repo#3, [#4]({HERE}/issues/5), #2", [2], [DISAGREE, OTHER]),
         ("x#2 and a/#3", None, []),
+        (f"[#2]({HERE}/issues/2x)", None, [OTHER]),
+        # Three behaviours ported from l3a0/marketlake and named on #48. A
+        # `#N` right after `/`, `-`, `.` or a word character is skipped with
+        # nothing listed.
+        ("#3/#4", [3], []),
+        ("#3-#4", [3], []),
+        ("repo-template#3 #4", [4], []),
+        # A link to an address that is not an issue's is refused as naming
+        # another repository, and a zero-padded number as a disagreement.
+        ("[#2](../issues/2)", None, [OTHER]),
+        (f"[#2]({HERE}/discussions/2)", None, [OTHER]),
+        (f"[#2]({HERE}/issues/02)", None, [DISAGREE]),
+        # A link `LINK_REF` does not read still reads as its `#N`.
+        ('[#2](https://github.com/other/repo/issues/2 "title")', [2], []),
+        ("[#2][ref]", [2], []),
     ],
 )
 def test_each_reference_shape_on_an_after_line(
@@ -1878,6 +1898,22 @@ def test_a_long_hostile_after_line_reads_inside_a_second(shape: str) -> None:
     """Protects every board run from a stranger's line built to be slow to read."""
     line = "Board after: " + shape * (65_000 // len(shape))
     gh = FakeGitHub([issue(1, body=f"{line}\n", association="NONE")], [])
+    start = time.perf_counter()
+    build(gh)
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize("run", ["`" * 65_536, "~" * 65_536], ids=["backticks", "tildes"])
+def test_a_long_fence_run_with_no_newline_reads_inside_a_second(run: str) -> None:
+    """Protects every board run from a stranger's body or comment that opens no fence.
+
+    Every body and comment has its fences removed before anything checks who
+    wrote it. A greedy opening run tried every shorter run on a last line of
+    backticks with no newline after it, and 65,536 of them took about 3 s.
+    About 200 such comments would have run every caller's build past its
+    10-minute limit, whatever ``owner-body-lines`` said.
+    """
+    gh = FakeGitHub([issue(1, body=run, association="NONE", comments=(("NONE", run),))], [])
     start = time.perf_counter()
     build(gh)
     assert time.perf_counter() - start < 1.0

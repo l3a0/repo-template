@@ -162,9 +162,11 @@ carrying it, so a misspelt label shows up as a count of zero. To move the pin
 back before that commit, remove the `data-label` line in the same change.
 
 Anyone can open an issue on a public repository, and by default a
-`Board order:` or `Board after:` line in any issue's body counts. That moves
-only the stranger's own card, because a card ranks only with a `band:N`
-label, which needs triage access. A repository that wants those lines read
+`Board order:` or `Board after:` line in any issue's body counts. Such a line
+places only the stranger's own card, because a card ranks only with a
+`band:N` label, which needs triage access. A stranger's after line also adds
+a sentence to the detail of each card it names, saying the stranger's card
+should land after it. A repository that wants those lines read
 only from issues its owner opened sets `owner-body-lines`. A stranger's lines
 then set nothing, and the job summary lists them as refused. The input takes
 `"true"` or nothing, and any other value fails the run. The pin has to be at

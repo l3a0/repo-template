@@ -119,6 +119,16 @@ from pathlib import Path
 
 SCHEMA = 1
 
+# The most digits an order, a pass count or a reference may carry. JavaScript
+# reads every number as a double, which holds any integer up to 15 digits
+# exactly. Past that a number can stop being one: a 400-digit order is
+# infinity, which JSON cannot carry, and past 4,300 digits Python's `int()`
+# raises. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+MAX_DIGITS = 15
+# A reference's number: up to `MAX_DIGITS` digits, then a word boundary, so a
+# longer number is no reference at all rather than one `int()` cannot read.
+REF_NUMBER = rf"(\d{{1,{MAX_DIGITS}}})\b"
+
 # A `Part of` reference, read the way GitHub reads a closing keyword: anywhere
 # in a pull request's body, with `#` and the number right after it, and never
 # inside a code span or a fenced code block. Sessions write the phrase
@@ -130,7 +140,7 @@ SCHEMA = 1
 # unless a code span holds it, as a closing keyword does. `pr_items` strips the
 # code before matching. A number longer than ``MAX_DIGITS`` is no reference at
 # all, rather than one ``int()`` cannot read.
-PART_OF = re.compile(r"\bPart of #(\d{1,15})\b")
+PART_OF = re.compile(rf"\bPart of #{REF_NUMBER}")
 
 # A review comment opens with a line reading `## Review`, which the l3a0
 # plugin's update-build-board skill states as the convention. "## Reviewer" is not one.
@@ -176,34 +186,34 @@ MARKER_KIND = {"o": "order", "v": "verdict", "a": "after"}
 # with no verdict.
 PASS_HEADING = re.compile(r"^[ \t]*## Plan audit, pass \d+", re.MULTILINE)
 
-# The most digits an order, a pass count or a reference may carry. JavaScript
-# reads every number as a double, which holds any integer up to 15 digits
-# exactly. Past that a number can stop being one: a 400-digit order is
-# infinity, which JSON cannot carry, and past 4,300 digits Python's `int()`
-# raises. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
-MAX_DIGITS = 15
-
 # The references a `Board after:` line can name: `#N`, `owner/name#N`, and the
-# link form `[#N](url)`. A bare number is not one. The `{1,15}` and the `\b`
-# after it read a longer number as no reference at all. Ported from
+# link form `[#N](url)`. A bare number is not one. `REF_NUMBER` reads a
+# number longer than `MAX_DIGITS` as no reference at all. Ported from
 # l3a0/marketlake's generator at commit ``cc9d3432``, with one change. The
 # link's address there was `[^)\s]*`, which runs to the end of the line from
 # every `[#N](` that no `)` closes, so a line of `[#1](` repeated costs time
 # that grows with the square of its length. Anyone can write a body, and a
 # 65,000-character line of that shape took 9.6 s. Leaving `(` out of the
 # address stops each try at the next `[#N](`, and the same line took 1.1 ms.
-LINK_REF = re.compile(r"\[#(\d{1,15})\]\(([^()\s]*)\)")
+LINK_REF = re.compile(rf"\[#(\d{{1,{MAX_DIGITS}}})\]\(([^()\s]*)\)")
 # An issue's or pull request's address, with anything after the number, such
 # as a comment's `#issuecomment-5` anchor, a query or a `/files` tab.
 ISSUE_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/(?:issues|pull)/(\d+)(?:[/#?]\S*)?")
-REPO_REF = re.compile(r"(?<![\w.-])([\w.-]+/[\w.-]+)#(\d{1,15})\b")
-BARE_REF = re.compile(r"(?<![\w/.-])#(\d{1,15})\b")
+REPO_REF = re.compile(rf"(?<![\w.-])([\w.-]+/[\w.-]+)#{REF_NUMBER}")
+BARE_REF = re.compile(rf"(?<![\w/.-])#{REF_NUMBER}")
 
 # A fenced code block, opened by three or more backticks or tildes and closed
 # by the same run, or left open to the end of the text. A comment quoting the
-# verdict format inside a fence would otherwise read as a verdict.
+# verdict format inside a fence would otherwise read as a verdict. The opening
+# run is possessive, `{3,}+`, so it never gives back a character. A greedy run
+# on a last line of backticks with no newline after it tried every shorter
+# run in turn, each scanning to the end of the line, so the time grew with
+# the square of its length: about 3 s for 65,536 backticks. `unfenced` runs
+# on every body and comment, a stranger's included, before anything checks
+# who wrote it. The possessive run reads the same fences, and the same line
+# took 0.3 ms.
 FENCE = re.compile(
-    r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.MULTILINE | re.DOTALL
+    r"^[ \t]*(`{3,}+|~{3,}+)[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.MULTILINE | re.DOTALL
 )
 
 
@@ -777,6 +787,20 @@ def after_refs(rest: str, repo: str) -> tuple[set[int], set[str]]:
     number and whose address names another is refused too, because nothing
     says which one was meant. A refused reference leaves the rest of its line
     read. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+
+    Three behaviours come with the port, and each is named on
+    l3a0/repo-template#48 rather than listed in the summary.
+
+    1. A ``#N`` right after a word character, ``/``, ``-`` or ``.`` is not
+       read and not listed, so ``#3/#4`` reads 3 and ``repo-template#3 #4``
+       reads 4.
+    2. A link whose address is not an issue or pull request address on
+       ``https://github.com``, such as a relative ``../issues/4``, is refused
+       as naming another repository. A link to ``issues/04`` is refused as a
+       disagreement.
+    3. A link ``LINK_REF`` does not read, such as ``[#3](url "title")``,
+       ``[#3]( url)`` or ``[#3][ref]``, still reads as ``#3``, whatever its
+       address names.
     """
     named: set[int] = set()
     refused: set[str] = set()

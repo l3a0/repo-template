@@ -23,11 +23,11 @@ For a repository `<owner>/<name>`, the pieces sit here.
 | The build and deploy jobs | `.github/workflows/build-board.yml` in l3a0/repo-template, at the ref the caller pins |
 | What builds the data | `scripts/build_board.py` in l3a0/repo-template |
 | The page's source | `.claude/skills/update-build-board/board.html` in l3a0/repo-template |
-| The page's tab icon and test stub | `favicon.ico` and `dom-stub.js` beside that page |
+| The page's tab icon and test stub | `favicon.ico` and `dom-stub.js` beside that page, unless the caller names its own icon |
 
 The caller is short. It holds the triggers, the `permissions`, and `concurrency: group: pages`, which makes runs deploy one at a time so an older snapshot never replaces a newer one. Its one job is `uses: l3a0/repo-template/.github/workflows/build-board.yml@<ref>`. In l3a0/repo-template itself the ref is `main`. A seeded repository pins a full commit SHA, so its board changes only when that repository moves the pin.
 
-The called workflow checks out the generator and the page from the template at its own commit, which it reads from `job.workflow_repository` and `job.workflow_sha`. Inside a called workflow the `github` context still describes the caller, so `github.workflow_sha` would name the wrong commit. It also checks out the caller's `.github/workflows/board.yml`, because the generator reads the schedule from it.
+The called workflow checks out the generator and the page from the template at its own commit, which it reads from `job.workflow_repository` and `job.workflow_sha`. Inside a called workflow the `github` context still describes the caller, so `github.workflow_sha` would name the wrong commit. It also checks out the caller's `.github/workflows/board.yml`, because the generator reads the schedule from it, and the file the caller's `icon` input names, when it names one.
 
 A seeded repository keeps no copy of the generator or the page. It keeps the caller and two skills, this one and `sync-prune-next`. So every command here that runs the generator or the page fetches it from the template at the pinned ref, with these three lines run from the repository root.
 
@@ -178,11 +178,13 @@ Between the strip and the first section sits a banner. Over a current board it i
 
 ## Change the page or the generator
 
-A change to the page, the stub, the icon or the generator happens in l3a0/repo-template, never in a seeded repository, because a seeded repository runs the template's copies at its pin and any local copy would run nowhere. Change it only when the rendering has to change. Edit the file in the template, run its `tests/test_build_board.py` and `tests/test_build_board_generator.py` and the harness below, and open the pull request there. The board run that the merge starts publishes the template's own board from `main`.
+A change to the page, the stub, the template's icon or the generator happens in l3a0/repo-template, never in a seeded repository, because a seeded repository runs the template's copies at its pin and any local copy would run nowhere. Change it only when the rendering has to change. Edit the file in the template, run its `tests/test_build_board.py` and `tests/test_build_board_generator.py` and the harness below, and open the pull request there. The board run that the merge starts publishes the template's own board from `main`.
 
 A seeded repository picks the change up by moving its pin. Edit the ref on the `uses:` line in its `.github/workflows/board.yml` to the template commit that carries the change, and in the same pull request re-copy this skill and `sync-prune-next` from the template at that commit. The skills and the generator share the label names, the line formats and the list of changes that start no run, so a pin moved without the skills leaves a repository following one version's rules on another version's board.
 
-The page links its tab icon as `favicon.ico`, and the reusable workflow copies `favicon.ico` from beside the page into the same folder. Renaming the icon means changing the page's link, that copy and the tests that check them together.
+The page links its tab icon as `favicon.ico`, and the reusable workflow copies the template's `favicon.ico` from beside the page into the same folder, unless the caller names its own. Renaming the icon means changing the page's link, that copy and the tests that check them together.
+
+A seeded repository's own icon is the one exception, because it is the repository's mark rather than the board's rendering. The repository commits an `.ico` file and names it in its caller's job with `with: icon: <path>`, such as `.github/board/favicon.ico`. The reusable workflow then serves that file as `favicon.ico` in the template's place, and a path that names no file fails the run, so the last board stays up. Naming the file needs a pin at or after the template commit that added the `icon` input, because a caller passing an input the called workflow does not declare fails. After that, changing the icon means changing the file, with no move of the pin.
 
 A change to what the page reads is a change to the generator as well. Add the field to `scripts/build_board.py`, and to `ITEM_OK` in the page if the renderer reads it without a guard, because the page refuses a whole section when one item lacks a field it reads.
 

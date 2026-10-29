@@ -13,7 +13,9 @@ name: Build board
 # that closes l3a0/repo-template#24. On the way the jobs moved behind
 # workflow_call, the triggers and the concurrency group moved to the caller,
 # the generator and the page are checked out from this repository at the
-# caller's pinned ref, and a `title` input names the board.
+# caller's pinned ref, and a `title` input names the board. An `icon` input,
+# added by the pull request that closes l3a0/repo-template#29, lets a
+# repository serve its own tab icon in place of the template's.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -40,6 +42,13 @@ on:
         description: The page's heading. Empty gives "<name> build board".
         type: string
         default: ""
+      icon:
+        description: >-
+          A path in the calling repository to the .ico file served as the
+          board's tab icon, such as .github/board/favicon.ico. Empty serves
+          the template's icon.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -58,13 +67,17 @@ jobs:
     outputs:
       updated_at: ${{ steps.board.outputs.updated_at }}
     steps:
-      # The caller's workflow file alone, because the generator reads the
-      # schedule from its cron line to say when the board is stale.
+      # The caller's workflow file, because the generator reads the schedule
+      # from its cron line to say when the board is stale, and the caller's
+      # icon when it names one. actions/checkout drops an empty line from
+      # this list, so an empty `icon` leaves the workflow file alone.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
           path: caller
-          sparse-checkout: .github/workflows/board.yml
+          sparse-checkout: |
+            .github/workflows/board.yml
+            ${{ inputs.icon }}
           sparse-checkout-cone-mode: false
 
       - uses: actions/checkout@v7
@@ -87,11 +100,20 @@ jobs:
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon
-      # as favicon.ico beside it, so the icon goes in the same folder.
+      # as favicon.ico beside it, so the icon goes in the same folder. The
+      # caller's icon, when it names one, takes the template's place. A named
+      # file that is missing fails the run, because a board deployed without
+      # it would show a blank tab rather than the icon the caller asked for.
       - name: Add the page
-        run: >-
-          cp template/.claude/skills/update-build-board/board.html _site/index.html &&
-          cp template/.claude/skills/update-build-board/favicon.ico _site/favicon.ico
+        env:
+          ICON: ${{ inputs.icon }}
+        run: |
+          cp template/.claude/skills/update-build-board/board.html _site/index.html
+          if [ -n "$ICON" ]; then
+            cp "caller/$ICON" _site/favicon.ico
+          else
+            cp template/.claude/skills/update-build-board/favicon.ico _site/favicon.ico
+          fi
 
       - uses: actions/upload-pages-artifact@v5
         with:

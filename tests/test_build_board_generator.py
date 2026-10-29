@@ -67,6 +67,8 @@ REPO = "octo-org/octo-repo"
 # input. The one repository that marks such issues uses this name.
 DATA_LABEL = "blocked-on-data"
 NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
+# The commit the fake repository's default branch stands at.
+HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
@@ -259,13 +261,22 @@ class FakeGitHub:
     Open issues and open pull requests are served in pages of the size the
     real queries ask for. A pull request asked for by number comes from
     ``prs``, whatever its state. ``nested`` serves the further pages of a
-    nested list, keyed by the node's id and the list's name.
+    nested list, keyed by the node's id and the list's name. ``head`` is the
+    commit the default branch stands at, and None answers as a repository
+    with no default branch.
     """
 
-    def __init__(self, issues: list[dict], prs: list[dict], nested: dict | None = None):
+    def __init__(
+        self,
+        issues: list[dict],
+        prs: list[dict],
+        nested: dict | None = None,
+        head: str | None = HEAD,
+    ):
         self.issues = issues
         self.prs = {p["number"]: p for p in prs}
         self.nested = nested or {}
+        self.head = head
         self.calls: list[str] = []
 
     def _page(self, nodes: list[dict], size: int, after: str | None) -> dict:
@@ -292,6 +303,9 @@ class FakeGitHub:
             open_prs = [p for p in self.prs.values() if p["state"] == "OPEN"]
             page = self._page(open_prs, 50, variables.get("after"))
             return {"rateLimit": {"cost": 1}, "repository": {"pullRequests": page}}
+        if "defaultBranchRef" in query:
+            ref = {"target": {"oid": self.head}} if self.head else None
+            return {"rateLimit": {"cost": 1}, "repository": {"defaultBranchRef": ref}}
         found = {
             f"p{n}": self.prs.get(int(n)) for n in re.findall(r"pullRequest\(number:(\d+)", query)
         }
@@ -589,6 +603,305 @@ def test_the_command_line_passes_the_title_through(
     assert json.loads((out / "board.json").read_text())["state"]["title"] == "Octo board"
     assert bb.main([*argv, "--title", ""]) == 0
     assert json.loads((out / "board.json").read_text())["state"]["title"] == "octo-repo build board"
+
+
+# The three lines a caller can add, and the state keys they write. A board
+# built with none of them carries exactly the keys it carried before they
+# existed.
+BEFORE_KEYS = {
+    "schema",
+    "repo",
+    "title",
+    "updatedAt",
+    "issues",
+    "source",
+    "longestGapMinutes",
+    "staleAfterMinutes",
+}
+
+
+def _with(gh: FakeGitHub, **lines: str) -> tuple[dict, dict]:
+    """The board built with the caller's subtitle, note or head input."""
+    return bb.build(gh, REPO, 30, NOW, **lines)
+
+
+def test_a_caller_setting_no_line_gets_the_board_it_got_before() -> None:
+    """Protects every current caller from the three new inputs.
+
+    The template's own board, and the two repositories pinned to an older
+    commit, set none of ``subtitle``, ``note`` or ``default-branch-head``. Their
+    ``state`` carries exactly the keys it carried before, written identically
+    whether the inputs are left out or passed empty, and the run sends exactly
+    the requests it sent before, with no request for the default branch.
+    """
+    issues = [issue(1, mentioned_by=(7,)), issue(2)]
+    prs = [pull(5, closes=(1,)), pull(7, state="MERGED", body="Part of #1")]
+    left_out = FakeGitHub(issues, prs)
+    board, _ = build(left_out)
+    passed_empty = FakeGitHub(issues, prs)
+    empty, _ = _with(passed_empty, subtitle="", note="", default_branch_head="")
+    assert set(board["state"]) == BEFORE_KEYS
+    assert json.dumps(empty) == json.dumps(board)
+    assert passed_empty.calls == left_out.calls
+    # One page of open issues, one page of open pull requests, and one batch
+    # for the merged pull request 7 that issue 1 names.
+    assert len(left_out.calls) == 3
+    assert not any("defaultBranchRef" in q for q in left_out.calls)
+
+
+# The board.json the generator at l3a0/repo-template commit cf2959a3, the last
+# before these inputs, wrote for `every_case()` at `NOW` under `GOLDEN_CRON`.
+# It was written once by running that commit's scripts/build_board.py, taken
+# with `git show cf2959a3:scripts/build_board.py`, through its own `main()`.
+# The file is never rewritten from the code under test, because a golden
+# written by the head would compare the head with itself.
+GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "lines.json"
+GOLDEN_CRON = 'on:\n  schedule:\n    - cron: "8,38 * * * *"\n'
+
+
+class FixedNow(datetime):
+    """``datetime`` whose ``now`` is ``NOW``, so a run's stamp is fixed."""
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return NOW
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [[], ["--subtitle=", "--note=", "--default-branch-head="]],
+    ids=["left-out", "passed-empty"],
+)
+def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lines: list[str]
+) -> None:
+    """Protects every current caller's board.json, byte for byte.
+
+    The generator at cf2959a3 wrote ``GOLDEN`` from the same tracker before the
+    three inputs existed. The head, with none of them set, has to write the
+    same bytes to the file it publishes. The workflow passes every flag
+    whether or not the caller set it, so passing them empty counts too.
+    """
+    fake = every_case()
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setattr(bb, "datetime", FixedNow)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    workflow = tmp_path / "board.yml"
+    workflow.write_text(GOLDEN_CRON, encoding="utf-8")
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(workflow), "--out", str(out)]
+    assert bb.main([*argv, *lines]) == 0
+    assert (out / "board.json").read_bytes() == GOLDEN.read_bytes()
+
+
+def test_the_subtitle_reaches_the_state() -> None:
+    """Protects the reusable workflow's ``subtitle`` input on its way to the page."""
+    state = _with(FakeGitHub([issue(1)], []), subtitle="the order of work on the lake")[0]["state"]
+    assert state["subtitle"] == "the order of work on the lake"
+    assert set(state) == BEFORE_KEYS | {"subtitle"}
+
+
+LINK_A = "https://github.com/octo-org/octo-repo/blob/main/docs/design.md"
+LINK_B = "https://github.com/octo-org/octo-repo/blob/main/docs/build-plan.md"
+
+
+@pytest.mark.parametrize(
+    ("note", "pieces"),
+    [
+        ("Plain words only.", [{"text": "Plain words only."}]),
+        (
+            f"Read [the design doc]({LINK_A}) first.",
+            [
+                {"text": "Read "},
+                {"text": "the design doc", "href": LINK_A},
+                {"text": " first."},
+            ],
+        ),
+        (
+            f"[The design]({LINK_A}) and [the plan]({LINK_B})",
+            [
+                {"text": "The design", "href": LINK_A},
+                {"text": " and "},
+                {"text": "the plan", "href": LINK_B},
+            ],
+        ),
+        (
+            f"  The order\n follows   the rule:\n\tcapture first, in\n[the plan]({LINK_B}).\n",
+            [
+                {"text": "The order follows the rule: capture first, in "},
+                {"text": "the plan", "href": LINK_B},
+                {"text": "."},
+            ],
+        ),
+        ("[brackets] and (parentheses) alone", [{"text": "[brackets] and (parentheses) alone"}]),
+        (f"[a] [b]({LINK_A})", [{"text": "[a] "}, {"text": "b", "href": LINK_A}]),
+    ],
+    ids=["text", "one-link", "two-links", "line-breaks", "no-link", "bracket-then-link"],
+)
+def test_a_note_is_parsed_into_text_and_link_pieces(note: str, pieces: list[dict]) -> None:
+    """Protects the note's one form of markup, parsed once here so the page only escapes.
+
+    A folded YAML block keeps its line breaks in some forms, so every run of
+    whitespace reads as one space.
+    """
+    state = _with(FakeGitHub([issue(1)], []), note=note)[0]["state"]
+    assert state["note"] == pieces
+    assert set(state) == BEFORE_KEYS | {"note"}
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "javascript:alert(1)",
+        "http://github.com/octo-org/octo-repo",
+        "docs/design.md",
+        'https://github.com/a"onmouseover="alert(1)',
+        "https://github.com/a b",
+        "https://",
+        "https://github.com/a<b",
+        "",
+    ],
+    ids=["javascript", "http", "relative", "quote", "space", "no-host", "angle", "empty"],
+)
+def test_a_note_linking_anywhere_but_https_stops_the_run(href: str) -> None:
+    """Protects every reader's browser from a link the caller did not mean to draw.
+
+    The run stops before reading GitHub, as a refused data label does, so the
+    last good board stays up and the job summary says why.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="not an https:// address"):
+        _with(gh, note=f"See [this]({href}).")
+    assert gh.calls == []
+
+
+def test_the_default_branch_head_costs_one_request_and_writes_seven_characters() -> None:
+    """Protects the footer's commit, and every run that does not ask for it.
+
+    The head is read through a request of its own, so a caller that sets the
+    input pays exactly one more request than one that does not.
+    """
+    without = FakeGitHub([issue(1)], [])
+    build(without)
+    gh = FakeGitHub([issue(1)], [])
+    state = _with(gh, default_branch_head="true")[0]["state"]
+    assert state["main"] == "0a1b2c3"
+    assert set(state) == BEFORE_KEYS | {"main"}
+    assert len(gh.calls) == len(without.calls) + 1
+    assert sum("defaultBranchRef" in q for q in gh.calls) == 1
+
+
+@pytest.mark.parametrize("value", ["yes", "True", "false", "1", " true"])
+def test_a_default_branch_head_other_than_true_stops_the_run(value: str) -> None:
+    """Protects a caller from a value that reads as on and is not.
+
+    The input takes an empty value or ``true``. Anything else stops the run
+    before it reads GitHub, rather than quietly drawing no commit.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="takes only an empty value or true"):
+        _with(gh, default_branch_head=value)
+    assert gh.calls == []
+
+
+@pytest.mark.parametrize(
+    "head",
+    [None, "not-a-commit-at-all", HEAD.upper()],
+    ids=["missing", "not-hex", "upper-case"],
+)
+def test_a_missing_default_branch_head_stops_the_run(head: str | None) -> None:
+    """Protects the footer from naming a commit the run never read.
+
+    A repository GitHub answers with no default branch would leave the footer
+    saying it was built against nothing, so the run stops and the last good
+    board stays up. An answer that is not a lower-case hex commit stops it
+    too, because the page names only seven lower-case hex characters.
+    """
+    gh = FakeGitHub([issue(1)], [], head=head)
+    with pytest.raises(bb.BoardError, match="no default branch head"):
+        _with(gh, default_branch_head="true")
+    assert [q for q in gh.calls if "defaultBranchRef" in q] == [bb.HEAD_QUERY]
+
+
+def test_a_repository_github_does_not_return_stops_the_run() -> None:
+    """Protects the run from a null repository, which would otherwise raise AttributeError."""
+    with pytest.raises(bb.BoardError, match="no default branch head"):
+        bb.head_commit(lambda query, variables: {"repository": None}, "octo-org", "octo-repo")
+
+
+def test_a_refused_note_stops_the_run_before_the_head_is_read() -> None:
+    """Protects a caller asking for the head from a request a refused note wastes.
+
+    Every input is checked before anything is read from GitHub, so a note
+    that is refused sends no request, even the head's.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="not an https:// address"):
+        _with(gh, note="See [x](http://example.com).", default_branch_head="true")
+    assert gh.calls == []
+
+
+def test_the_command_line_passes_the_three_lines_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the ``subtitle``, ``note`` and ``default-branch-head`` inputs on their way.
+
+    The workflow passes each flag joined to its value by ``=`` whether or not
+    the caller set it, so an empty value writes no key, and a refused note
+    fails the run with its reason in the job summary.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def state() -> dict:
+        return json.loads((out / "board.json").read_text())["state"]
+
+    lines = [
+        "--subtitle=-the order of work",
+        f"--note=See [the design]({LINK_A}).",
+        "--default-branch-head=true",
+    ]
+    assert bb.main([*argv, *lines]) == 0
+    assert state()["subtitle"] == "-the order of work"
+    assert state()["note"] == [
+        {"text": "See "},
+        {"text": "the design", "href": LINK_A},
+        {"text": "."},
+    ]
+    assert state()["main"] == "0a1b2c3"
+    assert bb.main([*argv, "--subtitle=", "--note=", "--default-branch-head="]) == 0
+    assert set(state()) == BEFORE_KEYS
+    (out / "board.json").unlink()
+    assert bb.main([*argv, "--note=[x](http://example.com)"]) == 1
+    assert not (out / "board.json").exists()
+    assert "build_board: the note links to 'http://example.com'" in summary.read_text()
+
+
+def test_the_command_line_with_none_of_the_three_flags_reads_no_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects a caller pinned before the inputs, whose workflow passes no flag.
+
+    Each flag defaults to empty, so a run given none of them sends no request
+    for the default branch and writes the keys it wrote before.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    assert bb.main(["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]) == 0
+    assert set(json.loads((out / "board.json").read_text())["state"]) == BEFORE_KEYS
+    assert not any("defaultBranchRef" in q for q in fake.calls)
 
 
 def test_the_command_line_passes_the_data_label_through(
@@ -1374,9 +1687,10 @@ def test_only_the_owners_review_heading_counts(association: str, body: str, revi
 
 # ---- The review heading a caller names ----
 #
-# The times a review is judged against. The head commit was made at HEAD, and a
-# marker counts only when posted strictly after it.
-HEAD = "2026-10-29T12:00:00Z"
+# The times a review is judged against. The head commit was made at HEAD_AT,
+# and a marker counts only when posted strictly after it. The name differs
+# from HEAD, the commit oid the default-branch-head tests read.
+HEAD_AT = "2026-10-29T12:00:00Z"
 AFTER = "2026-10-29T12:05:00Z"
 BEFORE = "2026-10-29T11:55:00Z"
 SECOND_AFTER = "2026-10-29T12:00:01Z"
@@ -1419,7 +1733,7 @@ def test_the_review_heading_counts_only_its_own_line_after_the_head(
     input the shared rule stands, which counts any owner comment opening
     ``## Review`` at any time and reads no review, so each row checks both.
     """
-    pr = pull(6, closes=(5,), comments=comments, reviews=reviews, committed=HEAD)
+    pr = pull(6, closes=(5,), comments=comments, reviews=reviews, committed=HEAD_AT)
     assert _reviewed(pr, review_heading=HEADING) == (marketlake, MARKED if marketlake else UNMARKED)
     word = "review posted" if shared else "no review posted"
     assert _reviewed(pr) == (shared, word)
@@ -1428,49 +1742,49 @@ def test_the_review_heading_counts_only_its_own_line_after_the_head(
 @pytest.mark.parametrize(
     ("comments", "reviews", "committed", "reviewed"),
     [
-        ((("OWNER", "## Review complete", AFTER),), (), HEAD, True),
-        ((("OWNER", "## Review complete\r\n\r\nAll lenses ran.", AFTER),), (), HEAD, True),
-        ((("OWNER", "## Review complete", HEAD),), (), HEAD, False),
-        ((("OWNER", "## Review complete.", AFTER),), (), HEAD, False),
-        ((("OWNER", "\n## Review complete", AFTER),), (), HEAD, False),
+        ((("OWNER", "## Review complete", AFTER),), (), HEAD_AT, True),
+        ((("OWNER", "## Review complete\r\n\r\nAll lenses ran.", AFTER),), (), HEAD_AT, True),
+        ((("OWNER", "## Review complete", HEAD_AT),), (), HEAD_AT, False),
+        ((("OWNER", "## Review complete.", AFTER),), (), HEAD_AT, False),
+        ((("OWNER", "\n## Review complete", AFTER),), (), HEAD_AT, False),
         ((("OWNER", "## Review complete", AFTER),), (), None, False),
-        ((("NONE", "## Review complete", AFTER),), (), HEAD, False),
-        ((("COLLABORATOR", "## Review complete", AFTER),), (), HEAD, False),
-        ((), (("CONTRIBUTOR", "## Review complete", AFTER),), HEAD, False),
-        ((), (("OWNER", "## Review complete", None),), HEAD, False),
-        ((), (("OWNER", "## Review complete", BEFORE),), HEAD, False),
-        ((("OWNER", "## Review complete", None),), (), HEAD, False),
+        ((("NONE", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("COLLABORATOR", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((), (("CONTRIBUTOR", "## Review complete", AFTER),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", None),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", BEFORE),), HEAD_AT, False),
+        ((("OWNER", "## Review complete", None),), (), HEAD_AT, False),
         (
             (("OWNER", "## Review complete", BEFORE), ("OWNER", "## Review complete", AFTER)),
             (),
-            HEAD,
+            HEAD_AT,
             True,
         ),
         (
             (("OWNER", "## Review complete", BEFORE),),
             (("OWNER", "## Review complete", AFTER),),
-            HEAD,
+            HEAD_AT,
             True,
         ),
-        ((("OWNER", "## Review complete", SECOND_AFTER),), (), HEAD, True),
-        ((), (("OWNER", "## Review complete", SECOND_AFTER),), HEAD, True),
-        ((), (("OWNER", "## Review complete", AFTER, "c-older"),), HEAD, False),
-        ((), (("OWNER", "## Review complete", AFTER, None),), HEAD, False),
-        ((("NONE", "Thanks", BEFORE), ("OWNER", "## Review complete", AFTER)), (), HEAD, True),
+        ((("OWNER", "## Review complete", SECOND_AFTER),), (), HEAD_AT, True),
+        ((), (("OWNER", "## Review complete", SECOND_AFTER),), HEAD_AT, True),
+        ((), (("OWNER", "## Review complete", AFTER, "c-older"),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", AFTER, None),), HEAD_AT, False),
+        ((("NONE", "Thanks", BEFORE), ("OWNER", "## Review complete", AFTER)), (), HEAD_AT, True),
         (
             (
                 ("OWNER", "## Review round 1, lenses running", AFTER),
                 ("OWNER", "## Review complete", AFTER),
             ),
             (),
-            HEAD,
+            HEAD_AT,
             True,
         ),
-        ((("OWNER", "## Review complete", AFTER), ("NONE", "LGTM", AFTER)), (), HEAD, True),
-        ((("MEMBER", "## Review complete", AFTER),), (), HEAD, False),
-        ((("FIRST_TIMER", "## Review complete", AFTER),), (), HEAD, False),
-        ((("FIRST_TIME_CONTRIBUTOR", "## Review complete", AFTER),), (), HEAD, False),
-        ((("MANNEQUIN", "## Review complete", AFTER),), (), HEAD, False),
+        ((("OWNER", "## Review complete", AFTER), ("NONE", "LGTM", AFTER)), (), HEAD_AT, True),
+        ((("MEMBER", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("FIRST_TIMER", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("FIRST_TIME_CONTRIBUTOR", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("MANNEQUIN", "## Review complete", AFTER),), (), HEAD_AT, False),
     ],
     ids=[
         "whole-body",
@@ -1537,10 +1851,10 @@ def test_the_review_words_come_from_the_heading_and_name_no_session() -> None:
         6,
         closes=(5,),
         comments=(("OWNER", "## Ready for Owner", AFTER),),
-        committed=HEAD,
+        committed=HEAD_AT,
         reviews=(),
     )
-    unmarked = pull(7, closes=(5,), committed=HEAD, reviews=())
+    unmarked = pull(7, closes=(5,), committed=HEAD_AT, reviews=())
     board, _ = build(FakeGitHub([held], [marked, unmarked]), review_heading=heading)
     assert [(p["pr"], p["reviewed"], p["review"]) for p in prs_of(board)] == [
         (6, True, "ready for Owner"),
@@ -1558,7 +1872,7 @@ def test_a_heading_is_matched_as_written_and_keeps_its_case() -> None:
     """
     heading = "Review Complete (v2)"
     marked = pull(
-        6, closes=(5,), comments=(("OWNER", f"## {heading}", AFTER),), reviews=(), committed=HEAD
+        6, closes=(5,), comments=(("OWNER", f"## {heading}", AFTER),), reviews=(), committed=HEAD_AT
     )
     assert _reviewed(marked, review_heading=heading) == (True, "review Complete (v2)")
     near = pull(
@@ -1566,7 +1880,7 @@ def test_a_heading_is_matched_as_written_and_keeps_its_case() -> None:
         closes=(5,),
         comments=(("OWNER", "## Review Complete v2", AFTER),),
         reviews=(),
-        committed=HEAD,
+        committed=HEAD_AT,
     )
     assert _reviewed(near, review_heading=heading) == (
         False,
@@ -1581,7 +1895,7 @@ def test_a_review_list_longer_than_a_page_is_read_to_its_end() -> None:
     list. Without it they are not read at all, since nothing uses them, so the
     same pull request costs no request for them.
     """
-    pr = pull(6, closes=(5,), committed=HEAD, reviews=())
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=())
     pr["reviews"] = conn([], more=True, cursor="r1")
     nested = {
         ("P6", "reviews", "r1"): conn(
@@ -1653,7 +1967,7 @@ def test_each_input_selects_only_the_fields_it_reads(heading: bool, settle: bool
     )
     assert head in fragment
     assert ("nodes{authorAssociation body createdAt}" in fragment) is heading
-    pr = pull(6, closes=(5,), committed=HEAD, reviews=())
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=())
     pr["comments"] = conn([], more=True, cursor="k1")
     pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(
         [], more=True, cursor="x1"
@@ -1671,7 +1985,7 @@ def test_each_input_selects_only_the_fields_it_reads(heading: bool, settle: bool
 
 def test_a_head_with_no_oid_matches_no_review() -> None:
     """Protects the head-commit check from two missing oids reading as equal."""
-    pr = pull(6, closes=(5,), committed=HEAD, reviews=(("OWNER", "## Review complete", AFTER),))
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=(("OWNER", "## Review complete", AFTER),))
     del pr["commits"]["nodes"][0]["commit"]["oid"]
     pr["reviews"]["nodes"][0]["commit"] = None
     assert _reviewed(pr, review_heading=HEADING) == (False, UNMARKED)
@@ -1714,14 +2028,14 @@ def test_the_command_line_passes_the_two_inputs_through(
         6,
         closes=(5,),
         comments=(("OWNER", "## Review complete", AFTER),),
-        committed=HEAD,
+        committed=HEAD_AT,
         reviews=(),
         contexts=(
             check("test", "SUCCESS"),
             check("board / build", None, "IN_PROGRESS", workflow=WORKFLOW_PATH),
         ),
     )
-    second = pull(7, closes=(8,), committed=HEAD, reviews=())
+    second = pull(7, closes=(8,), committed=HEAD_AT, reviews=())
     fake = FakeGitHub([issue(5), issue(8)], [pr, second])
     fake.requests, fake.retries, fake.cost = 1, 0, 1
     monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
@@ -1873,7 +2187,7 @@ def test_a_status_state_reads_the_same_under_a_settled_rollup() -> None:
         assert _rollup_of((status("s", state),), settled_rollup="true") == [["s", word]]
 
 
-GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator"
+REVIEW_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator"
 
 
 def review_github() -> FakeGitHub:
@@ -1909,60 +2223,60 @@ def review_github() -> FakeGitHub:
             closes=(10,),
             comments=((owner, "## Review complete\n\nAll lenses ran.", AFTER),),
             contexts=contexts,
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
         pull(
             21,
             closes=(11,),
             comments=((owner, "## Review complete", BEFORE),),
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
         pull(
             22,
             closes=(12,),
             comments=((owner, "## Review round 1, lenses running", AFTER),),
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
         pull(
             23,
             closes=(13,),
             comments=((owner, "## Review completeness check", AFTER),),
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
         pull(
             24,
             closes=(14,),
             comments=((owner, "  ## Review complete", AFTER),),
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
         pull(
             25,
             closes=(15,),
             comments=((owner, "### Review complete", AFTER),),
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
         pull(
             26,
             closes=(16,),
             comments=(("NONE", "## Review complete", AFTER),),
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
-        pull(27, closes=(17,), committed=HEAD, reviews=((owner, "## Review complete", AFTER),)),
+        pull(27, closes=(17,), committed=HEAD_AT, reviews=((owner, "## Review complete", AFTER),)),
         pull(
             28,
             closes=(18,),
             comments=((owner, "## Reviewer notes", AFTER),),
-            committed=HEAD,
+            committed=HEAD_AT,
             reviews=(),
         ),
-        pull(29, closes=(19,), committed=HEAD, reviews=()),
+        pull(29, closes=(19,), committed=HEAD_AT, reviews=()),
     ]
     # Pull request 29's comments and checks run past their first page, so the
     # query text recorded for a later page is compared too.
@@ -2024,8 +2338,10 @@ def test_a_board_with_no_input_is_the_one_7b86e288_wrote(
     """
     fake = review_github()
     written = write_board(bb, fake, tmp_path, monkeypatch)
-    assert written == (GOLDEN / "review.json").read_bytes()
-    assert fake.calls == json.loads((GOLDEN / "review_queries.json").read_text(encoding="utf-8"))
+    assert written == (REVIEW_GOLDEN / "review.json").read_bytes()
+    assert fake.calls == json.loads(
+        (REVIEW_GOLDEN / "review_queries.json").read_text(encoding="utf-8")
+    )
     fake = review_github()
     empty = write_board(bb, fake, tmp_path, monkeypatch, "--review-heading=", "--settled-rollup=")
     assert empty == written
@@ -2128,6 +2444,23 @@ def test_one_run_makes_a_request_per_page_and_no_more() -> None:
     assert len(gh.calls) == 6
     assert len(board["tracker"]["items"]) == 150
     assert len(prs_of(board)) == 115
+
+
+def test_every_top_level_query_asks_what_it_cost() -> None:
+    """Protects the job summary's GraphQL points row.
+
+    ``GhGraphql`` sums the ``rateLimit{cost}`` each answer carries, so a
+    top-level query that does not ask for it spends points the summary never
+    counts. That covers the three query constants and the batch that reads
+    pull requests by number, which the run builds as it goes.
+    """
+    for query in (bb.ISSUES_QUERY, bb.OPEN_PRS_QUERY, bb.HEAD_QUERY):
+        assert "rateLimit{cost}" in query
+    gh = FakeGitHub([issue(1, mentioned_by=(7,))], [pull(7, state="MERGED", body="Part of #1")])
+    _with(gh, default_branch_head="true")
+    top = [q for q in gh.calls if "node(id:$id)" not in q]
+    assert len(top) == 4
+    assert all("rateLimit{cost}" in q for q in top)
 
 
 def test_a_nested_list_longer_than_a_page_is_read_to_its_end() -> None:
@@ -2656,15 +2989,9 @@ def test_a_schedule_it_cannot_read_stops_the_run(tmp_path: Path, lines: str) -> 
 # ---- The page, on what the generator wrote ----
 
 
-def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
-    """Protects the join between the two halves.
-
-    A field the generator leaves out, or writes in a shape the page refuses,
-    blanks the board, and neither half's own tests would notice. So the page
-    runs on the generator's output, built from a tracker holding every case
-    above at once.
-    """
-    gh = FakeGitHub(
+def every_case() -> FakeGitHub:
+    """A tracker holding every case above at once."""
+    return FakeGitHub(
         [
             issue(10, mentioned_by=(20,)),
             issue(11, milestone=None, labels=()),
@@ -2688,7 +3015,17 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
             pull(23, closes=(13,), contexts=(check("test", "TIMED_OUT"),)),
         ],
     )
-    board, _ = build(gh)
+
+
+def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
+    """Protects the join between the two halves.
+
+    A field the generator leaves out, or writes in a shape the page refuses,
+    blanks the board, and neither half's own tests would notice. So the page
+    runs on the generator's output, built from a tracker holding every case
+    above at once.
+    """
+    board, _ = build(every_case())
     board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ids, _ = run_fetch_page(tmp_path, [served(board)])
     assert text(ids, "strip").startswith("7 open issues")
@@ -2700,6 +3037,33 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
     assert "review in progress" in text(ids, "flow")
     assert "plan complete, 3 passes" in text(ids, "flow")
     assert cards(ids, "board") == {14}
+
+
+def test_the_page_draws_the_three_lines_the_generator_writes(tmp_path: Path) -> None:
+    """Protects the join for the subtitle, the note and the default branch's head.
+
+    The generator writes the note as pieces and the head as seven characters,
+    and the page draws each only in the shape it checks for, so a change to
+    either half's shape would leave the line off the page with no test failing.
+    """
+    board, _ = bb.build(
+        every_case(),
+        REPO,
+        30,
+        NOW,
+        subtitle="the order of work on the lake",
+        note=f"Read [the design doc]({LINK_A}) first.",
+        default_branch_head="true",
+    )
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    assert ids["sub"]["html"] == "the order of work on the lake"
+    assert not ids["repnote"]["hidden"]
+    assert ids["repnote"]["html"] == (
+        f'Read <a href="{LINK_A}" target="_blank" rel="noopener">the design doc</a> first.'
+    )
+    assert text(ids, "foot").startswith("Built from GitHub against the default branch at 0a1b2c3 ")
+    assert '<span class="mono">0a1b2c3</span>' in ids["foot"]["html"]
 
 
 @pytest.mark.parametrize("listed", ["as written", "reversed"])
@@ -2852,6 +3216,9 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.title",
                 "inputs.icon",
                 "inputs.data-label",
+                "inputs.subtitle",
+                "inputs.note",
+                "inputs.default-branch-head",
                 "inputs.review-heading",
                 "inputs.settled-rollup",
                 "job.workflow_repository",
@@ -2871,27 +3238,28 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     field expanded into a step as critical, which the ruleset refuses to merge.
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
-    of which a stranger writes. ``inputs.title``, ``inputs.icon``,
-    ``inputs.data-label``, ``inputs.review-heading`` and
-    ``inputs.settled-rollup`` are written by the caller's own file. Each
-    reaches the shell only through an environment variable, and the icon also
-    names a file for the caller's checkout, which is an action's input rather
-    than shell.
+    of which a stranger writes. Every ``inputs.`` field is written by the
+    caller's own file. Each reaches the shell only through an environment
+    variable, and the icon also names a file for the caller's checkout, which
+    is an action's input rather than shell.
     """
     used = set(re.findall(r"\$\{\{\s*([^}]*?)\s*\}\}", path.read_text(encoding="utf-8")))
     assert used == allowed
     assert "TITLE: ${{ inputs.title }}" in _called()
     assert '--title="$TITLE"' in _called()
-    for name, env, flag in (
-        ("data-label", "DATA_LABEL", "--data-label"),
-        ("review-heading", "REVIEW_HEADING", "--review-heading"),
-        ("settled-rollup", "SETTLED_ROLLUP", "--settled-rollup"),
+    data = re.findall(r"^(.*)\$\{\{\s*inputs\.data-label\s*\}\}(.*)$", _called(), re.M)
+    assert [(before.strip(), after) for before, after in data] == [("DATA_LABEL:", "")]
+    assert '--data-label="$DATA_LABEL"' in _called()
+    for key, var in (
+        ("subtitle", "SUBTITLE"),
+        ("note", "NOTE"),
+        ("default-branch-head", "DEFAULT_BRANCH_HEAD"),
+        ("review-heading", "REVIEW_HEADING"),
+        ("settled-rollup", "SETTLED_ROLLUP"),
     ):
-        found = re.findall(
-            r"^(.*)\$\{\{\s*inputs\." + re.escape(name) + r"\s*\}\}(.*)$", _called(), re.M
-        )
-        assert [(before.strip(), after) for before, after in found] == [(f"{env}:", "")]
-        assert f'{flag}="${env}"' in _called()
+        uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
+        assert [(before.strip(), after) for before, after in uses] == [(f"{var}:", "")]
+        assert f'--{key}="${var}"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
@@ -2928,18 +3296,28 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     only what it needs. A required input, or a default naming a file or a
     label, would fail or change every such run. An empty title gives
     ``<name> build board``, an empty icon serves the template's, an empty
-    data label reads no ``data`` kind, an empty review heading keeps the
-    shared review rule, and an empty settled rollup keeps the rollup as GitHub
-    lists it. A switch such as ``settled-rollup`` is a string taking empty or
-    ``true``. The README and the l3a0 plugin's update-build-board skill name
-    the inputs by the keys declared here. The plugin release that names
-    ``review-heading`` and ``settled-rollup`` has not shipped, so only the
-    README's examples of those two are read here.
+    data label reads no ``data`` kind, an empty subtitle, note or
+    default-branch-head leaves the board as it was, an empty review heading
+    keeps the shared review rule, and an empty settled rollup keeps the rollup
+    as GitHub lists it. A switch such as ``settled-rollup`` is a string taking
+    empty or ``true``. The README and the l3a0 plugin's update-build-board
+    skill name the inputs by the keys declared here. The plugin release that
+    names ``review-heading`` and ``settled-rollup`` has not shipped, so only
+    the README's examples of those two are read here.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
     declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
-    assert list(declared) == ["title", "icon", "data-label", "review-heading", "settled-rollup"]
+    assert list(declared) == [
+        "title",
+        "icon",
+        "data-label",
+        "subtitle",
+        "note",
+        "default-branch-head",
+        "review-heading",
+        "settled-rollup",
+    ]
     for block in declared.values():
         assert "        type: string\n" in block
         assert '        default: ""' in block
@@ -2947,6 +3325,9 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
     assert f"    with:\n      data-label: {DATA_LABEL}\n" in readme
+    assert "    with:\n      subtitle: " in readme
+    assert "\n      note: >-\n" in readme
+    assert '\n      default-branch-head: "true"\n' in readme
     assert "    with:\n      review-heading: Review complete\n" in readme
     assert '    with:\n      settled-rollup: "true"\n' in readme
     page = _plugin("page.md")

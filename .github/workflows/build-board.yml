@@ -18,10 +18,22 @@ name: Build board
 # repository serve its own tab icon in place of the template's. A `data-label`
 # input, added by the pull request that closes l3a0/repo-template#40, names
 # the label that marks a card waiting on data, which the page then draws in a
-# fourth column. The `review-heading` and `settled-rollup` inputs, added by
-# the pull request that closes l3a0/repo-template#47, count a review only
-# when the owner posts the named heading after the head commit, and leave the
-# board's own checks out of a pull request's rollup.
+# fourth column. The pull request that closes l3a0/repo-template#44 added
+# three inputs for lines a repository's own page carried.
+#
+# 1. `subtitle` replaces the line under the heading.
+# 2. `note` adds a paragraph below the strip, whose only markup is
+#    `[words](https://...)`.
+# 3. `default-branch-head`, set to `true`, names the commit the default branch
+#    stands at in the footer and the "Live updates stopped" banner.
+#
+# The `review-heading` and `settled-rollup` inputs, added by the pull request
+# that closes l3a0/repo-template#47, count a review only when the owner posts
+# the named heading after the head commit, and leave the board's own checks
+# out of a pull request's rollup.
+#
+# Every input is a string that defaults to empty, and an empty one leaves the
+# board as it was.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -68,6 +80,27 @@ on:
           The label marking an issue that waits on data to be bought or
           captured, such as blocked-on-data. Its cards draw in a "Waiting on
           data" column. Empty reads no such label.
+        type: string
+        default: ""
+      subtitle:
+        description: >-
+          The line under the page's heading. Empty gives "what is in flight,
+          and what to take next".
+        type: string
+        default: ""
+      note:
+        description: >-
+          One paragraph of the repository's own, drawn under the strip. Plain
+          text, where [words](https://...) is the only markup, and runs of
+          whitespace read as one space. A link to anything but an https://
+          address fails the run. Empty draws no note.
+        type: string
+        default: ""
+      default-branch-head:
+        description: >-
+          true names the commit the default branch stands at in the footer
+          and the "Live updates stopped" banner, for one more request a run. Empty names none. Any other value fails
+          the run.
         type: string
         default: ""
       review-heading:
@@ -137,6 +170,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ inputs.title }}
           DATA_LABEL: ${{ inputs.data-label }}
+          SUBTITLE: ${{ inputs.subtitle }}
+          NOTE: ${{ inputs.note }}
+          DEFAULT_BRANCH_HEAD: ${{ inputs.default-branch-head }}
           REVIEW_HEADING: ${{ inputs.review-heading }}
           SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
         run: >-
@@ -145,6 +181,9 @@ jobs:
           --workflow caller/.github/workflows/board.yml
           --title="$TITLE"
           --data-label="$DATA_LABEL"
+          --subtitle="$SUBTITLE"
+          --note="$NOTE"
+          --default-branch-head="$DEFAULT_BRANCH_HEAD"
           --review-heading="$REVIEW_HEADING"
           --settled-rollup="$SETTLED_ROLLUP"
           --out _site

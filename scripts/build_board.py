@@ -18,17 +18,22 @@ repository, and comments citing that repository's issues were restated as the
 rules they record. The pull request that closes l3a0/repo-template#40 brought
 the kind back behind ``--data-label``, which names the label a repository
 marks such issues with, so a repository that never names one reads no ``data``
-kind at all. The pull request that closes l3a0/repo-template#47 ported
-l3a0/marketlake's review rule and its rollup from
-``.claude/skills/sync-prune-next/build_board.py`` at commit ``cc9d3432``,
-behind ``--review-heading`` and ``--settled-rollup``, so a repository that
-names neither reads pull requests as before.
+kind at all. The pull request that closes l3a0/repo-template#44 added
+``--subtitle``, ``--note`` and ``--default-branch-head``, for the lines a
+repository's own page carried under its title and in its footer. The pull
+request that closes l3a0/repo-template#47 ported l3a0/marketlake's review rule
+and its rollup from ``.claude/skills/sync-prune-next/build_board.py`` at
+commit ``cc9d3432``, behind ``--review-heading`` and ``--settled-rollup``, so
+a repository that names neither reads pull requests as before.
 
 It writes the six sections the page reads.
 
 1. ``state``, with the repository, the board's title, the open issue count, the
    time GitHub was read, the longest gap between two scheduled runs, and the
-   age after which the page calls the board stale.
+   age after which the page calls the board stale. Three more fields appear
+   only when the caller sets the matching input: ``subtitle`` from
+   ``--subtitle``, ``note`` from ``--note``, and ``main``, the default
+   branch's head, from ``--default-branch-head``.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
    from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
    native "blocked by" links, and ``after`` from a ``Board after:`` line in the
@@ -313,6 +318,55 @@ def kind_labels(data_label: str) -> tuple[tuple[str, str], ...]:
     return ((data_label, "data"), *KIND_LABELS)
 
 
+# A link in a caller's note, written `[words](address)`, which is the note's
+# only markup. The address is read up to the first closing parenthesis, so one
+# holding a space or a quote is still read as a link and refused, rather than
+# left as text that looks like a link.
+NOTE_LINK = re.compile(r"\[([^\[\]]+)\]\(([^)]*)\)")
+# The only address a note may link to. The page checks the same pattern again
+# before drawing a link, so neither half alone decides what lands in an href.
+NOTE_HREF = re.compile(r'https://[^\s"<>]+')
+
+
+def note_segments(note: str) -> list[dict] | None:
+    """A caller's note as the pieces the page draws, or None for no note.
+
+    The note is one paragraph, so every run of whitespace becomes one space and
+    a folded YAML block reads as written. Each piece is ``{"text": ...}``, or
+    ``{"text": ..., "href": ...}`` for a link. The parse runs here rather than
+    in the page, so the page only escapes text and never runs a pattern over
+    text it has already escaped. A link to anything but an ``https://`` address
+    is refused, because the page would draw it as a link in every reader's
+    browser.
+    """
+    note = " ".join(note.split())
+    if not note:
+        return None
+    pieces: list[dict] = []
+    start = 0
+    for link in NOTE_LINK.finditer(note):
+        words, href = link.groups()
+        if not NOTE_HREF.fullmatch(href):
+            raise BoardError(f"the note links to {href!r}, which is not an https:// address")
+        if link.start() > start:
+            pieces.append({"text": note[start : link.start()]})
+        pieces.append({"text": words, "href": href})
+        start = link.end()
+    if start < len(note):
+        pieces.append({"text": note[start:]})
+    return pieces
+
+
+def wants_head(default_branch_head: str) -> bool:
+    """Whether the caller asked for the default branch's head, which is empty or ``true``."""
+    if default_branch_head not in ("", "true"):
+        raise BoardError(
+            f"default-branch-head is {default_branch_head!r}, and it takes only an empty value "
+            "or true"
+        )
+    return default_branch_head == "true"
+
+
 # GitHub reports a check as an uppercase enum, and the page knows five
 # lowercase words, of which this map writes four. Passed through as they come,
 # every state reads as green, because the page counted only `failure`,
@@ -425,6 +479,16 @@ query($owner:String!, $name:String!, $after:String) {{
 
 
 OPEN_PRS_QUERY = open_prs_query()
+
+# The commit the default branch stands at, read only for a caller that sets
+# `default-branch-head`. It is a request of its own rather than a field of
+# ISSUES_QUERY, so every other caller sends the query it sent before.
+HEAD_QUERY = """
+query($owner:String!, $name:String!) {
+  rateLimit{cost}
+  repository(owner:$owner, name:$name) { defaultBranchRef{target{oid}} }
+}
+"""
 
 # Pull requests fetched by number, for the merged and closed ones an open issue
 # still names. Fifty a query keeps one response small.
@@ -619,6 +683,21 @@ def _top_pages(gql: Gql, query: str, owner: str, name: str, field: str) -> list[
                 file=sys.stderr,
             )
     raise BoardError(f"read {len(nodes)} {field} against a total of {total} on {LIST_READS} reads")
+
+
+def head_commit(gql: Gql, owner: str, name: str) -> str:
+    """The first seven characters of the commit the default branch stands at.
+
+    A repository with no default branch, or one GitHub answers without its
+    head, stops the run, because a footer naming no commit would read as a
+    board built against nothing.
+    """
+    data = gql(HEAD_QUERY, {"owner": owner, "name": name})
+    ref = (data.get("repository") or {}).get("defaultBranchRef") or {}
+    oid = (ref.get("target") or {}).get("oid")
+    if not isinstance(oid, str) or not re.fullmatch(r"[0-9a-f]{7,}", oid):
+        raise BoardError(f"{owner}/{name} has no default branch head to name: {oid!r}")
+    return oid[:7]
 
 
 def card_kinds(
@@ -995,6 +1074,9 @@ def build(
     now: datetime,
     title: str = "",
     data_label: str = "",
+    subtitle: str = "",
+    note: str = "",
+    default_branch_head: str = "",
     *,
     review_heading: str = "",
     settled_rollup: str = "",
@@ -1007,14 +1089,25 @@ def build(
     into the board too, because the page builds every issue and pull request
     link from it and names no repository of its own. ``data_label`` is the
     label that marks a card waiting on data, and an empty one reads no such
-    kind. ``review_heading`` names the heading that closes a review, and
+    kind.
+
+    ``subtitle`` replaces the line under the page's title, ``note`` is a
+    paragraph of the repository's own that ``note_segments`` parses, and
+    ``default_branch_head`` set to ``true`` reads the default branch's head
+    for the footer, at the price of one more request. Each lands in ``state``
+    only when it is set, so a caller setting none gets the board it got
+    before. ``review_heading`` names the heading that closes a review, and
     ``settled_rollup`` set to ``true`` settles the rollup, as ``pr_items``
-    says. An empty one keeps the rule from before either existed. All three
-    are checked before anything is read from GitHub.
+    says. An empty one keeps the rule from before either existed. The data
+    label, the note, ``default_branch_head``, ``review_heading`` and
+    ``settled_rollup`` are checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
+    pieces = note_segments(note)
+    head = wants_head(default_branch_head)
     fields = pr_fields(review_rule(review_heading) is not None, settled(settled_rollup))
     owner, name = repo.split("/", 1)
+    main = head_commit(gql, owner, name) if head else None
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
     open_issues = {i["number"] for i in issues}
 
@@ -1073,17 +1166,24 @@ def build(
         prs += items
     prs.sort(key=lambda p: (p["issue"], p["pr"]))
 
+    state = {
+        "schema": SCHEMA,
+        "repo": repo,
+        "title": title or f"{name} build board",
+        "updatedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "issues": {"open": len(issues)},
+        "source": "github",
+        "longestGapMinutes": longest_gap,
+        "staleAfterMinutes": stale_after_minutes(longest_gap),
+    }
+    if subtitle:
+        state["subtitle"] = subtitle
+    if pieces:
+        state["note"] = pieces
+    if main:
+        state["main"] = main
     board = {
-        "state": {
-            "schema": SCHEMA,
-            "repo": repo,
-            "title": title or f"{name} build board",
-            "updatedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "issues": {"open": len(issues)},
-            "source": "github",
-            "longestGapMinutes": longest_gap,
-            "staleAfterMinutes": stale_after_minutes(longest_gap),
-        },
+        "state": state,
         "prs": {"schema": SCHEMA, "items": prs},
         "working": {"schema": SCHEMA, "items": working},
         "planned": {"schema": SCHEMA, "items": planned},
@@ -1133,6 +1233,9 @@ def cmd_build(args: argparse.Namespace) -> None:
         now,
         args.title,
         args.data_label,
+        subtitle=args.subtitle,
+        note=args.note,
+        default_branch_head=args.default_branch_head,
         review_heading=args.review_heading,
         settled_rollup=args.settled_rollup,
     )
@@ -1263,6 +1366,17 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--title", default="", help="the page's heading, <name> build board if empty")
     b.add_argument(
         "--data-label", default="", help="the label marking a card waiting on data, none if empty"
+    )
+    b.add_argument(
+        "--subtitle", default="", help="the line under the heading, the page's own if empty"
+    )
+    b.add_argument(
+        "--note", default="", help="a paragraph whose only markup is [words](https://...)"
+    )
+    b.add_argument(
+        "--default-branch-head",
+        default="",
+        help="true to name the default branch's head in the footer, nothing if empty",
     )
     b.add_argument(
         "--review-heading",

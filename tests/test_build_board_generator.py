@@ -149,12 +149,14 @@ def issue(
     blocked_by: tuple[tuple, ...] = (),
     sub_issues: int = 0,
     comments: tuple[tuple[str, str], ...] = (),
+    association: str = "OWNER",
 ) -> dict:
     return {
         "id": f"I{n}",
         "number": n,
         "title": title or f"Issue {n}",
         "body": body,
+        "authorAssociation": association,
         "milestone": {"title": milestone} if milestone is not None else None,
         "labels": conn([{"name": x} for x in labels]),
         "blockedBy": conn([blocker(*b) for b in blocked_by]),
@@ -941,6 +943,395 @@ def test_labels_that_disagree_take_one_value_and_are_reported() -> None:
     ]
 
 
+# ---- Markers the board does not use ----
+
+
+def summary_of(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: FakeGitHub, *args: str
+) -> str:
+    """The job summary a run writes, read through ``main`` as the workflow runs it."""
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out), *args]
+    assert bb.main(argv) == 0
+    return summary.read_text()
+
+
+def summary_row(text: str, name: str) -> str:
+    """The value of the summary row ``name``."""
+    rows = [line for line in text.splitlines() if line.startswith(f"| {name} | ")]
+    assert len(rows) == 1, name
+    return rows[0].removeprefix(f"| {name} | ").removesuffix(" |")
+
+
+PASS = "## Plan audit, pass 1\n\nFound nothing.\n"
+VERDICT_LINE = "Board verdict: build after 2 passes"
+
+
+@pytest.mark.parametrize(
+    ("near_miss", "kind"),
+    [
+        ("Board order: first", "Board order"),
+        ("Board order 3", "Board order"),
+        ("**Board order**: 3", "Board order"),
+        ("- Board Order: 3", "Board order"),
+        ("Board order: 3\r", "Board order"),
+        ("Board after: soon", "Board after"),
+        ("Board after: 3", "Board after"),
+        ("Board after", "Board after"),
+        ("Board verdict: build after 3 passes", "Board verdict"),
+    ],
+)
+def test_a_near_miss_in_the_owners_body_is_listed_as_unread(near_miss: str, kind: str) -> None:
+    """Protects a mistyped body marker from vanishing with nothing said.
+
+    A verdict counts only in a comment, so a verdict line in a body is unread
+    too. The well-formed line beside the near miss still reaches the board.
+    """
+    body = f"{near_miss}\nBoard order: 2\nBoard after: #2\n"
+    gh = FakeGitHub([issue(1, labels=("band:1",), body=body), issue(2)], [])
+    board, report = build(gh)
+    assert report["unread"] == [(1, kind)]
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 2}]
+    assert card(board, 1)["after"] == [2]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Board orders form one sequence.\nBoard after the merge, rebase.\n",
+        "See Board order: 3 in the skill.\n",
+        "```\nBoard order: first\nBoard verdict: build after 3 passes\n```\n",
+        "Board order: 2\nBoard after: #2\n",
+    ],
+)
+def test_prose_fences_and_markers_read_are_not_listed_as_unread(body: str) -> None:
+    """Protects the summary from listing prose about the markers on every run."""
+    gh = FakeGitHub([issue(1, labels=("band:1",), body=body), issue(2)], [])
+    _, report = build(gh)
+    assert report["unread"] == []
+
+
+def test_a_strangers_body_is_read_as_before_and_its_near_misses_are_not_listed() -> None:
+    """Protects the summary from a stranger filling it, and the board from changing.
+
+    Anyone can open an issue on a public repository. Its order and after lines
+    still count, as they did before the summary listed anything.
+    """
+    body = "Board order: first\nBoard order: 4\nBoard after: soon\nBoard after: #2\n"
+    gh = FakeGitHub([issue(1, labels=("band:1",), body=body, association="NONE"), issue(2)], [])
+    board, report = build(gh)
+    assert report["unread"] == []
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
+    assert card(board, 1)["after"] == [2]
+
+
+def test_an_unbanded_cards_near_miss_is_listed_as_unread() -> None:
+    """Protects a near miss on a card the priority order does not draw."""
+    _, report = build(FakeGitHub([issue(1, body="Board order: first\n")], []))
+    assert report["unread"] == [(1, "Board order")]
+
+
+@pytest.mark.parametrize(
+    ("comment", "kinds"),
+    [
+        ("Board order: 3", ["Board order"]),
+        ("Board after: #2", ["Board after"]),
+        ("Board verdict: ready after 5 passes", ["Board verdict"]),
+        ("**Board verdict**: build after 5 passes", ["Board verdict"]),
+        ("Board verdict: build after 5 passes\r", ["Board verdict"]),
+        ("Board verdict: decide after", ["Board verdict"]),
+        ("The line `Board verdict: build after 5 passes` goes here.", []),
+        ("```\nBoard verdict: ready after 5 passes\n```", []),
+    ],
+)
+def test_a_near_miss_in_an_owners_comment_is_listed_as_unread(
+    comment: str, kinds: list[str]
+) -> None:
+    """Protects a mistyped verdict from vanishing with nothing said.
+
+    An order or after line counts only in a body, so one in a comment is
+    unread too. The well-formed verdict beside the near miss still plans the
+    card.
+    """
+    comments = (("OWNER", f"{comment}\n{VERDICT_LINE}\n"),)
+    board, report = build(FakeGitHub([issue(1, comments=comments), issue(2)], []))
+    assert report["unread"] == [(1, kind) for kind in kinds]
+    assert board["planned"]["items"] == [{"n": 1, "passes": 2, "ready": "build"}]
+
+
+def test_a_strangers_near_miss_in_a_comment_is_not_listed() -> None:
+    """Protects the summary from a stranger filling it."""
+    comments = (("NONE", "Board order: 3\nBoard verdict: ready after 5 passes\n"),)
+    _, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["unread"] == []
+    assert report["refused"] == []
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "MEMBER"])
+def test_a_strangers_verdict_is_listed_as_refused(association: str) -> None:
+    """Protects a verdict the board refuses from vanishing with nothing said.
+
+    The verdict still plans nothing, because anyone can comment on a public
+    repository.
+    """
+    comments = ((association, VERDICT_LINE),)
+    board, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["refused"] == [(1, "Board verdict, not the owner's")]
+    assert report["unread"] == []
+    assert board["planned"]["items"] == []
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        ("OWNER", VERDICT_LINE),
+        ("NONE", f"```\n{VERDICT_LINE}\n```"),
+        ("NONE", f"Quoting `{VERDICT_LINE}` here."),
+    ],
+)
+def test_an_owners_verdict_or_a_quoted_one_is_not_refused(comment: tuple[str, str]) -> None:
+    """Protects the refused row from listing what was never a stranger's verdict."""
+    _, report = build(FakeGitHub([issue(1, comments=(comment,))], []))
+    assert report["refused"] == []
+
+
+@pytest.mark.parametrize(
+    "comments",
+    [
+        (("OWNER", PASS),),
+        (("OWNER", VERDICT_LINE), ("OWNER", PASS)),
+        (("OWNER", f"{VERDICT_LINE}\n\n{PASS}"),),
+        (("OWNER", PASS), ("OWNER", "## Plan audit, pass 2\n"), ("NONE", VERDICT_LINE)),
+    ],
+)
+def test_a_pass_after_the_newest_verdict_is_a_plan_with_no_verdict(
+    comments: tuple[tuple[str, str], ...],
+) -> None:
+    """Protects a finished decompose loop that never wrote its verdict.
+
+    Its card waits for a builder that the board never sends, and the owner
+    learns of it only from this row.
+    """
+    _, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["no_verdict"] == [1]
+
+
+@pytest.mark.parametrize(
+    "comments",
+    [
+        (),
+        (("OWNER", f"{PASS}\n{VERDICT_LINE}\n"),),
+        (("OWNER", PASS), ("OWNER", VERDICT_LINE)),
+        (("NONE", PASS),),
+        (("OWNER", f"```\n{PASS}```\n"),),
+        (("OWNER", f"The heading `{PASS.splitlines()[0]}` opens a pass."),),
+        (("OWNER", "## Plan audit, pass N\n"),),
+    ],
+)
+def test_a_verdict_after_the_newest_pass_or_no_pass_is_not_listed(
+    comments: tuple[tuple[str, str], ...],
+) -> None:
+    """Protects the row from listing a plan that finished properly.
+
+    An exit comment headed as the last pass and ending with the verdict is the
+    usual shape, and the verdict comes after the heading in it.
+    """
+    _, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["no_verdict"] == []
+
+
+def test_a_card_that_owes_no_verdict_is_not_listed() -> None:
+    """Protects the row from cards whose missing verdict is no work for the owner.
+
+    A parent builds nothing, a deferred card is one nobody should take, a
+    decompose loop still holds its card, and an open pull request is carrying
+    the plan out. A data label takes the kind ahead of ``deferred``, so the
+    label is what is tested. A merged pull request carries nothing out.
+    """
+    comments = (("OWNER", PASS),)
+    gh = FakeGitHub(
+        [
+            issue(1, comments=comments, sub_issues=1),
+            issue(2, comments=comments, labels=("deferred",)),
+            issue(3, comments=comments, labels=("deferred", DATA_LABEL)),
+            issue(4, comments=comments, labels=("working:decompose",)),
+            issue(5, comments=comments),
+            issue(6, comments=comments, mentioned_by=(21,)),
+            issue(7, comments=comments, labels=("working:build",)),
+        ],
+        [pull(20, closes=(5,)), pull(21, state="MERGED", body="Part of #6")],
+    )
+    board, report = build(gh, DATA_LABEL)
+    assert card(board, 3)["kind"] == "data"
+    assert report["no_verdict"] == [6, 7]
+
+
+def test_equal_order_lines_are_a_conflict() -> None:
+    """Protects a leftover order line, whose edit would move nothing, from going unseen."""
+    gh = FakeGitHub([issue(1, labels=("band:1",), body="Board order: 4\nBoard order: 4\n")], [])
+    board, report = build(gh)
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
+    assert report["label_conflicts"] == ["#1 carries 2 order lines, read as 4"]
+    single = FakeGitHub([issue(1, labels=("band:1",), body="Board order: 4\n")], [])
+    assert build(single)[1]["label_conflicts"] == []
+
+
+# Rows of the job summary at l3a0/repo-template commit cf2959a3, before the
+# four marker rows. The l3a0 plugin's sync-prune-next skill reads the four new
+# rows by name, so a change to a name or to the order fails here.
+SUMMARY_ROWS_BEFORE = [
+    "GitHub read at",
+    "GraphQL requests",
+    "GraphQL requests tried again after a server or connection error",
+    "GraphQL points",
+    "Open issues",
+    "Open pull requests",
+    "Merged or closed pull requests read",
+    "Pull request items written",
+    "Open pull requests naming no open issue",
+    "Check states mapped to neither way",
+    "Labels or lines that disagree",
+    "Data label",
+]
+MARKER_ROWS = [
+    "Marker lines not read",
+    "Marker lines refused",
+    "Markers dropped",
+    "Finished plans with no verdict after them",
+]
+
+
+def test_the_job_summary_adds_the_four_marker_rows_after_the_disagreements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the rows a status round reads by name, and every row before them."""
+    text = summary_of(monkeypatch, tmp_path, FakeGitHub([issue(1)], []))
+    rows = [line.split(" | ")[0].removeprefix("| ") for line in text.splitlines()[4:]]
+    at = SUMMARY_ROWS_BEFORE.index("Labels or lines that disagree") + 1
+    assert rows == SUMMARY_ROWS_BEFORE[:at] + MARKER_ROWS + SUMMARY_ROWS_BEFORE[at:]
+    for name in MARKER_ROWS:
+        assert summary_row(text, name) == "none"
+
+
+def test_the_job_summary_lists_each_marker_it_did_not_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the one place a mistyped or misplaced marker surfaces."""
+    gh = FakeGitHub(
+        [
+            issue(2, body="Board after: soon\n"),
+            issue(1, body="Board order: first\n", comments=(("NONE", VERDICT_LINE),)),
+            issue(3, comments=(("OWNER", PASS),)),
+            issue(4, comments=(("OWNER", PASS),)),
+        ],
+        [],
+    )
+    text = summary_of(monkeypatch, tmp_path, gh)
+    assert summary_row(text, "Marker lines not read") == "#1 Board order; #2 Board after"
+    assert summary_row(text, "Marker lines refused") == "#1 Board verdict, not the owner's"
+    assert summary_row(text, "Markers dropped") == "none"
+    assert summary_row(text, "Finished plans with no verdict after them") == "#3, #4"
+
+
+def test_the_job_summary_lists_a_dropped_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the dropped row, which no read fills yet, from printing nothing.
+
+    l3a0/repo-template#46 adds the first drops, so the row is filled here
+    through the report rather than through a read.
+    """
+    real = bb.build
+
+    def build_with_drops(*args: object, **kwargs: object) -> tuple[dict, dict]:
+        board, report = real(*args, **kwargs)
+        report["dropped"] = [(1, "Board order on a parent"), (2, "Board verdict on a parent")]
+        return board, report
+
+    monkeypatch.setattr(bb, "build", build_with_drops)
+    text = summary_of(monkeypatch, tmp_path, FakeGitHub([issue(1), issue(2)], []))
+    assert summary_row(text, "Markers dropped") == (
+        "#1 Board order on a parent; #2 Board verdict on a parent"
+    )
+
+
+def marker_tracker() -> FakeGitHub:
+    """A tracker holding every marker shape the summary rows read, at once."""
+    passed = (("OWNER", PASS),)
+    return FakeGitHub(
+        [
+            issue(
+                1,
+                labels=("band:1",),
+                body="Board order: first\nBoard order: 2\nBoard after: soon\nBoard after: #2\n"
+                "Board verdict: build after 3 passes\n",
+            ),
+            issue(2, labels=("band:2",), body="Board order: 5\r\nBoard after: #1\r\n"),
+            issue(
+                3,
+                labels=("band:1",),
+                body="Board order: 7\nBoard order: seven\nBoard after: #1\n",
+                association="NONE",
+            ),
+            issue(4, comments=(("NONE", VERDICT_LINE), ("OWNER", PASS))),
+            issue(5, labels=("band:1",), comments=(("OWNER", f"{PASS}\n{VERDICT_LINE}\n"),)),
+            issue(6, labels=("band:1",), body="Board order: 4\nBoard order: 4\n"),
+            issue(7, comments=(("OWNER", "Board order: 3\n**Board verdict**: build after 2\n"),)),
+            issue(
+                8,
+                body="```\nBoard order: x\n```\n",
+                comments=(("OWNER", f"```\n{PASS}```\n"),),
+            ),
+            issue(9, comments=passed, sub_issues=1),
+            issue(10, comments=passed, labels=("deferred",)),
+            issue(11, comments=passed, labels=("working:decompose",)),
+            issue(12, comments=passed),
+            issue(13, comments=passed, mentioned_by=(31,)),
+            issue(14, comments=(("OWNER", VERDICT_LINE), ("OWNER", PASS))),
+            issue(15, comments=passed, labels=("deferred", DATA_LABEL)),
+        ],
+        [pull(30, closes=(12,)), pull(31, state="MERGED", body="Part of #13")],
+    )
+
+
+def test_every_marker_shape_reaches_its_row() -> None:
+    """Protects the four rows on a tracker holding all their cases at once."""
+    _, report = build(marker_tracker(), DATA_LABEL)
+    assert report["unread"] == [
+        (1, "Board after"),
+        (1, "Board order"),
+        (1, "Board verdict"),
+        (2, "Board order"),
+        (7, "Board order"),
+        (7, "Board verdict"),
+    ]
+    assert report["refused"] == [(4, "Board verdict, not the owner's")]
+    assert report["dropped"] == []
+    assert report["no_verdict"] == [4, 13, 14]
+    assert "#6 carries 2 order lines, read as 4" in report["label_conflicts"]
+
+
+GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
+
+
+def test_the_marker_rows_change_nothing_in_the_board() -> None:
+    """Protects every caller that sets no input from a board that moves.
+
+    The rows list what the board did not use, so the board itself has to stay
+    as it was. ``GOLDEN`` is the ``board.json`` that the generator at
+    l3a0/repo-template commit cf2959a3 wrote for ``marker_tracker``, and this
+    run has to write the same bytes.
+    """
+    board, _ = build(marker_tracker(), DATA_LABEL)
+    written = json.dumps(board, ensure_ascii=False, separators=(",", ":"))
+    assert written == GOLDEN.read_text(encoding="utf-8").removesuffix("\n")
+
+
 def test_an_issues_comments_and_blockers_are_read_to_their_end() -> None:
     """Protects a verdict or a blocker past the first hundred.
 
@@ -1636,8 +2027,12 @@ def test_the_skill_states_every_marker_the_generator_reads() -> None:
     The data label is the caller's, so the skill names the input and the label
     its example passes.
     """
-    spans = [s.replace("#N", "#1") for s in re.findall(r"`([^`\n]+)`", _skill())]
-    for marker in (bb.VERDICT, bb.ORDER, bb.AFTER, bb.REVIEW, bb.PART_OF, bb.BAND):
+    spans = [
+        s.replace("#N", "#1").replace("pass N", "pass 1")
+        for s in re.findall(r"`([^`\n]+)`", _skill())
+    ]
+    markers = (bb.VERDICT, bb.ORDER, bb.AFTER, bb.REVIEW, bb.PART_OF, bb.BAND, bb.PASS_HEADING)
+    for marker in markers:
         assert any(marker.search(s) for s in spans), marker.pattern
     for label, _ in bb.kind_labels(DATA_LABEL):
         assert label in spans, label

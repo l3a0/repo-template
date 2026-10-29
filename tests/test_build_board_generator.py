@@ -1306,6 +1306,8 @@ def test_an_order_on_a_card_with_no_band_is_listed_as_dropped() -> None:
         ("Board after: #5, #2\n", False),
         ("Board after: #2\n", False),
         ("Board after: #7\n", False),
+        ("Board after: octo-org/octo-repo#5\n", True),
+        ("Board after: other/repo#3 #5\n", False),
     ],
 )
 def test_an_after_line_naming_only_its_own_card_is_listed_as_dropped(
@@ -1314,7 +1316,9 @@ def test_an_after_line_naming_only_its_own_card_is_listed_as_dropped(
     """Protects an after line that can never hold its card from vanishing unseen.
 
     A line naming another issue too still sets something, and a line naming a
-    closed issue is a blocker that has finished, so neither is listed.
+    closed issue is a blocker that has finished, so neither is listed. A line
+    whose other reference was refused is listed as refused rather than
+    dropped, because it named something besides the card.
     """
     board, report = build(FakeGitHub([issue(2), issue(5, body=body)], []))
     assert report["dropped"] == ([(5, "Board after, naming itself")] if dropped else [])

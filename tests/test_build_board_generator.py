@@ -1005,6 +1005,11 @@ def test_the_issues_query_reads_each_issues_author() -> None:
         ("1) Board order: 3", "Board order"),
         ("+ Board order: 3", "Board order"),
         ("Board  order: 3", "Board order"),
+        ("10. Board order: first", "Board order"),
+        ("Board order #3", "Board order"),
+        ("**Board after**", "Board after"),
+        ("Board after   ", "Board after"),
+        ("Board after: #2x", "Board after"),
         ("Board verd\u0130ct: build after 3 passes", "Board verdict"),
         ("Board verd\u0131ct: build after 3 passes", "Board verdict"),
     ],
@@ -1039,18 +1044,30 @@ def test_prose_fences_and_markers_read_are_not_listed_as_unread(body: str) -> No
     assert report["unread"] == []
 
 
-def test_a_strangers_body_is_read_as_before_and_its_near_misses_are_not_listed() -> None:
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "MEMBER"])
+def test_a_strangers_body_is_read_as_before_and_its_near_misses_are_not_listed(
+    association: str,
+) -> None:
     """Protects the summary from a stranger filling it, and the board from changing.
 
     Anyone can open an issue on a public repository. Its order and after lines
     still count, as they did before the summary listed anything.
     """
     body = "Board order: first\nBoard order: 4\nBoard after: soon\nBoard after: #2\n"
-    gh = FakeGitHub([issue(1, labels=("band:1",), body=body, association="NONE"), issue(2)], [])
+    gh = FakeGitHub(
+        [issue(1, labels=("band:1",), body=body, association=association), issue(2)], []
+    )
     board, report = build(gh)
     assert report["unread"] == []
     assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
     assert card(board, 1)["after"] == [2]
+
+
+def test_every_after_line_in_a_body_counts() -> None:
+    """Protects the second of two after lines from being read over by the first."""
+    gh = FakeGitHub([issue(1, body="Board after: #2\nBoard after: #3\n"), issue(2), issue(3)], [])
+    board, _ = build(gh)
+    assert card(board, 1)["after"] == [2, 3]
 
 
 def test_an_unbanded_cards_near_miss_is_listed_as_unread() -> None:
@@ -1097,6 +1114,16 @@ def test_a_strangers_near_miss_in_a_comment_is_not_listed() -> None:
     assert report["refused"] == []
 
 
+def test_refused_verdicts_come_out_in_issue_order() -> None:
+    """Protects the refused row from listing issues in the order a set holds them.
+
+    Twelve issues are enough for a set's order to differ from the sorted one.
+    """
+    issues = [issue(n, comments=(("NONE", VERDICT_LINE),)) for n in range(1, 13)]
+    _, report = build(FakeGitHub(issues, []))
+    assert report["refused"] == [(n, "Board verdict, not the owner's") for n in range(1, 13)]
+
+
 @pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "MEMBER"])
 def test_a_strangers_verdict_is_listed_as_refused(association: str) -> None:
     """Protects a verdict the board refuses from vanishing with nothing said.
@@ -1132,6 +1159,9 @@ def test_an_owners_verdict_or_a_quoted_one_is_not_refused(comment: tuple[str, st
         (("OWNER", VERDICT_LINE), ("OWNER", PASS)),
         (("OWNER", f"{VERDICT_LINE}\n\n{PASS}"),),
         (("OWNER", PASS), ("OWNER", "## Plan audit, pass 2\n"), ("NONE", VERDICT_LINE)),
+        (("OWNER", f"{VERDICT_LINE}\n{PASS}"),),
+        (("OWNER", f"{PASS}\n{VERDICT_LINE}\n## Plan audit, pass 2\n"),),
+        (("OWNER", VERDICT_LINE), ("OWNER", "   ## Plan audit, pass 1\n")),
     ],
 )
 def test_a_pass_after_the_newest_verdict_is_a_plan_with_no_verdict(
@@ -1176,7 +1206,8 @@ def test_a_card_that_owes_no_verdict_is_not_listed() -> None:
 
     A parent builds nothing, a deferred card is one nobody should take, a
     decompose loop still holds its card, and an open pull request is carrying
-    the plan out. A data label takes the kind ahead of ``deferred``, so the
+    the plan out, whether it closes the issue or names it with ``Part of``. A
+    data label takes the kind ahead of ``deferred``, so the
     label is what is tested. A merged pull request carries nothing out.
     """
     comments = (("OWNER", PASS),)
@@ -1189,8 +1220,13 @@ def test_a_card_that_owes_no_verdict_is_not_listed() -> None:
             issue(5, comments=comments),
             issue(6, comments=comments, mentioned_by=(21,)),
             issue(7, comments=comments, labels=("working:build",)),
+            issue(8, comments=comments),
         ],
-        [pull(20, closes=(5,)), pull(21, state="MERGED", body="Part of #6")],
+        [
+            pull(20, closes=(5,)),
+            pull(21, state="MERGED", body="Part of #6"),
+            pull(22, body="Part of #8"),
+        ],
     )
     board, report = build(gh, DATA_LABEL)
     assert card(board, 3)["kind"] == "data"

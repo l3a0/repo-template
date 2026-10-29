@@ -3823,6 +3823,94 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
     assert cards(ids, "board") == {14}
 
 
+@pytest.mark.parametrize("listed", ["as written", "reversed"])
+def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(
+    tmp_path: Path, listed: str
+) -> None:
+    """Protects a card at ``Board order: 0`` from sorting as if it had none.
+
+    The generator writes ``order: 0`` for that line, and the page gives a card
+    with no order 50. A fallback that treats 0 as missing puts the card at 0
+    behind the one with no order. Four cards in one band, at 51, with no order,
+    at 0 and at 49, also fix the default at exactly 50. The cards at 49 and 51
+    sit one either side of it, so a default of 49 or 51 ties the card with no
+    order to a neighbour, and the issue-number tiebreak then puts that pair the
+    wrong way round. The rank chip and the column both read the same sorted
+    list, so both are checked.
+
+    The page also draws the list reversed. Which pairs a sort compares, and
+    which card of a pair comes first, follows the order it is given, and the
+    two engines the page runs under sort differently. On three cards at 60,
+    none and 0, a fallback written wrongly on one side of the comparison sorted
+    the generator's order correctly under JavaScriptCore and only the reversed
+    one wrongly.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("band:1",), body="Board order: 51\n"),
+            issue(2, labels=("band:1",)),
+            issue(3, labels=("band:1",), body="Board order: 0\n"),
+            issue(4, labels=("band:1",), body="Board order: 49\n"),
+        ],
+        [],
+    )
+    board, _ = build(gh)
+    assert [(it["issue"], it.get("order")) for it in board["next"]["items"]] == [
+        (1, 51),
+        (2, None),
+        (3, 0),
+        (4, 49),
+    ]
+    if listed == "reversed":
+        board["next"]["items"].reverse()
+    chips, raw = _rank_chips(tmp_path, board)
+    assert chips == {3: 1, 4: 2, 2: 3, 1: 4}
+    column = raw.split('<div class="col k0')[1].split('<div class="col k')[0]
+    assert [int(n) for n in re.findall(r'data-n="(\d+)"', column)] == [3, 4, 2, 1]
+
+
+def test_the_build_order_sorts_by_band_then_order_then_readiness_then_number(
+    tmp_path: Path,
+) -> None:
+    """Protects the comparator's four terms and the order it applies them in.
+
+    Each pair of cards here differs on one term and ties on every term before
+    it, so dropping, reversing or moving any term changes the chips.
+
+    1. #1 in band 2 with no order sorts after #2 in band 1 at order 60, so band
+       comes before order and a lower band lands first.
+    2. #3, #4 and #5 share order 10, ahead of #6 and #7 at the default of 50
+       and #2 at 60, so order comes before readiness.
+    3. #5 carries a decision, so it is ready to decide rather than to plan, and
+       sorts ahead of #3 and #4 at the same order.
+    4. #3 sorts ahead of #4, and #6 ahead of #7, on the issue number alone.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("band:2",)),
+            issue(2, labels=("band:1", "decision"), body="Board order: 60\n"),
+            issue(3, labels=("band:1",), body="Board order: 10\n"),
+            issue(4, labels=("band:1",), body="Board order: 10\n"),
+            issue(5, labels=("band:1", "decision"), body="Board order: 10\n"),
+            issue(6, labels=("band:1",)),
+            issue(7, labels=("band:1",)),
+        ],
+        [],
+    )
+    board, _ = build(gh)
+    chips, _ = _rank_chips(tmp_path, board)
+    assert sorted(chips, key=chips.get) == [5, 3, 4, 6, 7, 2, 1]
+
+
+def _rank_chips(tmp_path: Path, board: dict) -> tuple[dict[int, int], str]:
+    """Each ranked card's priority chip as the page draws it, and the build order's HTML."""
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    raw = ids["board"]["html"]
+    chip = r'data-n="(\d+)".*?<span class="rk" title="priority order">(\d+)</span>'
+    return {int(n): int(rank) for n, rank in re.findall(chip, raw, re.S)}, raw
+
+
 def test_a_board_with_no_open_issues_draws_nothing(tmp_path: Path) -> None:
     """Protects the page's refusal of an empty tracker, which it keeps."""
     board, _ = build(FakeGitHub([], []))

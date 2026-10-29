@@ -2548,6 +2548,24 @@ def test_a_board_that_stops_naming_a_default_drops_the_selector(tmp_path: Path) 
     assert cards(ids, "board") == {1, 2}
 
 
+def test_a_newer_board_with_other_milestones_rebuilds_the_options(tmp_path: Path) -> None:
+    """Protects the selector from listing a milestone the newer board no longer holds.
+
+    The options are kept between draws so a live redraw does not close an open
+    select, and rebuilt whenever the set of milestones changes. MVP 3 closes
+    and MVP 4 opens between the two boards.
+    """
+    first = _ms_docs([(1, "MVP 2", "ready", ()), (2, "MVP 3", "ready", ())])
+    second = _ms_docs([(1, "MVP 2", "ready", ()), (3, "MVP 4", "ready", ())])
+    second["state"]["updatedAt"] = "2026-10-01T12:30:00Z"
+    ids, _ = run_fetch_page(tmp_path, [served(first), served(second)])
+    assert _options(ids) == [
+        (MS_ALL, "All (2)"),
+        ("MVP 2", "MVP 2 (1)"),
+        ("MVP 4", "MVP 4 (1)"),
+    ]
+
+
 def test_the_selector_lists_each_milestone_with_its_count(tmp_path: Path) -> None:
     """Protects the selector's options and the count beside it.
 

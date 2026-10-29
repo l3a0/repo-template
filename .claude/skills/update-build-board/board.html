@@ -1486,10 +1486,11 @@ function buildOrder() {
      cards all sit in another, nothing ranked is out of reach, so the sentence
      says nothing in the milestone is ranked. Under one whose ranked cards are
      all deferred beside a ranked card elsewhere, it says that of the milestone
-     alone. Every other case keeps the sentence the page drew before. */
+     alone. Every other case keeps the sentence the page drew before, All
+     included, since `inMs` holds for every card there and neither test can
+     pass. */
   const unkeyed = () => {
     const anybody = "nothing left in the ranking is a card anybody can take";
-    if (MS === MS_ALL) return anybody;
     const onTracker = NEXT_SORTED.map(it => by.get(it.issue)).filter(Boolean);
     const here = onTracker.filter(inMs);
     if (!here.length && onTracker.length) return `nothing${msWhere()} is ranked`;

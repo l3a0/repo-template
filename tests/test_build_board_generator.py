@@ -26,7 +26,9 @@ kind, the workflow tests split between the caller and the reusable workflow
 and gained the pinned checkout of the template, tests were added for the
 board's repository and title, the label file and the github-pages
 environment, and docstrings citing that repository's history were restated as
-the rules they protect.
+the rules they protect. The pull request that closes l3a0/repo-template#40
+brought the ``blocked-on-data`` cases back, read through ``--data-label``, from
+the same file at l3a0/quantitative-trading commit ``4755ac62``.
 """
 
 from __future__ import annotations
@@ -61,16 +63,19 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "board.yml"
 CALLED = REPO_ROOT / ".github" / "workflows" / "build-board.yml"
 SETUP = REPO_ROOT / "scripts" / "setup-repo.sh"
 REPO = "octo-org/octo-repo"
+# The data label a repository passes as the reusable workflow's ``data-label``
+# input. The one repository that marks such issues uses this name.
+DATA_LABEL = "blocked-on-data"
 NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
-# this commit, the 0.5.0 release. A change here to a marker, a label or a
+# this commit, the 0.5.1 release. A change here to a marker, a label or a
 # string these tests compare with the skill fails them until the plugin
 # releases a skill that matches and this pin moves to it. Any other format
 # change rests on the plugin's own rule that a generator's format change ships
 # with a plugin release in the same step.
-PLUGIN_COMMIT = "37555c51743277d7ab92f29d571349de0858a60a"
+PLUGIN_COMMIT = "436ab75294f79c79658ae883797726b3f0263760"
 PLUGIN_FILES = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/update-build-board/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.
@@ -245,8 +250,8 @@ class FakeGitHub:
         return {"rateLimit": {"cost": 1}, "repository": found}
 
 
-def build(gh: FakeGitHub) -> tuple[dict, dict]:
-    return bb.build(gh, REPO, 30, NOW)
+def build(gh: FakeGitHub, data_label: str = "") -> tuple[dict, dict]:
+    return bb.build(gh, REPO, 30, NOW, data_label=data_label)
 
 
 def prs_of(board: dict) -> list[dict]:
@@ -537,6 +542,37 @@ def test_the_command_line_passes_the_title_through(
     assert json.loads((out / "board.json").read_text())["state"]["title"] == "octo-repo build board"
 
 
+def test_the_command_line_passes_the_data_label_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the reusable workflow's ``data-label`` input on its way to the kind.
+
+    The workflow passes the input as ``--data-label`` whether or not the caller
+    set it, so an empty value has to read as no data label, and a refused one
+    has to fail the run rather than publish.
+    """
+    fake = FakeGitHub([issue(1, labels=(DATA_LABEL,))], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def kind() -> str:
+        return json.loads((out / "board.json").read_text())["tracker"]["items"][0]["kind"]
+
+    assert bb.main([*argv, "--data-label", DATA_LABEL]) == 0
+    assert kind() == "data"
+    assert bb.main([*argv, "--data-label", ""]) == 0
+    assert kind() == "ready"
+    assert bb.main(argv) == 0
+    assert kind() == "ready"
+    (out / "board.json").unlink()
+    assert bb.main([*argv, "--data-label", "deferred"]) == 1
+    assert not (out / "board.json").exists()
+
+
 # ---- The judgement fields, from labels, links and lines ----
 
 
@@ -545,30 +581,66 @@ def card(board: dict, n: int) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("labels", "subs", "kind"),
+    ("labels", "subs", "data_label", "kind"),
     [
-        ((), 0, "ready"),
-        (("question",), 0, "ready"),
-        (("decision",), 0, "decision"),
-        (("deferred",), 0, "deferred"),
-        (("deferred", "decision"), 0, "deferred"),
-        (("decision",), 3, "parent"),
-        (("blocked-on-data",), 0, "ready"),
-        ((), 1, "parent"),
+        ((), 0, "", "ready"),
+        (("question",), 0, "", "ready"),
+        (("decision",), 0, "", "decision"),
+        (("deferred",), 0, "", "deferred"),
+        (("deferred", "decision"), 0, "", "deferred"),
+        (("decision",), 3, "", "parent"),
+        ((), 1, "", "parent"),
+        ((DATA_LABEL,), 0, DATA_LABEL, "data"),
+        ((DATA_LABEL, "deferred"), 0, DATA_LABEL, "data"),
+        (("decision", DATA_LABEL), 0, DATA_LABEL, "data"),
+        ((DATA_LABEL,), 3, DATA_LABEL, "parent"),
+        (("deferred",), 0, DATA_LABEL, "deferred"),
+        ((DATA_LABEL,), 0, "", "ready"),
+        (("waiting-on-data",), 0, "waiting-on-data", "data"),
     ],
 )
 def test_a_cards_kind_comes_from_its_labels_and_sub_issues(
-    labels: tuple[str, ...], subs: int, kind: str
+    labels: tuple[str, ...], subs: int, data_label: str, kind: str
 ) -> None:
     """Protects the kind word and the column a card's kind decides.
 
     ``question`` is not ``decision``, because an issue can carry it while it
     waits on research rather than on the owner. Any sub-issue makes a parent,
-    open or closed. ``blocked-on-data`` sets no kind here, because only one
-    repository used it, and a repository that needs it adds it as an input.
+    open or closed. The data label sets the kind ``data`` ahead of
+    ``deferred`` and ``decision``, and only when the caller names it, so with an
+    empty input ``blocked-on-data`` is an ordinary label. The kind follows
+    whatever label the caller names rather than one spelling.
     """
-    board, _ = build(FakeGitHub([issue(1, labels=labels, sub_issues=subs)], []))
+    board, _ = build(FakeGitHub([issue(1, labels=labels, sub_issues=subs)], []), data_label)
     assert card(board, 1)["kind"] == kind
+
+
+def test_an_empty_data_label_reads_the_kinds_it_read_before() -> None:
+    """Protects every caller that names no data label from a change to its board.
+
+    The kind labels read are exactly the module's two, so no label becomes the
+    kind ``data`` and nothing reads an empty label name as matching.
+    """
+    assert (
+        bb.kind_labels("") == bb.KIND_LABELS == (("deferred", "deferred"), ("decision", "decision"))
+    )
+    assert bb.kind_labels(DATA_LABEL) == ((DATA_LABEL, "data"), *bb.KIND_LABELS)
+    board, _ = build(FakeGitHub([issue(1, labels=("", DATA_LABEL))], []))
+    assert {c["kind"] for c in board["tracker"]["items"]} == {"ready"}
+
+
+@pytest.mark.parametrize("label", ["deferred", "decision", "working:build", "band:2"])
+def test_a_data_label_the_board_already_reads_is_refused(label: str) -> None:
+    """Protects a board from reading one label as two things.
+
+    Named as the data label, ``deferred`` would make every deferred card report
+    a conflict and read as waiting on data. The run stops before reading
+    GitHub rather than publish that.
+    """
+    gh = FakeGitHub([issue(1, labels=(label,))], [])
+    with pytest.raises(bb.BoardError, match="already reads"):
+        build(gh, label)
+    assert gh.calls == []
 
 
 def test_needs_keeps_only_blockers_that_are_open_issues() -> None:
@@ -624,14 +696,16 @@ def test_an_issue_claiming_two_kinds_is_reported() -> None:
         [
             issue(1, labels=("decision", "deferred")),
             issue(2, labels=("decision",), sub_issues=1),
+            issue(3, labels=("deferred", DATA_LABEL)),
         ],
         [],
     )
-    board, report = build(gh)
-    assert [c["kind"] for c in board["tracker"]["items"]] == ["deferred", "parent"]
+    board, report = build(gh, DATA_LABEL)
+    assert [c["kind"] for c in board["tracker"]["items"]] == ["deferred", "parent", "data"]
     assert report["label_conflicts"] == [
         "#1 reads as deferred and decision, read as deferred",
         "#2 reads as parent and decision, read as parent",
+        "#3 reads as data and deferred, read as data",
     ]
 
 
@@ -1540,12 +1614,17 @@ def test_the_skill_states_every_marker_the_generator_reads() -> None:
     counts. Each line the generator matches has to match an example the skill
     writes in a code span, and each label it reads has to appear there by name,
     so renaming one in the generator fails here until the skill says the same.
+    The data label is the caller's, so the skill names the input and the label
+    its example passes.
     """
     spans = [s.replace("#N", "#1") for s in re.findall(r"`([^`\n]+)`", _skill())]
     for marker in (bb.VERDICT, bb.ORDER, bb.AFTER, bb.REVIEW, bb.PART_OF, bb.BAND):
         assert any(marker.search(s) for s in spans), marker.pattern
-    for label in [*bb.WORKING, *(name for name, _ in bb.KIND_LABELS)]:
+    for label, _ in bb.kind_labels(DATA_LABEL):
         assert label in spans, label
+    for label in bb.WORKING:
+        assert label in spans, label
+    assert "data-label" in spans
 
 
 def test_the_skill_quotes_the_allowance_the_script_adds() -> None:
@@ -1722,6 +1801,7 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "github.token",
                 "inputs.title",
                 "inputs.icon",
+                "inputs.data-label",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -1739,15 +1819,19 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     field expanded into a step as critical, which the ruleset refuses to merge.
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
-    of which a stranger writes. ``inputs.title`` and ``inputs.icon`` are
-    written by the caller's own file. Each reaches the shell only through an
-    environment variable, and the icon also names a file for the caller's
-    checkout, which is an action's input rather than shell.
+    of which a stranger writes. ``inputs.title``, ``inputs.icon`` and
+    ``inputs.data-label`` are written by the caller's own file. Each reaches
+    the shell only through an environment variable, and the icon also names a
+    file for the caller's checkout, which is an action's input rather than
+    shell.
     """
     used = set(re.findall(r"\$\{\{\s*([^}]*?)\s*\}\}", path.read_text(encoding="utf-8")))
     assert used == allowed
     assert "TITLE: ${{ inputs.title }}" in _called()
     assert '--title "$TITLE"' in _called()
+    data = re.findall(r"^(.*)\$\{\{\s*inputs\.data-label\s*\}\}(.*)$", _called(), re.M)
+    assert [(before.strip(), after) for before, after in data] == [("DATA_LABEL:", "")]
+    assert '--data-label "$DATA_LABEL"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
@@ -1777,28 +1861,30 @@ def test_the_called_workflow_checks_out_its_own_commit() -> None:
     assert "python3 template/scripts/build_board.py measure" in deploy_job
 
 
-def test_both_inputs_are_optional_strings_that_default_to_empty() -> None:
+def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     """Protects every caller that sets no input.
 
-    The template's own board passes neither input, and a seeded repository
-    sets only what it needs. A required input, or a default naming a file,
-    would fail every such run. An empty title gives ``<name> build board``,
-    and an empty icon serves the template's. The README and the
-    page notes of the l3a0 plugin's update-build-board skill name the icon
-    input by the key declared here.
+    The template's own board passes no input, and a seeded repository sets
+    only what it needs. A required input, or a default naming a file or a
+    label, would fail or change every such run. An empty title gives
+    ``<name> build board``, an empty icon serves the template's, and an empty
+    data label reads no ``data`` kind. The README and the l3a0 plugin's
+    update-build-board skill name the inputs by the keys declared here.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
-    blocks = re.split(r"^      (\w+):\n", inputs, flags=re.M)[1:]
+    blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
     declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
-    assert list(declared) == ["title", "icon"]
+    assert list(declared) == ["title", "icon", "data-label"]
     for block in declared.values():
         assert "        type: string\n" in block
         assert '        default: ""' in block
         assert "required" not in block
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
+    assert f"    with:\n      data-label: {DATA_LABEL}\n" in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
+    assert f"`with: data-label: {DATA_LABEL}`" in _skill()
 
 
 def test_nothing_checks_out_a_pull_requests_code() -> None:

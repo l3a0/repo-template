@@ -143,6 +143,20 @@ caller passing an input the called workflow does not declare fails.
       icon: .github/board/favicon.ico
 ```
 
+A repository whose issues can wait on data that has to be bought or captured
+can name the label it marks them with. Its cards then take the kind `data`
+and draw in a fourth column, "Waiting on data", which the depth sentence
+leaves out because no session's time frees them. Left out, the board reads no
+such label and keeps three columns. The pin has to be at or after the
+template commit that added the `data-label` input, for the reason the icon
+gives.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      data-label: blocked-on-data
+```
+
 To take a later fix, move the SHA in the caller. The skills and the generator
 share the label names and line formats, so a skill newer or older than the
 pinned generator tells a session to set something the board does not read.

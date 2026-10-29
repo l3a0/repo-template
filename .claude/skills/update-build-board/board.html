@@ -80,6 +80,10 @@
 
   /* ---- build order: dependency stages ---- */
   .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; align-items: start; }
+  /* A repository that names a data label and has a card carrying it draws a
+     fourth column. The narrow widths below list this rule too, so it does not
+     outrank them. */
+  .board.data { grid-template-columns: repeat(4, 1fr); }
   .col { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
   .col > .ch { border-top: 2px solid var(--rule); padding-top: 7px; display: flex;
                align-items: baseline; gap: 7px; flex-wrap: wrap; }
@@ -123,6 +127,7 @@
   .tk.k-deferred { border-style: dashed; background: none; }
   .tk.k-deferred .lb, .tk.k-decision .lb, .tk.k-parent .lb { color: var(--muted); }
   .tk.k-decision { border-left: 3px solid var(--gap); }
+  .tk.k-data { border-style: dashed; background: none; border-left: 3px solid var(--far); }
   /* A parent that builds nothing takes the idle grey, the same ink the loops'
      column uses for work nothing is owed on. It keeps a solid border, because a
      dashed one already means deferred and a second dashed kind would collapse
@@ -194,6 +199,7 @@
   .key i.ready { border-left: 3px solid var(--exact); }
   .key i.decision { border-left: 3px solid var(--gap); }
   .key i.deferred { border-style: dashed; background: none; }
+  .key i.data { border-style: dashed; background: none; border-left: 3px solid var(--far); }
   .key i.parent { border-left: 3px solid var(--idle); background: none; }
   .key i.has-pr { border-top-color: var(--accent); border-right-color: var(--accent);
                    border-bottom-color: var(--accent); }
@@ -216,8 +222,8 @@
   /* The loops' column takes the idle grey, because a card under one is the least
      finished thing the section draws and nothing about it is owed to anybody. */
   .col.f-planning > .ch { border-top-color: var(--idle); }
-  @media (max-width: 900px) { .board { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 540px) { .board { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .board, .board.data { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 540px) { .board, .board.data { grid-template-columns: 1fr; } }
 
   .caveat { margin-top: 18px; border-left: 3px solid var(--accent); background: var(--panel);
             border-radius: 0 5px 5px 0; padding: 12px 15px; font-size: 0.8125rem; color: var(--muted); }
@@ -281,7 +287,10 @@ let ISS = "", PRU = "";
    repository, reading its links and title from the board instead, the
    "Waiting on data" column and its kind were cut, the Show all choice was
    keyed by repository, and comments recording that repository's history were
-   cut or restated as the rules they record.
+   cut or restated as the rules they record. The pull request that closes
+   l3a0/repo-template#40 brought the column back for a board whose tracker
+   holds a card of the kind `data`, which only a repository naming a data
+   label to the reusable workflow gets.
 
    The board's data is one file, board.json, beside this page on GitHub Pages.
    The reusable workflow .github/workflows/build-board.yml in
@@ -669,7 +678,12 @@ const COLS = [
      thing has to land first" reads as a count of blockers, which goes false the
      first time a card in this column waits on two issues. */
   ["One step behind", "what these wait on waits on no open issue"],
-  ["Two steps behind or more", "something these wait on waits on another"]
+  ["Two steps behind or more", "something these wait on waits on another"],
+  /* Drawn only when the tracker holds a card of this kind, so a repository
+     that names no data label keeps three columns. A purchase is not work a
+     session can do, so these cards sit outside the chain the depth sentence
+     measures. */
+  ["Waiting on data", "not a backlog, a purchase"]
 ];
 /* One colour per tracker label, so the page and GitHub show the same chip.
    Two diverge on purpose, and the rule is readability rather than fidelity: a
@@ -680,10 +694,13 @@ const COLS = [
    and is darkened here to 5.6 to 1. A label with no entry falls back to the
    faint ink rather than being dropped, because a new label is information and a
    missing colour is not a reason to hide it. The entries are the kind and
-   work labels the template's .github/labels.json creates. */
+   work labels the template's .github/labels.json creates, and
+   `blocked-on-data`, the data label the reusable workflow's input names as its
+   example. */
 const LABEL_HUE = {
   bug: "#d73a4a", documentation: "#0075ca", enhancement: "#2F7F86",
-  test: "#5319e7", deferred: "#6E7A85", question: "#9B3BA8", decision: "#8A5A00"
+  test: "#5319e7", deferred: "#6E7A85", question: "#9B3BA8", decision: "#8A5A00",
+  "blocked-on-data": "#B60205"
 };
 
 /* A parent is a kind of its own. An issue split into sub-issues builds nothing
@@ -931,8 +948,12 @@ function buildOrder() {
     feeds.get(b).push(c.n);
   }));
 
-  const bucket = [[], [], []];
+  /* The fourth column follows the tracker rather than the cards drawn, so the
+     Show all choice and the In flight section never add or drop it. */
+  const dataCol = TRACKER.some(c => c.kind === "data");
+  const bucket = dataCol ? [[], [], [], []] : [[], [], []];
   rest.forEach(c => {
+    if (dataCol && c.kind === "data") { bucket[3].push(c); return; }
     bucket[Math.min(depth.get(c.n), 2)].push(c);
   });
   /* Within a column, a card with an executed plan sorts above one without,
@@ -941,6 +962,7 @@ function buildOrder() {
   bucket.forEach(col => col.sort(cardOrder(by, planOf)));
 
   const host = document.getElementById("board");
+  host.classList.toggle("data", dataCol);
   host.innerHTML = bucket.map((col, k) => {
     const cards = col.map(card).join("");
     return `<div class="col k${k}">
@@ -1280,6 +1302,7 @@ function buildOrder() {
     ...(drew(rest, c => c.kind === "decision") ? [["decision", "needs the owner, not a session"]] : []),
     ...(drew(rest, c => c.kind === "deferred")
       ? [["deferred", "deferred on purpose, under the ranking rule"]] : []),
+    ...(drew(rest, c => c.kind === "data") ? [["data", "waiting on data, so not a backlog"]] : []),
     ...(drew(rest, c => c.kind === "parent")
       ? [["parent", "a parent whose children carry the work"]] : []),
     ...(buildWord(rest) ? [buildWord(rest)] : []),
@@ -1385,8 +1408,10 @@ function buildOrder() {
      while a hidden card sits two deep. A sentence calling the graph one level
      deep would then be false about the issues it hid. So the depth is counted
      over every open issue not in flight, and the sentence says so whenever that
-     differs from what the columns show. */
-  const deep = open.filter(c => depth.get(c.n) >= 2).length;
+     differs from what the columns show. A card waiting on data sits in its
+     own column, outside the chain, so it counts toward no depth. */
+  const graphed = open.filter(c => c.kind !== "data");
+  const deep = graphed.filter(c => depth.get(c.n) >= 2).length;
   const deepHidden = deep !== bucket[2].length;
   /* How deep the graph goes and how many issues one card waits on are two
      facts, and one fixed sentence used to carry both. "Nothing sits behind more
@@ -1396,8 +1421,8 @@ function buildOrder() {
      chain over the cards `deep` counts, so a
      third step is named rather than called the deepest the graph goes, and a
      card waiting on several open issues at once gets its own clause. */
-  const longest = Math.max(0, ...open.map(c => depth.get(c.n)));
-  const several = open.map(c => ({ n: c.n, on: c.needs.filter(b => by.has(b)) }))
+  const longest = Math.max(0, ...graphed.map(c => depth.get(c.n)));
+  const several = graphed.map(c => ({ n: c.n, on: c.needs.filter(b => by.has(b)) }))
     .filter(x => x.on.length > 1).sort((a, b) => a.n - b.n);
   /* The shallow branch needs the same qualifier as the deep one. With no card
      two steps behind, the short view can still hide every card one step
@@ -1500,6 +1525,9 @@ function buildOrder() {
     (hiddenNamed.length
       ? `${andlist(hiddenNamed.map(x => "#" + x.n))} ${hiddenNamed.length === 1 ? "is" : "are"} ` +
         `hidden in this view, so press Show all to see ${hiddenNamed.length === 1 ? "it" : "them"}. `
+      : ``) +
+    (bucket.length > 3 && bucket[3].length
+      ? `The fourth column is not a backlog, because nothing in it is waiting on anyone's time.`
       : ``);
 }
 

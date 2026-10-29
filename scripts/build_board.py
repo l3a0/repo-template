@@ -15,7 +15,10 @@ at commit ``6da0ee3``, landed here by the pull request that closes
 l3a0/repo-template#24. On the way the ``blocked-on-data`` kind was cut, the
 board gained ``state.repo`` and ``state.title`` so the page names no
 repository, and comments citing that repository's issues were restated as the
-rules they record.
+rules they record. The pull request that closes l3a0/repo-template#40 brought
+the kind back behind ``--data-label``, which names the label a repository
+marks such issues with, so a repository that never names one reads no ``data``
+kind at all.
 
 It writes the six sections the page reads.
 
@@ -185,6 +188,25 @@ def outside_code(text: str) -> str:
 # kinds every repository calling the shared workflow uses are here, and a
 # repository that needs another adds it as an input to the workflow.
 KIND_LABELS = (("deferred", "deferred"), ("decision", "decision"))
+
+
+def kind_labels(data_label: str) -> tuple[tuple[str, str], ...]:
+    """The kind labels a run reads, with the caller's data label first if it names one.
+
+    A card waiting on data that has to be bought or captured takes the kind
+    ``data`` ahead of ``deferred`` and ``decision``, because no session's time
+    frees it, whatever else is said about it. Only a repository that names the
+    label reads the kind, so an empty one leaves ``KIND_LABELS`` as it is. A
+    label the board already reads for something else would be read twice, and
+    every card carrying it would report a conflict, so the run refuses it.
+    """
+    if not data_label:
+        return KIND_LABELS
+    taken = {label for label, _ in KIND_LABELS} | set(WORKING)
+    if data_label in taken or BAND.match(data_label):
+        raise BoardError(f"the data label {data_label!r} is a label the board already reads")
+    return ((data_label, "data"), *KIND_LABELS)
+
 
 # GitHub reports a check as an uppercase enum, and the page knows four
 # lowercase words. Passed through as they come, every state reads as green,
@@ -431,20 +453,25 @@ def _top_pages(gql: Gql, query: str, owner: str, name: str, field: str) -> list[
     raise BoardError(f"read {len(nodes)} {field} against a total of {total} on {LIST_READS} reads")
 
 
-def card_kinds(labels: list[str], sub_issues: int) -> list[str]:
+def card_kinds(
+    labels: list[str], sub_issues: int, kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS
+) -> list[str]:
     """Every kind an issue's sub-issues and labels claim, the winning one first.
 
     An issue with any sub-issue is a parent, whether or not its children have
     closed, because they carry its work. After that the kind labels follow in
-    ``KIND_LABELS`` order. More than one entry is a conflict the run reports.
+    the order ``kind_labels`` gives. More than one entry is a conflict the run
+    reports.
     """
     kinds = ["parent"] if sub_issues else []
-    return kinds + [kind for label, kind in KIND_LABELS if label in labels]
+    return kinds + [kind for label, kind in kinds_read if label in labels]
 
 
-def card_kind(labels: list[str], sub_issues: int) -> str:
+def card_kind(
+    labels: list[str], sub_issues: int, kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS
+) -> str:
     """A card's kind, the first that ``card_kinds`` finds, or ready for none."""
-    return (card_kinds(labels, sub_issues) or ["ready"])[0]
+    return (card_kinds(labels, sub_issues, kinds_read) or ["ready"])[0]
 
 
 def check_word(context: dict, unknown: set[str]) -> str:
@@ -591,6 +618,7 @@ def tracker_card(
     open_issues: set[int],
     repo: str,
     conflicts: list[str],
+    kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
 ) -> dict:
     """One open issue as the card the page draws.
 
@@ -604,7 +632,7 @@ def tracker_card(
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
-    kinds = card_kinds(names, issue["subIssues"]["totalCount"])
+    kinds = card_kinds(names, issue["subIssues"]["totalCount"], kinds_read)
     if len(kinds) > 1:
         conflicts.append(f"#{n} reads as {' and '.join(kinds)}, read as {kinds[0]}")
     card = {
@@ -728,7 +756,7 @@ def stale_after_minutes(longest_gap: int) -> int:
 
 
 def build(
-    gql: Gql, repo: str, longest_gap: int, now: datetime, title: str = ""
+    gql: Gql, repo: str, longest_gap: int, now: datetime, title: str = "", data_label: str = ""
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
 
@@ -736,8 +764,11 @@ def build(
     which ``longest_gap_minutes`` reads from the workflow. ``title`` heads the
     page, and an empty one gives ``<name> build board``. The repository goes
     into the board too, because the page builds every issue and pull request
-    link from it and names no repository of its own.
+    link from it and names no repository of its own. ``data_label`` is the
+    label that marks a card waiting on data, and an empty one reads no such
+    kind. It is checked before anything is read from GitHub.
     """
+    kinds_read = kind_labels(data_label)
     owner, name = repo.split("/", 1)
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
     open_issues = {i["number"] for i in issues}
@@ -751,7 +782,7 @@ def build(
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
         names = [lb["name"] for lb in _all_nodes(gql, issue["id"], "labels", issue["labels"])]
-        card = tracker_card(gql, issue, names, open_issues, repo, conflicts)
+        card = tracker_card(gql, issue, names, open_issues, repo, conflicts, kinds_read)
         tracker.append(card)
 
         held = [WORKING[x] for x in names if x in WORKING]
@@ -835,7 +866,9 @@ def _output(key: str, value: str) -> None:
 def cmd_build(args: argparse.Namespace) -> None:
     gql = GhGraphql()
     now = datetime.now(UTC)
-    board, report = build(gql, args.repo, longest_gap_minutes(Path(args.workflow)), now, args.title)
+    board, report = build(
+        gql, args.repo, longest_gap_minutes(Path(args.workflow)), now, args.title, args.data_label
+    )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "board.json").write_text(
@@ -942,6 +975,9 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--workflow", required=True)
     b.add_argument("--out", required=True)
     b.add_argument("--title", default="", help="the page's heading, <name> build board if empty")
+    b.add_argument(
+        "--data-label", default="", help="the label marking a card waiting on data, none if empty"
+    )
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("measure", help="time how long a deployed board takes to be served")
     m.add_argument("--repo", required=True)

@@ -15,7 +15,10 @@ name: Build board
 # the generator and the page are checked out from this repository at the
 # caller's pinned ref, and a `title` input names the board. An `icon` input,
 # added by the pull request that closes l3a0/repo-template#29, lets a
-# repository serve its own tab icon in place of the template's.
+# repository serve its own tab icon in place of the template's. A `data-label`
+# input, added by the pull request that closes l3a0/repo-template#40, names
+# the label that marks a card waiting on data, which the page then draws in a
+# fourth column.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -55,6 +58,13 @@ on:
           A path in the calling repository to the .ico file served as the
           board's tab icon, such as .github/board/favicon.ico. Empty serves
           the template's icon.
+        type: string
+        default: ""
+      data-label:
+        description: >-
+          The label marking an issue that waits on data to be bought or
+          captured, such as blocked-on-data. Its cards draw in a "Waiting on
+          data" column. Empty reads no such label.
         type: string
         default: ""
 
@@ -100,11 +110,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ inputs.title }}
+          DATA_LABEL: ${{ inputs.data-label }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
           --workflow caller/.github/workflows/board.yml
           --title "$TITLE"
+          --data-label "$DATA_LABEL"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

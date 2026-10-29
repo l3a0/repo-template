@@ -22,7 +22,9 @@ name: Build board
 # closes l3a0/repo-template#48, reads order and after lines only from issues
 # the owner opened. A `milestone-default` input, added by the pull request that
 # closes l3a0/repo-template#45, draws a milestone selector on the page and
-# names the milestone it opens on.
+# names the milestone it opens on. A `ranking` input, added by the pull
+# request that closes l3a0/repo-template#46, ranks a card by its order line
+# alone when set to `order`.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -87,6 +89,15 @@ on:
           first comma. Empty draws no selector and keeps whole titles.
         type: string
         default: ""
+      ranking:
+        description: >-
+          "order" ranks a card by its "Board order:" line alone rather than by
+          a band:N label, counts a card as a parent only while a sub-issue of
+          it is open, reads order and after lines only from the owner's
+          issues, and draws every card when none is ranked. Empty keeps the
+          band rule. Any other value fails the run.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -133,6 +144,7 @@ jobs:
           DATA_LABEL: ${{ inputs.data-label }}
           OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
           MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
+          RANKING: ${{ inputs.ranking }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
@@ -141,6 +153,7 @@ jobs:
           --data-label="$DATA_LABEL"
           --owner-body-lines="$OWNER_BODY_LINES"
           --milestone-default="$MILESTONE_DEFAULT"
+          --ranking="$RANKING"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

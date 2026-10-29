@@ -30,6 +30,8 @@ commit ``4755ac62``. The pull request that closes l3a0/repo-template#45 added
 the milestone selector's tests, porting the default and stored-choice cases
 of ``tests/component/test_board_page.py`` in l3a0/marketlake at commit
 ``cc9d3432``, and taught the driver to read a select's value and change it.
+The pull request that closes l3a0/repo-template#46 added the cases of a board
+ranked by order lines alone, from the same file at the same commit.
 
 The engine is ``node`` where it is installed, which it is on GitHub's runners,
 and ``osascript -l JavaScript`` otherwise, which is JavaScriptCore and ships
@@ -2837,3 +2839,261 @@ def test_the_order_note_says_why_no_card_in_the_milestone_carries_a_position(
     assert note.endswith(
         f"Priority is not a key today, because {reason}. Pick a card to trace its chain."
     )
+
+
+# ---- A board ranked by order lines alone ----
+#
+# A board whose state carries ``ranking: "order"`` ranks cards by their order
+# lines alone, so it can rank nothing at all. Its page then draws every card
+# rather than an empty build order, and its line above the board and its
+# order note say which case holds. The cases are ported from
+# ``tests/component/test_board_page.py`` in l3a0/marketlake at commit
+# ``cc9d3432``. The generator writes the key only when its caller sets the
+# ``ranking`` input, so a board without it is every current caller's, and each
+# case below also draws that board, which has to read as it did before.
+
+
+def _order_docs(cards: list[tuple], **kwargs: object) -> dict:
+    """``_ms_docs`` on a board ranked by order lines, where every band is 0."""
+    docs = _ms_docs(cards, **kwargs)
+    docs["state"]["ranking"] = "order"
+    for entry in docs["next"]["items"]:
+        entry["band"] = 0
+    return docs
+
+
+def _banded(docs: dict) -> dict:
+    """The same board with no ``state.ranking``, as the band rule writes it."""
+    plain = json.loads(json.dumps(docs))
+    del plain["state"]["ranking"]
+    return plain
+
+
+ORDER_NOTE_END = "Pick a card to trace its chain."
+
+
+def _why(reason: str) -> str:
+    return f"Priority is not a key today, because {reason}. {ORDER_NOTE_END}"
+
+
+# Two cards in MVP 2, one behind the other, a parent in MVP 2 and a card in MVP 3.
+UNRANKED_CARDS = [
+    (1, "MVP 2", "ready", ()),
+    (2, "MVP 2", "ready", (1,)),
+    (3, "MVP 2", "parent", ()),
+    (4, "MVP 3", "ready", ()),
+]
+
+
+def test_with_nothing_ranked_every_card_in_the_milestone_is_drawn(tmp_path: Path) -> None:
+    """Protects a repository with no band labels from an empty board.
+
+    With nothing ranked, the ranked-only view drew only the milestone's parent
+    under a line calling it ranked. Under ``order`` every card in MVP 2 not in
+    flight is drawn, the line says why and offers no toggle, and the order note
+    says nothing is ranked. With the key absent the page draws what it drew
+    before.
+    """
+    docs = _order_docs(UNRANKED_CARDS)
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == {1, 2, 3}
+    assert text(ids, "more") == (
+        "Nothing in MVP 2 is ranked yet, so all 3 open issues in MVP 2 not in flight are showing."
+    )
+    assert "data-toggle" not in ids["more"]["html"]
+    assert text(ids, "ordernote").endswith(_why("nothing is ranked"))
+    ids = draw(tmp_path, _banded(docs))
+    assert cards(ids, "board") == {3}
+    assert text(ids, "more") == (
+        "Showing the 0 ranked cards and 1 parent in MVP 2. 2 other open issues in MVP 2 are not "
+        "in the priority order. Show all 3"
+    )
+    assert text(ids, "ordernote").endswith(
+        _why("nothing left in the ranking is a card anybody can take")
+    )
+
+
+def test_with_nothing_ranked_on_all_every_card_is_drawn(tmp_path: Path) -> None:
+    """Protects the unranked view on a board with no milestone selector."""
+    docs = _order_docs(UNRANKED_CARDS, default=NO_DEFAULT)
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == {1, 2, 3, 4}
+    assert text(ids, "more") == (
+        "Nothing is ranked yet, so all 4 open issues not in flight are showing."
+    )
+    ids = draw(tmp_path, _banded(docs))
+    assert cards(ids, "board") == set()
+    assert text(ids, "more") == (
+        "Showing the 0 ranked cards. 4 other open issues are not in the priority order. Show all 4"
+    )
+
+
+def test_a_stored_show_all_choice_changes_nothing_while_nothing_is_ranked(tmp_path: Path) -> None:
+    """Protects the line from a toggle that would change nothing."""
+    ids = draw(tmp_path, _order_docs(UNRANKED_CARDS), page=_show_all_page(tmp_path))
+    assert cards(ids, "board") == {1, 2, 3}
+    assert text(ids, "more") == (
+        "Nothing in MVP 2 is ranked yet, so all 3 open issues in MVP 2 not in flight are showing."
+    )
+
+
+def test_with_one_card_unranked_the_line_says_it_in_the_singular(tmp_path: Path) -> None:
+    ids = draw(tmp_path, _order_docs([(1, "MVP 2", "ready", ())]))
+    assert text(ids, "more") == (
+        "Nothing in MVP 2 is ranked yet, so the 1 open issue in MVP 2 not in flight is showing."
+    )
+
+
+def test_a_ranked_card_keeps_the_ranked_only_view(tmp_path: Path) -> None:
+    """Protects the ranked-only view, which the fallback leaves alone once a card ranks.
+
+    The line reads as it does under the band rule.
+    """
+    docs = _order_docs(UNRANKED_CARDS, ranked=(1,))
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == {1, 3}
+    line = (
+        "Showing the 1 ranked card and 1 parent in MVP 2. 1 other open issue in MVP 2 is not in "
+        "the priority order. Show all 3"
+    )
+    assert text(ids, "more") == line
+    assert text(draw(tmp_path, _banded(docs)), "more") == line
+
+
+IN_FLIGHT = _why("every ranked card in MVP 2 is in the In flight section above")
+
+
+def test_with_every_ranked_card_in_flight_the_line_and_note_say_so(tmp_path: Path) -> None:
+    """Protects the line from saying nothing is ranked while a ranked card is in flight.
+
+    A card in flight can be planned with nobody on it, so the note does not
+    call it a card nobody can take. With the key absent the page draws what
+    it drew before.
+    """
+    docs = _order_docs(
+        [(1, "MVP 2", "ready", ()), (2, "MVP 2", "ready", ())], ranked=(2,), flying=(2,)
+    )
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "flow") == {2}
+    assert cards(ids, "board") == set()
+    assert text(ids, "more") == (
+        "Every ranked card in MVP 2 is in flight, so no card is showing here. 1 other open "
+        "issue in MVP 2 is not in the priority order. Show all 1"
+    )
+    assert text(ids, "ordernote").endswith(IN_FLIGHT)
+    ids = draw(tmp_path, _banded(docs))
+    assert text(ids, "more") == (
+        "Showing the 0 ranked cards in MVP 2. 1 other open issue in MVP 2 is not in the "
+        "priority order. Show all 1"
+    )
+    assert text(ids, "ordernote").endswith(
+        _why("nothing left in the ranking is a card anybody can take")
+    )
+
+
+def test_with_every_ranked_card_in_flight_and_nothing_hidden_the_line_says_why(
+    tmp_path: Path,
+) -> None:
+    """Protects an empty board from reading as one that failed to draw."""
+    docs = _order_docs([(2, "MVP 2", "ready", ())], ranked=(2,), flying=(2,))
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == set()
+    assert text(ids, "more") == (
+        "Every ranked card in MVP 2 is in flight, so no card is showing here."
+    )
+    assert text(draw(tmp_path, _banded(docs)), "more") == ""
+
+
+def test_with_every_ranked_card_in_flight_a_parent_is_not_called_ranked(tmp_path: Path) -> None:
+    docs = _order_docs(
+        [(1, "MVP 2", "ready", ()), (2, "MVP 2", "ready", ()), (4, "MVP 2", "parent", ())],
+        ranked=(2,),
+        flying=(2,),
+    )
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == {4}
+    assert text(ids, "more") == (
+        "Every ranked card in MVP 2 is in flight, so only 1 parent is showing here. 1 other "
+        "open issue in MVP 2 is not in the priority order. Show all 2"
+    )
+    assert text(ids, "ordernote").endswith(IN_FLIGHT)
+
+
+def test_a_ranked_parent_alone_in_the_ranking_keeps_the_ranked_only_view(
+    tmp_path: Path,
+) -> None:
+    """Protects the fallback from firing while the ranking names a card here."""
+    docs = _order_docs([(1, "MVP 2", "ready", ()), (4, "MVP 2", "parent", ())], ranked=(4,))
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == {4}
+    assert text(ids, "more") == (
+        "Showing the 1 ranked card in MVP 2. 1 other open issue in MVP 2 is not in the "
+        "priority order. Show all 2"
+    )
+
+
+def test_a_deferred_card_alone_in_the_ranking_leaves_the_milestone_unranked(
+    tmp_path: Path,
+) -> None:
+    """Protects the fallback's count of what is ranked from a position no card draws.
+
+    A deferred card draws no position, so it does not count as ranked here
+    either, and the note's reason stays true, since the ranking itself says
+    nobody should take a deferred card.
+    """
+    docs = _order_docs([(1, "MVP 2", "deferred", ())], ranked=(1,))
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == {1}
+    assert text(ids, "more") == (
+        "Nothing in MVP 2 is ranked yet, so the 1 open issue in MVP 2 not in flight is showing."
+    )
+    assert text(ids, "ordernote").endswith(
+        _why("nothing left in the ranking is a card anybody can take")
+    )
+
+
+def test_a_ranking_in_another_milestone_leaves_this_one_unranked(tmp_path: Path) -> None:
+    """Protects the note from calling a free card elsewhere one nobody can take."""
+    docs = _order_docs(UNRANKED_CARDS, ranked=(4,))
+    ids = draw(tmp_path, docs)
+    assert cards(ids, "board") == {1, 2, 3}
+    assert text(ids, "more") == (
+        "Nothing in MVP 2 is ranked yet, so all 3 open issues in MVP 2 not in flight are showing."
+    )
+    assert text(ids, "ordernote").endswith(_why("nothing in MVP 2 is ranked"))
+
+
+def test_a_milestone_with_every_card_in_flight_draws_no_unranked_line(tmp_path: Path) -> None:
+    ids = draw(tmp_path, _order_docs([(2, "MVP 2", "ready", ())], flying=(2,)))
+    assert cards(ids, "flow") == {2}
+    assert text(ids, "more") == ""
+
+
+def test_a_deferred_card_ranked_here_beside_a_free_one_elsewhere_names_the_milestone(
+    tmp_path: Path,
+) -> None:
+    """Protects the note from saying the whole ranking holds nothing to take.
+
+    #4 is ranked and free in MVP 3, so only the cards ranked in MVP 2 are ones
+    nobody can take.
+    """
+    docs = _order_docs(
+        [(1, "MVP 2", "deferred", ()), (2, "MVP 2", "ready", ()), (4, "MVP 3", "ready", ())],
+        ranked=(1, 4),
+    )
+    assert text(draw(tmp_path, docs), "ordernote").endswith(
+        _why("nothing in MVP 2 left in the ranking is a card anybody can take")
+    )
+
+
+def test_a_board_ranked_by_order_draws_its_ranked_cards_as_before(tmp_path: Path) -> None:
+    """Protects every element the key does not concern from moving.
+
+    On a board with a ranked card in view, free and drawn, the page draws the
+    same thing whether or not the board carries ``ranking``.
+    """
+    docs = _order_docs(UNRANKED_CARDS, ranked=(1, 4), flying=(2,))
+    plain = draw(tmp_path, _banded(docs))
+    ordered = draw(tmp_path, docs)
+    for element in plain:
+        assert ordered[element]["html"] == plain[element]["html"], element

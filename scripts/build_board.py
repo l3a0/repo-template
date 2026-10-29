@@ -21,7 +21,10 @@ marks such issues with, so a repository that never names one reads no ``data``
 kind at all. The pull request that closes l3a0/repo-template#45 added
 ``--milestone-default``, which turns on the page's milestone selector and
 names the milestone it opens on, so a repository that never names one gets
-the board it had before.
+the board it had before. The pull request that closes l3a0/repo-template#46
+added ``--ranking``, whose one value, ``order``, ranks a card by its
+``Board order:`` line alone, as l3a0/marketlake's generator does, so a
+repository that never sets it keeps the band rule.
 
 It writes the six sections the page reads.
 
@@ -29,7 +32,8 @@ It writes the six sections the page reads.
    time GitHub was read, the longest gap between two scheduled runs, and the
    age after which the page calls the board stale. With a milestone default
    named, it also carries ``milestoneDefault``, the milestone the page opens
-   on, or null for every milestone.
+   on, or null for every milestone. With ``--ranking=order`` it carries
+   ``ranking``, which the page reads to draw every card when none is ranked.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
    from the issue. With a milestone default named, the milestone is its title
    up to the first comma, which ``milestone_short`` cuts. ``kind`` comes from
@@ -44,7 +48,9 @@ It writes the six sections the page reads.
 5. ``planned``, one item per issue with an owner comment carrying a
    ``Board verdict:`` line, which a decompose loop writes when it exits.
 6. ``next``, one item per issue carrying a ``band:N`` label, ordered within its
-   band by a ``Board order:`` line in the body.
+   band by a ``Board order:`` line in the body. With ``--ranking=order`` it is
+   one item per issue with a ``Board order:`` line, every band is 0, and no
+   ``band:N`` label is read.
 
 The ``update-build-board`` skill in the ``l3a0`` Claude Code plugin states each
 format and when a session sets it.
@@ -83,6 +89,9 @@ Four of its rules exist because the repository is public.
    stranger's is listed as refused. Anyone can open an issue. The input is off
    by default, because a card ranks only with a ``band:N`` label, which needs
    triage access, so a stranger's line moves only the stranger's own card.
+   ``--ranking=order`` turns it on whatever the input says, because there the
+   order line alone ranks a card, and a stranger's issue could put itself
+   first.
 3. A number read from a marker line or a ``Part of`` reference carries at
    most ``MAX_DIGITS`` digits. Anyone can write a ``Board after:`` line, and a
    longer number there would otherwise stop every run until someone edited
@@ -414,7 +423,7 @@ query($owner:String!, $name:String!, $after:String) {{
         milestone{{title}}
         labels(first:100){{{PAGE_INFO} nodes{{name}}}}
         blockedBy(first:100){{{PAGE_INFO} nodes{{number state repository{{nameWithOwner}}}}}}
-        subIssues{{totalCount}}
+        subIssuesSummary{{total completed}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
         closedByPullRequestsReferences(first:100, includeClosedPrs:true){{
           {PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
@@ -625,7 +634,9 @@ def card_kinds(
     An issue with any sub-issue is a parent, whether or not its children have
     closed, because they carry its work. After that the kind labels follow in
     the order ``kind_labels`` gives. More than one entry is a conflict the run
-    reports.
+    reports. Under ``--ranking=order`` the caller passes only the open
+    sub-issues, so an issue whose children have all closed is a plain card
+    there, as on l3a0/marketlake's board.
     """
     kinds = ["parent"] if sub_issues else []
     return kinds + [kind for label, kind in kinds_read if label in labels]
@@ -954,6 +965,7 @@ def tracker_card(
     cut: bool = False,
     *,
     after: set[int],
+    by_order: bool = False,
 ) -> dict:
     """One open issue as the card the page draws.
 
@@ -967,10 +979,15 @@ def tracker_card(
     ``after`` holds the issues the body's ``Board after:`` lines name, which
     ``read_body`` reads.
     ``cut`` writes the milestone's short name in place of its whole title.
+    ``by_order`` counts only the open sub-issues toward a parent, which
+    ``--ranking=order`` asks for. ``subIssuesSummary`` counts closed ones in
+    ``total`` too, so the open ones are ``total`` less ``completed``.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
-    kinds = card_kinds(names, issue["subIssues"]["totalCount"], kinds_read)
+    summary = issue["subIssuesSummary"]
+    children = summary["total"] - (summary["completed"] if by_order else 0)
+    kinds = card_kinds(names, children, kinds_read)
     if len(kinds) > 1:
         conflicts.append(f"#{n} reads as {' and '.join(kinds)}, read as {kinds[0]}")
     ms = (issue.get("milestone") or {}).get("title") or ""
@@ -1040,6 +1057,8 @@ def rank_entry(
     kind: str,
     verdict: tuple[str, int] | None,
     conflicts: list[str],
+    *,
+    ranking: str = "",
 ) -> dict | None:
     """The card's place in the priority order, or None when it has none.
 
@@ -1049,15 +1068,25 @@ def rank_entry(
     values of the body's ``Board order:`` lines, which ``read_body`` reads. The
     first one counts, and more than one is a conflict even when they are equal,
     because an edit to the second copy would move nothing.
+
+    By default a card ranks only with a ``band:N`` label. With ``ranking`` set
+    to ``order`` an order line alone ranks it, no ``band:N`` label is read, and
+    every entry carries band 0, as l3a0/marketlake's generator writes.
     """
-    bands = sorted(int(m.group(1)) for x in names if (m := BAND.match(x)))
-    if not bands:
-        return None
-    if len(bands) > 1:
-        conflicts.append(f"#{n} carries {len(bands)} band labels, read as band:{bands[0]}")
+    if ranking == "order":
+        if not orders:
+            return None
+        band = 0
+    else:
+        bands = sorted(int(m.group(1)) for x in names if (m := BAND.match(x)))
+        if not bands:
+            return None
+        if len(bands) > 1:
+            conflicts.append(f"#{n} carries {len(bands)} band labels, read as band:{bands[0]}")
+        band = bands[0]
     entry: dict = {
         "issue": n,
-        "band": bands[0],
+        "band": band,
         "ready": verdict[0] if verdict else ("decide" if kind == "decision" else "plan"),
     }
     if orders:
@@ -1130,6 +1159,19 @@ def owner_only(owner_body_lines: str) -> bool:
     return owner_body_lines == "true"
 
 
+def by_order(ranking: str) -> bool:
+    """Whether a run ranks cards by their order lines alone, from its input.
+
+    The input names a rule rather than switching one on, so its one value is
+    ``order``, and empty keeps the band rule. Any other value stops the run
+    before GitHub is read. A misspelt one would otherwise keep the band rule
+    and publish a board that ranks none of a caller's cards, with nothing said.
+    """
+    if ranking not in {"", "order"}:
+        raise BoardError(f"ranking is {ranking!r}, and takes only empty or order")
+    return ranking == "order"
+
+
 def build(
     gql: Gql,
     repo: str,
@@ -1139,6 +1181,7 @@ def build(
     data_label: str = "",
     owner_body_lines: str = "",
     milestone_default: str = "",
+    ranking: str = "",
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
 
@@ -1157,9 +1200,20 @@ def build(
     cuts each card's milestone to its short name and writes
     ``state.milestoneDefault``, so a board that names none is the board it was
     before the input existed. It is checked before anything is read too.
+
+    ``ranking`` set to ``order`` ranks a card by its ``Board order:`` line
+    alone, counts a card as a parent only while a sub-issue of it is open, and
+    reads body lines only from the owner's issues whatever
+    ``owner_body_lines`` says. A parent builds nothing, so an order or a
+    verdict on one is dropped. A deferred card is one nobody should take, so a
+    verdict on one is dropped too, and it keeps its order, which the page
+    already hides. Each drop is listed in ``Notes.dropped``. Empty keeps the
+    band rule and writes no ``state.ranking``, so the board is the board it
+    was before the input existed. It is checked before anything is read too.
     """
     kinds_read = kind_labels(data_label)
-    owner_lines = owner_only(owner_body_lines)
+    ordered = by_order(ranking)
+    owner_lines = owner_only(owner_body_lines) or ordered
     milestone_pattern(milestone_default)
     owner, name = repo.split("/", 1)
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
@@ -1190,6 +1244,7 @@ def build(
             kinds_read,
             bool(milestone_default),
             after=after,
+            by_order=ordered,
         )
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
@@ -1204,14 +1259,27 @@ def build(
         verdict, finished = latest_verdict(comments, n=n, notes=notes)
         if finished:
             unfinished.append((n, card["kind"], names))
+        if ordered:
+            # The label is read for `deferred`, as `no_verdict` reads it below,
+            # because a data label takes the kind ahead of `deferred`.
+            parent = card["kind"] == "parent"
+            if verdict and (parent or "deferred" in names):
+                on = "a parent" if parent else "a deferred card"
+                notes.dropped.add((n, f"Board verdict on {on}"))
+                verdict = None
+            if orders and parent:
+                notes.dropped.add((n, "Board order on a parent"))
+                orders = []
         if verdict:
             planned.append({"n": n, "passes": verdict[1], "ready": verdict[0]})
 
-        entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts)
+        entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts, ranking=ranking)
         if entry:
             ranked.append(entry)
         elif orders:
-            # Only a banded card has a place in the priority order.
+            # Only a banded card has a place in the priority order. Under
+            # `--ranking=order` an order alone places a card, and a parent's
+            # order was dropped above, so this is never reached there.
             notes.dropped.add((n, "Board order on a card with no band"))
 
         referenced |= _referenced_prs(gql, issue, repo)
@@ -1282,6 +1350,8 @@ def build(
     }
     if milestone_default:
         board["state"]["milestoneDefault"] = opens_on
+    if ordered:
+        board["state"]["ranking"] = "order"
     report = {
         "open_issues": len(issues),
         "open_prs": len(open_prs),
@@ -1336,6 +1406,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         args.data_label,
         args.owner_body_lines,
         args.milestone_default,
+        args.ranking,
     )
     try:
         # `allow_nan=False` refuses a number JavaScript's `JSON.parse` cannot
@@ -1494,6 +1565,11 @@ def main(argv: list[str] | None = None) -> int:
         "--milestone-default",
         default="",
         help="the milestone the page opens on, such as 'MVP <n>', no selector if empty",
+    )
+    b.add_argument(
+        "--ranking",
+        default="",
+        help="order to rank cards by their order lines alone, empty for band labels",
     )
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("measure", help="time how long a deployed board takes to be served")

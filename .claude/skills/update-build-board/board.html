@@ -566,6 +566,10 @@ function source() {
       measured.
    4. The issue number breaks whatever is left, because it is stable.
 
+   A board built with `ranking: order`, which `STATE.ranking` names, ranks a
+   card by its order line alone, and every entry carries band 0, so `order`
+   decides the whole ranking there.
+
    Most of the tracker carries no position, which is the design rather than an
    omission: the ranking covers the top and everything it omits falls through to
    readiness and then the issue number. A position invented to fill the page
@@ -757,6 +761,13 @@ function readShowAll() {
   try { SHOW_ALL = localStorage.getItem(showAllKey()) === "1"; } catch (e) { SHOW_ALL = false; }
 }
 let SHOWN = 0, HIDDEN = 0, SHOWN_RANKED = 0;
+/* True when the board ranks by order lines alone, which `STATE.ranking` says,
+   and nothing in the chosen milestone is ranked, in flight or not. The
+   ranked-only view would then draw nothing, or only parents under a line
+   calling them ranked, so `buildOrder()` draws every card instead. Under the
+   band rule it stays false, and the page draws what it drew before the input
+   existed. */
+let UNRANKED = false;
 
 /* The milestone selector. A repository that works toward one milestone at a
    time names a milestone default to the reusable workflow, and the generator
@@ -830,6 +841,7 @@ function msbar() {
 function more() {
   const el = document.getElementById("more");
   if (!el) return;
+  if (STATE.ranking === "order") { moreByOrder(el); return; }
   if (!HIDDEN && !SHOW_ALL) { el.innerHTML = ""; return; }
   /* Both counts are within the chosen milestone, so the line says so. A parent
      shown beside the ranked cards under one milestone is not one of them, so
@@ -844,12 +856,53 @@ function more() {
       `${HIDDEN} other open ${HIDDEN === 1 ? "issue" : "issues"}${where} ` +
       `${HIDDEN === 1 ? "is" : "are"} not in the priority order.</span>` +
       `<button type="button" data-toggle>Show all ${SHOWN + HIDDEN}</button>`;
-  el.onclick = e => {
-    if (!e.target.matches("[data-toggle]")) return;
-    SHOW_ALL = !SHOW_ALL;
-    try { localStorage.setItem(showAllKey(), SHOW_ALL ? "1" : "0"); } catch (err) { /* per-browser only */ }
-    render();
-  };
+  el.onclick = flipShowAll;
+}
+
+function flipShowAll(e) {
+  if (!e.target.matches("[data-toggle]")) return;
+  SHOW_ALL = !SHOW_ALL;
+  try { localStorage.setItem(showAllKey(), SHOW_ALL ? "1" : "0"); } catch (err) { /* per-browser only */ }
+  render();
+}
+
+/* The line above the board on a board ranked by order lines alone, ported from
+   l3a0/marketlake's page at commit cc9d3432. Three cases, each saying which
+   holds.
+
+   1. Nothing in view is ranked, so `buildOrder()` drew every card. The line
+      says why rather than calling them ranked, and offers no toggle, which
+      would change nothing.
+   2. Every ranked card in view is in flight, so the board holds no ranked
+      card at all. The line says so even with nothing hidden, because an empty
+      board with no word of why reads as one that failed to draw.
+   3. The ranked cards are showing, in the same words the band rule uses. */
+function moreByOrder(el) {
+  const where = msWhere();
+  if (UNRANKED) {
+    el.onclick = null;
+    el.innerHTML = SHOWN
+      ? `<span>Nothing${where} is ranked yet, so ${SHOWN === 1 ? "the 1 open issue" :
+          `all ${SHOWN} open issues`}${where} not in flight ${SHOWN === 1 ? "is" : "are"} showing.</span>`
+      : "";
+    return;
+  }
+  const parents = SHOWN - SHOWN_RANKED;
+  const shown = SHOWN_RANKED
+    ? `Showing the ${plu(SHOWN_RANKED, "ranked card")}` +
+      `${parents ? ` and ${plu(parents, "parent")}` : ""}${where}. `
+    : `Every ranked card${where} is in flight, so ` +
+      `${parents ? `only ${plu(parents, "parent")} ${parents === 1 ? "is" : "are"} showing here`
+                 : "no card is showing here"}. `;
+  if (!HIDDEN && !SHOW_ALL && SHOWN_RANKED) { el.innerHTML = ""; return; }
+  el.innerHTML = SHOW_ALL
+    ? `<span>Showing all ${SHOWN} open issues${where} not in flight.</span>` +
+      `<button type="button" data-toggle>Show only the ranked cards</button>`
+    : `<span>${shown}` +
+      (HIDDEN ? `${HIDDEN} other open ${HIDDEN === 1 ? "issue" : "issues"}${where} ` +
+        `${HIDDEN === 1 ? "is" : "are"} not in the priority order.` : ``) + `</span>` +
+      (HIDDEN ? `<button type="button" data-toggle>Show all ${SHOWN + HIDDEN}</button>` : ``);
+  el.onclick = flipShowAll;
 }
 
 function buildOrder() {
@@ -1023,7 +1076,14 @@ function buildOrder() {
      ranked, and the ranked-only view would otherwise always hide the card its
      children name as what they serve. */
   const open = TRACKER.filter(c => !flight.has(c.n) && inMs(c));
-  const rest = open.filter(c => SHOW_ALL || rankMark(c) || (MS !== MS_ALL && c.kind === "parent"));
+  /* On a board ranked by order lines alone, every card shows when nothing in
+     the chosen milestone is ranked. A ranked card in flight still counts,
+     because the line above the board would otherwise say nothing in the
+     milestone is ranked while one is. A deferred card counts as unranked,
+     through `rankMark`, as it does for its chip and for the ranked-only view. */
+  UNRANKED = STATE.ranking === "order" && !TRACKER.some(c => inMs(c) && rankMark(c));
+  const rest = open.filter(c => SHOW_ALL || UNRANKED || rankMark(c) ||
+    (MS !== MS_ALL && c.kind === "parent"));
   SHOWN = rest.length; HIDDEN = open.length - rest.length;
   SHOWN_RANKED = rest.filter(c => rankMark(c)).length;
   /* Relaxed to a fixed point rather than resolved in one walk, so a card ends up
@@ -1493,6 +1553,19 @@ function buildOrder() {
     const anybody = "nothing left in the ranking is a card anybody can take";
     const onTracker = NEXT_SORTED.map(it => by.get(it.issue)).filter(Boolean);
     const here = onTracker.filter(inMs);
+    /* On a board ranked by order lines alone, the reasons l3a0/marketlake's
+       page gives at commit cc9d3432. There the board can be ranked by nothing
+       at all, and a card in flight can be ranked and still free, so the fixed
+       sentence below was false in two cases it never met under the band rule.
+       Only a deferred card is one the ranking itself says nobody should take. */
+    if (STATE.ranking === "order") {
+      if (!NEXT.length) return "nothing is ranked";
+      if (!here.length) return onTracker.length ? `nothing${msWhere()} is ranked` : anybody;
+      if (here.every(c => c.kind === "deferred"))
+        return `nothing${here.length < onTracker.length ? msWhere() : ""} left in the ranking ` +
+          `is a card anybody can take`;
+      return `every ranked card${msWhere()} is in the In flight section above`;
+    }
     if (!here.length && onTracker.length) return `nothing${msWhere()} is ranked`;
     if (here.length < onTracker.length && here.every(c => c.kind === "deferred"))
       return `nothing${msWhere()} left in the ranking is a card anybody can take`;

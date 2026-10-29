@@ -32,6 +32,10 @@ the same file at l3a0/quantitative-trading commit ``4755ac62``. The pull
 request that closes l3a0/repo-template#45 added the ``--milestone-default``
 cases, porting the default cases of ``tests/component/test_board_page.py`` in
 l3a0/marketlake at commit ``cc9d3432`` from the page to ``default_milestone``.
+The pull request that closes l3a0/repo-template#46 added the ``--ranking``
+cases, from ``tests/unit/test_board_generator.py`` in l3a0/marketlake at the
+same commit, with a ``board.json`` and the page's drawing of it that the
+generator and page at l3a0/repo-template commit ``cf2959a3`` wrote.
 """
 
 from __future__ import annotations
@@ -152,10 +156,16 @@ def issue(
     mentioned_by: tuple[int, ...] = (),
     body: str = "",
     blocked_by: tuple[tuple, ...] = (),
-    sub_issues: int = 0,
+    sub_issues: int | tuple[int, int] = 0,
     comments: tuple[tuple[str, str], ...] = (),
     association: str = "OWNER",
 ) -> dict:
+    """One open issue as the issues query returns it.
+
+    ``sub_issues`` is the count of sub-issues, all open, or a ``(total,
+    completed)`` pair, the two fields ``subIssuesSummary`` carries.
+    """
+    total, completed = sub_issues if isinstance(sub_issues, tuple) else (sub_issues, 0)
     return {
         "id": f"I{n}",
         "number": n,
@@ -165,7 +175,7 @@ def issue(
         "milestone": {"title": milestone} if milestone is not None else None,
         "labels": conn([{"name": x} for x in labels]),
         "blockedBy": conn([blocker(*b) for b in blocked_by]),
-        "subIssues": {"totalCount": sub_issues},
+        "subIssuesSummary": {"total": total, "completed": completed},
         "issueComments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
         "closedByPullRequestsReferences": conn([ref(p) for p in closed_by]),
         "timelineItems": conn(
@@ -1571,6 +1581,32 @@ def test_the_job_summary_lists_a_dropped_marker(
     )
 
 
+def test_the_job_summary_lists_the_drops_ranking_by_order_makes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the drops ``--ranking=order`` makes from vanishing unseen.
+
+    The pull request that closes l3a0/repo-template#46 added the three
+    phrases, each listed under its issue in number order. #4's order has no
+    band and ranks the card, because under ``order`` the line alone does, so
+    it is not listed as an order on a card with no band.
+    """
+    gh = FakeGitHub(
+        [
+            issue(2, sub_issues=1, comments=(("OWNER", VERDICT_LINE),)),
+            issue(1, sub_issues=1, body="Board order: 1\n"),
+            issue(3, labels=("deferred",), comments=(("OWNER", VERDICT_LINE),)),
+            issue(4, body="Board order: 2\n"),
+        ],
+        [],
+    )
+    text = summary_of(monkeypatch, tmp_path, gh, "--ranking=order")
+    assert summary_row(text, "Markers dropped") == (
+        "#1 Board order on a parent; #2 Board verdict on a parent; "
+        "#3 Board verdict on a deferred card"
+    )
+
+
 def test_an_order_on_a_card_with_no_band_is_listed_as_dropped() -> None:
     """Protects a well-formed order that ranks nothing from vanishing unseen.
 
@@ -2162,6 +2198,400 @@ def test_the_command_line_passes_owner_body_lines_through(
     assert "build_board: owner-body-lines is 'yes', and takes only empty or true" in (
         summary.read_text()
     )
+
+
+# ---- Ranking by order lines alone ----
+#
+# ``--ranking=order`` ranks a card by its ``Board order:`` line alone, as
+# l3a0/marketlake's generator does, for a repository that keeps no ``band:N``
+# labels. The cases are ported from ``tests/unit/test_board_generator.py`` in
+# l3a0/marketlake at commit ``cc9d3432``, and each also runs with the input
+# empty, where the board has to be the one the band rule wrote before.
+
+
+def ranked(ranking: str, issues: list[dict], data_label: str = "") -> tuple[dict, dict]:
+    """The board and report for ``issues`` under ``ranking``."""
+    return bb.build(FakeGitHub(issues, []), REPO, 30, NOW, data_label=data_label, ranking=ranking)
+
+
+@pytest.mark.parametrize(
+    ("labels", "sub_issues", "by_band", "by_order"),
+    [
+        (("deferred",), (2, 1), "parent", "parent"),
+        (("enhancement",), (1, 0), "parent", "parent"),
+        (("deferred",), (2, 2), "parent", "deferred"),
+        (("enhancement", "deferred"), (0, 0), "deferred", "deferred"),
+        (("enhancement",), (3, 3), "parent", "ready"),
+        (("decision",), (1, 1), "parent", "decision"),
+        ((), (0, 0), "ready", "ready"),
+    ],
+)
+def test_a_parent_under_order_is_one_with_an_open_sub_issue(
+    labels: tuple[str, ...], sub_issues: tuple[int, int], by_band: str, by_order: str
+) -> None:
+    """Protects the parent rule each input asks for.
+
+    ``subIssuesSummary`` counts closed sub-issues in ``total`` too. With the
+    input empty any sub-issue makes a parent, as before, because closed
+    children carry a parent's work. Under ``order`` only an open one does, so
+    an issue whose children have all closed is the card its labels say.
+    """
+    issues = [issue(1, labels=labels, sub_issues=sub_issues)]
+    assert card(ranked("", issues)[0], 1)["kind"] == by_band
+    assert card(ranked("order", issues)[0], 1)["kind"] == by_order
+
+
+@pytest.mark.parametrize(
+    ("body", "order"),
+    [
+        ("Board order: 3", 3),
+        ("Board order: 0", 0),
+        ("Board order: -2", -2),
+        ("Board order: 14.5", 14.5),
+        ("Board order: 2.0", 2),
+        ("Intro.\n\n \tBoard order: 7\t\n\nMore prose.", 7),
+        ("Board order: 7\r\nBoard after: #2\r\n", 7),
+        ("Board order: 123456789012345", 123456789012345),
+        ("Board order: -123456789012345", -123456789012345),
+        ("Board order: 12345678901234.5", 12345678901234.5),
+    ],
+)
+def test_an_order_line_in_the_owners_body_ranks_the_card(body: str, order: float) -> None:
+    """Protects a repository with no band labels from a board that ranks nothing.
+
+    Under ``order`` every entry carries band 0, so the order alone ranks a
+    card. With the input empty the same issue carries no ``band:N`` label and
+    ranks nowhere, as before.
+    """
+    issues = [issue(1, body=body), issue(2)]
+    board, report = ranked("order", issues)
+    assert board["next"]["items"] == [{"issue": 1, "band": 0, "ready": "plan", "order": order}]
+    assert type(board["next"]["items"][0]["order"]) is type(order)
+    assert report["unread"] == report["label_conflicts"] == report["dropped"] == []
+    assert board["state"]["ranking"] == "order"
+    board, _ = ranked("", issues)
+    assert board["next"]["items"] == []
+    assert "ranking" not in board["state"]
+
+
+def test_under_order_a_band_label_neither_ranks_a_card_nor_sets_its_band() -> None:
+    """Protects the order from a band label a repository left behind.
+
+    #1 carries two band labels and an order, #2 a band label and no order. With
+    the input empty both rank by band and the two labels are reported. Under
+    ``order`` #1 ranks at band 0 with nothing reported, and #2 does not rank.
+    """
+    issues = [
+        issue(1, labels=("band:2", "band:3"), body="Board order: 5"),
+        issue(2, labels=("band:1",)),
+    ]
+    board, report = ranked("order", issues)
+    assert board["next"]["items"] == [{"issue": 1, "band": 0, "ready": "plan", "order": 5}]
+    assert report["label_conflicts"] == []
+    assert card(board, 1)["labels"] == []
+    board, report = ranked("", issues)
+    assert board["next"]["items"] == [
+        {"issue": 1, "band": 2, "ready": "plan", "order": 5},
+        {"issue": 2, "band": 1, "ready": "plan"},
+    ]
+    assert report["label_conflicts"] == ["#1 carries 2 band labels, read as band:2"]
+
+
+def test_under_order_the_first_of_several_order_lines_wins_and_is_reported() -> None:
+    issues = [
+        issue(1, body="Board order: 4\nBoard order: 9"),
+        issue(2, body="Board order: 5\n" * 2),
+    ]
+    board, report = ranked("order", issues)
+    assert [(x["issue"], x["order"]) for x in board["next"]["items"]] == [(1, 4), (2, 5)]
+    assert report["label_conflicts"] == [
+        "#1 carries 2 order lines, read as 4",
+        "#2 carries 2 order lines, read as 5",
+    ]
+
+
+def test_a_verdict_and_an_order_on_a_parent_are_dropped_and_reported() -> None:
+    """Protects a parent from being offered to a builder.
+
+    A parent builds nothing. Under ``order`` its order and its verdict are
+    dropped, from ``next`` and from ``planned``, and both drops are listed.
+    With the input empty a band label ranks it with its verdict, as before,
+    and nothing is listed.
+    """
+    one = issue(
+        1,
+        labels=("band:1",),
+        sub_issues=(2, 1),
+        body="Board order: 1",
+        comments=(("OWNER", VERDICT_LINE),),
+    )
+    board, report = ranked("order", [one])
+    assert board["planned"]["items"] == board["next"]["items"] == []
+    assert report["dropped"] == [(1, "Board order on a parent"), (1, "Board verdict on a parent")]
+    board, report = ranked("", [one])
+    assert board["planned"]["items"] == [{"n": 1, "passes": 2, "ready": "build"}]
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "build", "order": 1}]
+    assert report["dropped"] == []
+
+
+def test_a_parent_whose_sub_issues_have_all_closed_keeps_its_order_and_verdict() -> None:
+    """Protects the drop from reaching a card that is no longer a parent under ``order``."""
+    one = issue(1, sub_issues=(3, 3), body="Board order: 1", comments=(("OWNER", VERDICT_LINE),))
+    board, report = ranked("order", [one])
+    assert board["planned"]["items"] == [{"n": 1, "passes": 2, "ready": "build"}]
+    assert board["next"]["items"] == [{"issue": 1, "band": 0, "ready": "build", "order": 1}]
+    assert report["dropped"] == []
+
+
+@pytest.mark.parametrize(
+    "labels", [("deferred",), ("deferred", DATA_LABEL)], ids=["deferred", "deferred data"]
+)
+def test_a_verdict_on_a_deferred_card_is_dropped_and_its_order_kept(
+    labels: tuple[str, ...],
+) -> None:
+    """Protects a deferred card from being offered to a builder.
+
+    Nobody should take a deferred card, so under ``order`` its verdict is
+    dropped and listed. It keeps its order, which the page hides. The label is
+    read rather than the kind, because a data label takes the kind ahead of
+    ``deferred``. With the input empty a band label ranks it with its verdict.
+    """
+    one = issue(
+        1, labels=(*labels, "band:2"), body="Board order: 1", comments=(("OWNER", VERDICT_LINE),)
+    )
+    board, report = ranked("order", [one], DATA_LABEL)
+    assert board["planned"]["items"] == []
+    assert board["next"]["items"] == [{"issue": 1, "band": 0, "ready": "plan", "order": 1}]
+    assert report["dropped"] == [(1, "Board verdict on a deferred card")]
+    board, report = ranked("", [one], DATA_LABEL)
+    assert board["planned"]["items"] == [{"n": 1, "passes": 2, "ready": "build"}]
+    assert board["next"]["items"] == [{"issue": 1, "band": 2, "ready": "build", "order": 1}]
+    assert report["dropped"] == []
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "MEMBER"])
+def test_under_order_a_strangers_order_line_ranks_nothing(association: str) -> None:
+    """Protects the order from a stranger's issue putting itself first.
+
+    Under ``order`` a body line alone ranks a card, so the run reads body
+    lines only from the owner's issues, with ``owner-body-lines`` left empty.
+    The stranger's lines are listed as refused. With the input empty the
+    stranger's line counts on a card a band label ranks, as before.
+    """
+    issues = [issue(1, labels=("band:1",), body=STRANGER_BODY, association=association), issue(2)]
+    board, report = ranked("order", issues)
+    assert board["next"]["items"] == []
+    assert "after" not in card(board, 1)
+    assert report["refused"] == [
+        (1, "Board after, not the owner's"),
+        (1, "Board order, not the owner's"),
+    ]
+    board, report = ranked("", issues)
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
+    assert report["refused"] == []
+
+
+@pytest.mark.parametrize("value", ["true", "Order", "ORDER", "band", " order", "order ", "1"])
+def test_a_ranking_value_other_than_empty_or_order_stops_the_run(value: str) -> None:
+    """Protects a caller that misspells the input from a board that ranks nothing.
+
+    A misspelt value would otherwise keep the band rule and draw a repository
+    with no band labels an empty build order. The run stops before it reads
+    GitHub, as a refused data label does.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="ranking is"):
+        bb.build(fake, REPO, 30, NOW, ranking=value)
+    assert fake.calls == []
+
+
+def test_the_command_line_passes_the_ranking_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the reusable workflow's ``ranking`` input on its way to the read.
+
+    The workflow passes the input as ``--ranking`` whether or not the caller
+    set it, so an empty value has to keep the band rule and write no
+    ``state.ranking``, and lists the orders on #2 and #3, which carry no
+    band, as dropped. ``order`` ranks #2 by its line alone and lists only the
+    drop on the parent #3. A refused value fails the run with
+    its reason in the summary.
+    """
+    issues = [
+        issue(1, labels=("band:1",)),
+        issue(2, body="Board order: 4\n"),
+        issue(3, sub_issues=1, body="Board order: 1\n"),
+    ]
+    fake = FakeGitHub(issues, [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def board() -> dict:
+        return json.loads((out / "board.json").read_text())
+
+    assert bb.main([*argv, "--ranking=order"]) == 0
+    assert board()["state"]["ranking"] == "order"
+    assert [x["issue"] for x in board()["next"]["items"]] == [2]
+    assert summary_row(summary.read_text(), "Markers dropped") == "#3 Board order on a parent"
+    summary.unlink()
+    assert bb.main([*argv, "--ranking="]) == 0
+    assert "ranking" not in board()["state"]
+    assert [x["issue"] for x in board()["next"]["items"]] == [1]
+    assert summary_row(summary.read_text(), "Markers dropped") == (
+        "#2 Board order on a card with no band; #3 Board order on a card with no band"
+    )
+    assert bb.main(argv) == 0
+    assert "ranking" not in board()["state"]
+    (out / "board.json").unlink()
+    summary.unlink()
+    assert bb.main([*argv, "--ranking=true"]) == 1
+    assert not (out / "board.json").exists()
+    assert "build_board: ranking is 'true', and takes only empty or order" in summary.read_text()
+
+
+def ranking_tracker() -> FakeGitHub:
+    """A tracker holding every case ``--ranking=order`` reads differently.
+
+    Orders with and without a band label, a band label with no order, parents
+    with an open sub-issue and with every sub-issue closed, deferred cards
+    with verdicts, one of them also a data card, and strangers' order lines
+    with and without a band label.
+    """
+    passed = (("OWNER", VERDICT_LINE),)
+    return FakeGitHub(
+        [
+            issue(1, labels=("band:1",), body="Board order: 2\n"),
+            issue(2, body="Board order: 1\n"),
+            issue(3, labels=("band:2",)),
+            issue(
+                4, labels=("band:1",), sub_issues=(2, 1), body="Board order: 3\n", comments=passed
+            ),
+            issue(
+                5, labels=("band:1",), sub_issues=(3, 3), body="Board order: 4\n", comments=passed
+            ),
+            issue(6, sub_issues=(1, 1), comments=passed),
+            issue(7, labels=("deferred", "band:2"), body="Board order: 5\n", comments=passed),
+            issue(8, labels=("deferred", DATA_LABEL), comments=passed),
+            issue(9, labels=("deferred",), body="Board order: 6\n", comments=passed),
+            issue(10, labels=("band:1",), body="Board order: 0.5\n", association="NONE"),
+            issue(11, body="Board order: 7\n", association="CONTRIBUTOR"),
+            issue(12, labels=("decision", "band:3"), comments=passed),
+        ],
+        [],
+    )
+
+
+RANKING_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "ranking.json"
+
+
+def test_a_caller_that_sets_no_ranking_gets_the_board_it_got_before() -> None:
+    """Protects every current caller from a board that moves.
+
+    ``RANKING_GOLDEN`` is the ``board.json`` that the generator at
+    l3a0/repo-template commit cf2959a3 wrote for ``ranking_tracker`` with the
+    data label set, and this run, with no ``ranking`` input, has to write the
+    same bytes. That generator read ``subIssues{totalCount}``, so it was fed
+    each issue with that field set to ``subIssuesSummary.total``. The orders
+    on the three unbanded cards rank nothing and are listed as dropped, as
+    under the band rule they always are, and no drop ``order`` makes is
+    listed.
+    """
+    board, report = build(ranking_tracker(), DATA_LABEL)
+    written = json.dumps(board, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    assert written == RANKING_GOLDEN.read_text(encoding="utf-8").removesuffix("\n")
+    assert report["dropped"] == [
+        (2, "Board order on a card with no band"),
+        (9, "Board order on a card with no band"),
+        (11, "Board order on a card with no band"),
+    ]
+
+
+def test_the_same_tracker_under_order_ranks_by_its_lines_alone() -> None:
+    """Protects the cases the golden holds, read the way ``order`` reads them."""
+    board, report = ranked("order", ranking_tracker().issues, DATA_LABEL)
+    assert board["next"]["items"] == [
+        {"issue": 1, "band": 0, "ready": "plan", "order": 2},
+        {"issue": 2, "band": 0, "ready": "plan", "order": 1},
+        {"issue": 5, "band": 0, "ready": "build", "order": 4},
+        {"issue": 7, "band": 0, "ready": "plan", "order": 5},
+        {"issue": 9, "band": 0, "ready": "plan", "order": 6},
+    ]
+    assert [(p["n"], p["ready"]) for p in board["planned"]["items"]] == [
+        (5, "build"),
+        (6, "build"),
+        (12, "build"),
+    ]
+    assert [card(board, n)["kind"] for n in (4, 5, 6)] == ["parent", "ready", "ready"]
+    assert report["dropped"] == [
+        (4, "Board order on a parent"),
+        (4, "Board verdict on a parent"),
+        (7, "Board verdict on a deferred card"),
+        (8, "Board verdict on a deferred card"),
+        (9, "Board verdict on a deferred card"),
+    ]
+    assert report["refused"] == [
+        (10, "Board order, not the owner's"),
+        (11, "Board order, not the owner's"),
+    ]
+
+
+RANKING_PAGE = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "ranking-page.json"
+
+
+def test_the_page_draws_a_board_with_no_ranking_as_it_did_before(tmp_path: Path) -> None:
+    """Protects every current caller's page from a change it did not ask for.
+
+    ``RANKING_PAGE`` holds what the page at l3a0/repo-template commit cf2959a3
+    drew from ``RANKING_GOLDEN`` with #1 picked: the build order, the line
+    above it, both notes, the In flight section and the chain bar. The page
+    here, drawing what the generator writes with no ``ranking`` input, has to
+    draw the same. Neither element carries the board's age, so the golden
+    does not move with the clock.
+    """
+    board, _ = build(ranking_tracker(), DATA_LABEL)
+    ids = draw_page(tmp_path, board, click=1)
+    golden = json.loads(RANKING_PAGE.read_text(encoding="utf-8"))
+    assert {element: ids[element]["html"] for element in golden} == golden
+
+
+def test_the_page_draws_every_card_the_generator_writes_when_nothing_is_ranked(
+    tmp_path: Path,
+) -> None:
+    """Protects the join between the generator's ``state.ranking`` and the page.
+
+    With no order line on any card, ``next`` is empty. Under ``order`` the
+    page opens on MVP 4 and draws every card there, under a line saying why.
+    The parent #1 counts, and so does #3, whose sub-issues have all closed and
+    which is a plain card here. The same issues with the input empty draw
+    only the parent, as before.
+    """
+    issues = [
+        issue(1, milestone="MVP 4, serve the bars", sub_issues=(3, 1)),
+        issue(2, milestone="MVP 4, serve the bars"),
+        issue(3, milestone="MVP 4, serve the bars", sub_issues=(2, 2), blocked_by=((2, "OPEN"),)),
+        issue(4, milestone="MVP 5, take orders"),
+        issue(5, milestone=None, labels=("deferred",)),
+    ]
+    board, _ = bb.build(
+        FakeGitHub(issues, []), REPO, 30, NOW, milestone_default="MVP <n>", ranking="order"
+    )
+    assert board["next"]["items"] == []
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids = draw_page(tmp_path, board)
+    assert ids["mssel"]["value"] == "MVP 4"
+    assert cards(ids, "board") == {1, 2, 3}
+    assert text(ids, "more") == (
+        "Nothing in MVP 4 is ranked yet, so all 3 open issues in MVP 4 not in flight are showing."
+    )
+    board, _ = build(FakeGitHub(issues, []), milestone_default="MVP <n>")
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids = draw_page(tmp_path, board)
+    assert cards(ids, "board") == {1, 3}
 
 
 # A 65,000-character line of each shape. Anyone can write an issue body, and the
@@ -3310,6 +3740,7 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.data-label",
                 "inputs.owner-body-lines",
                 "inputs.milestone-default",
+                "inputs.ranking",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -3328,8 +3759,8 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
     of which a stranger writes. ``inputs.title``, ``inputs.icon``,
-    ``inputs.data-label``, ``inputs.owner-body-lines`` and
-    ``inputs.milestone-default`` are written by the
+    ``inputs.data-label``, ``inputs.owner-body-lines``,
+    ``inputs.milestone-default`` and ``inputs.ranking`` are written by the
     caller's own file. Each reaches the shell only through an environment
     variable, and the icon also names a file for the caller's checkout, which
     is an action's input rather than shell.
@@ -3347,6 +3778,9 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     default = re.findall(r"^(.*)\$\{\{\s*inputs\.milestone-default\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in default] == [("MILESTONE_DEFAULT:", "")]
     assert '--milestone-default="$MILESTONE_DEFAULT"' in _called()
+    ranking = re.findall(r"^(.*)\$\{\{\s*inputs\.ranking\s*\}\}(.*)$", _called(), re.M)
+    assert [(before.strip(), after) for before, after in ranking] == [("RANKING:", "")]
+    assert '--ranking="$RANKING"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
@@ -3384,10 +3818,12 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     label, would fail or change every such run. An empty title gives
     ``<name> build board``, an empty icon serves the template's, an empty
     data label reads no ``data`` kind, and an empty ``owner-body-lines`` reads
-    body lines from anyone's issue, as every run did before it. An empty milestone default draws no
-    selector. The README and
-    the l3a0 plugin's update-build-board skill name the inputs by the keys
-    declared here.
+    body lines from anyone's issue, as every run did before it. An empty
+    milestone default draws no selector, and an empty ``ranking`` keeps the
+    band rule. The README and the l3a0 plugin's update-build-board skill name
+    the inputs by the keys declared here. The plugin's string for ``ranking``,
+    ``with: ranking: order``, joins this test when ``PLUGIN_COMMIT`` moves to
+    the release that carries it.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
@@ -3398,6 +3834,7 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
         "data-label",
         "owner-body-lines",
         "milestone-default",
+        "ranking",
     ]
     for block in declared.values():
         assert "        type: string\n" in block
@@ -3408,6 +3845,7 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     assert f"    with:\n      data-label: {DATA_LABEL}\n" in readme
     assert '    with:\n      owner-body-lines: "true"\n' in readme
     assert "    with:\n      milestone-default: MVP <n>\n" in readme
+    assert "    with:\n      ranking: order\n" in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
     assert f"`with: data-label: {DATA_LABEL}`" in _skill()
@@ -3533,7 +3971,7 @@ DISPATCH = 'gh workflow run board.yml --repo "$REPO"'
 
 # What the generator reads that no trigger above covers, each with the words a
 # moment in the skill uses for the change a session makes to it.
-NO_RUN_READS = {"blockedBy": '"blocked by" link', "subIssues": "sub-issue"}
+NO_RUN_READS = {"blockedBy": '"blocked by" link', "subIssuesSummary": "sub-issue"}
 
 # Any wording of either change, so a moment reworded away from the words above
 # still has to name the dispatch.
@@ -3558,7 +3996,9 @@ def test_a_change_that_starts_no_run_names_the_dispatch() -> None:
     names it, and the command names the caller, which keeps its dispatch
     trigger.
     """
-    assert set(NO_RUN_READS) <= set(re.findall(r"\b(blockedBy|subIssues)\b", bb.ISSUES_QUERY))
+    assert set(NO_RUN_READS) <= set(
+        re.findall(r"\b(blockedBy|subIssuesSummary)\b", bb.ISSUES_QUERY)
+    )
     moments = _moments()
     for words in NO_RUN_READS.values():
         assert any(words in m for m in moments), f"no moment names a {words}"

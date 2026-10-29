@@ -999,6 +999,14 @@ def test_the_issues_query_reads_each_issues_author() -> None:
         ("Board after: 3", "Board after"),
         ("Board after", "Board after"),
         ("Board verdict: build after 3 passes", "Board verdict"),
+        ("Board after #2", "Board after"),
+        ("> Board order: 3", "Board order"),
+        ("1. Board order: 3", "Board order"),
+        ("1) Board order: 3", "Board order"),
+        ("+ Board order: 3", "Board order"),
+        ("Board  order: 3", "Board order"),
+        ("Board verd\u0130ct: build after 3 passes", "Board verdict"),
+        ("Board verd\u0131ct: build after 3 passes", "Board verdict"),
     ],
 )
 def test_a_near_miss_in_the_owners_body_is_listed_as_unread(near_miss: str, kind: str) -> None:
@@ -1060,6 +1068,8 @@ def test_an_unbanded_cards_near_miss_is_listed_as_unread() -> None:
         ("**Board verdict**: build after 5 passes", ["Board verdict"]),
         ("Board verdict: build after 5 passes\r", ["Board verdict"]),
         ("Board verdict: decide after", ["Board verdict"]),
+        ("Board verd\u0130ct: build after 5 passes", ["Board verdict"]),
+        ("Board verd\u0131ct: build after 5 passes", ["Board verdict"]),
         ("The line `Board verdict: build after 5 passes` goes here.", []),
         ("```\nBoard verdict: ready after 5 passes\n```", []),
     ],
@@ -1257,23 +1267,51 @@ def test_the_job_summary_lists_each_marker_it_did_not_use(
 def test_the_job_summary_lists_a_dropped_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Protects the dropped row, which no read fills yet, from printing nothing.
-
-    l3a0/repo-template#46 adds the first drops, so the row is filled here
-    through the report rather than through a read.
-    """
-    real = bb.build
-
-    def build_with_drops(*args: object, **kwargs: object) -> tuple[dict, dict]:
-        board, report = real(*args, **kwargs)
-        report["dropped"] = [(1, "Board order on a parent"), (2, "Board verdict on a parent")]
-        return board, report
-
-    monkeypatch.setattr(bb, "build", build_with_drops)
-    text = summary_of(monkeypatch, tmp_path, FakeGitHub([issue(1), issue(2)], []))
+    """Protects the dropped row from printing nothing when a marker goes unused."""
+    gh = FakeGitHub([issue(2, body="Board after: #2\n"), issue(1, body="Board order: 3\n")], [])
+    text = summary_of(monkeypatch, tmp_path, gh)
     assert summary_row(text, "Markers dropped") == (
-        "#1 Board order on a parent; #2 Board verdict on a parent"
+        "#1 Board order on a card with no band; #2 Board after, naming itself"
     )
+
+
+def test_an_order_on_a_card_with_no_band_is_listed_as_dropped() -> None:
+    """Protects a well-formed order that ranks nothing from vanishing unseen.
+
+    Only a banded card has a place in the priority order, so the order line on
+    an unbanded card sets nothing. A banded card's order is not listed.
+    """
+    gh = FakeGitHub(
+        [issue(1, body="Board order: 3\n"), issue(2, labels=("band:1",), body="Board order: 3\n")],
+        [],
+    )
+    board, report = build(gh)
+    assert report["dropped"] == [(1, "Board order on a card with no band")]
+    assert board["next"]["items"] == [{"issue": 2, "band": 1, "ready": "plan", "order": 3}]
+    assert build(FakeGitHub([issue(1)], []))[1]["dropped"] == []
+
+
+@pytest.mark.parametrize(
+    ("body", "dropped"),
+    [
+        ("Board after: #5\n", True),
+        ("Board after: #5 and #5\n", True),
+        ("Board after: #5, #2\n", False),
+        ("Board after: #2\n", False),
+        ("Board after: #7\n", False),
+    ],
+)
+def test_an_after_line_naming_only_its_own_card_is_listed_as_dropped(
+    body: str, dropped: bool
+) -> None:
+    """Protects an after line that can never hold its card from vanishing unseen.
+
+    A line naming another issue too still sets something, and a line naming a
+    closed issue is a blocker that has finished, so neither is listed.
+    """
+    board, report = build(FakeGitHub([issue(2), issue(5, body=body)], []))
+    assert report["dropped"] == ([(5, "Board after, naming itself")] if dropped else [])
+    assert card(board, 5).get("after", []) == ([2] if "#2" in body else [])
 
 
 def marker_tracker() -> FakeGitHub:
@@ -1311,6 +1349,7 @@ def marker_tracker() -> FakeGitHub:
             issue(14, comments=(("OWNER", VERDICT_LINE), ("OWNER", PASS))),
             issue(15, comments=passed, labels=("deferred", DATA_LABEL)),
             issue(16, labels=("band:2",), body="Board order: 8\nBoard order: 1\n"),
+            issue(17, body="Board order: 3\nBoard after: #17\n"),
         ],
         [pull(30, closes=(12,)), pull(31, state="MERGED", body="Part of #13")],
     )
@@ -1328,7 +1367,10 @@ def test_every_marker_shape_reaches_its_row() -> None:
         (7, "Board verdict"),
     ]
     assert report["refused"] == [(4, "Board verdict, not the owner's")]
-    assert report["dropped"] == []
+    assert report["dropped"] == [
+        (17, "Board after, naming itself"),
+        (17, "Board order on a card with no band"),
+    ]
     assert report["no_verdict"] == [4, 13, 14]
     assert "#6 carries 2 order lines, read as 4" in report["label_conflicts"]
 
@@ -1336,17 +1378,29 @@ def test_every_marker_shape_reaches_its_row() -> None:
 GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
 
 
-def test_the_marker_rows_change_nothing_in_the_board() -> None:
+class FrozenNow(datetime):
+    """A ``datetime`` whose ``now`` is ``NOW``, so a run's board carries a fixed time."""
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return NOW
+
+
+def test_the_marker_rows_change_nothing_in_the_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Protects every caller that sets no input from a board that moves.
 
     The rows list what the board did not use, so the board itself has to stay
-    as it was. ``GOLDEN`` is the ``board.json`` that the generator at
+    as it was. ``GOLDEN`` is the ``board.json`` that the command line at
     l3a0/repo-template commit cf2959a3 wrote for ``marker_tracker``, and this
-    run has to write the same bytes.
+    run has to write the same bytes. The file is read as the command line
+    writes it, so a change to how it is written fails here too.
     """
-    board, _ = build(marker_tracker(), DATA_LABEL)
-    written = json.dumps(board, ensure_ascii=False, separators=(",", ":"))
-    assert written == GOLDEN.read_text(encoding="utf-8").removesuffix("\n")
+    monkeypatch.setattr(bb, "datetime", FrozenNow)
+    summary_of(monkeypatch, tmp_path, marker_tracker(), "--data-label", DATA_LABEL)
+    written = (tmp_path / "site" / "board.json").read_bytes()
+    assert written == GOLDEN.read_bytes().removesuffix(b"\n")
 
 
 def test_an_issues_comments_and_blockers_are_read_to_their_end() -> None:

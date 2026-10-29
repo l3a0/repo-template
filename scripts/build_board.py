@@ -152,6 +152,11 @@ MARKER_LINE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 MARKER_NAME = {"order": "Board order", "verdict": "Board verdict", "after": "Board after"}
+# A marker line's kind, read from its first letter. Under `re.IGNORECASE` a
+# Turkish dotted or dotless i matches the `i` in "verdict", and lowering the
+# whole word turns `İ` into two characters, which names no kind. None of the
+# three kinds starts with an i.
+MARKER_KIND = {"o": "order", "v": "verdict", "a": "after"}
 
 # The heading each plan-audit pass opens with, per the update-build-board
 # skill. A pass newer than an issue's newest verdict is a plan that finished
@@ -673,7 +678,7 @@ def _marker_lines(text: str) -> list[tuple[str, str, int]]:
     for line in text.split("\n"):
         m = MARKER_LINE.match(line)
         if m:
-            found.append((m.group(1).lower(), line, offset))
+            found.append((MARKER_KIND[m.group(1)[0].lower()], line, offset))
         offset += len(line) + 1
     return found
 
@@ -768,8 +773,10 @@ def latest_verdict(
     A loop run again on the same issue writes a new verdict, so the last one
     wins. GitHub lists comments oldest first. Only a comment whose
     ``authorAssociation`` is ``OWNER`` counts, for a verdict and for a pass
-    heading alike. A stranger's verdict line is listed as refused, and a
-    stranger's pass heading counts for nothing. In an owner's comment, a line
+    heading alike. A stranger's line that ``VERDICT`` reads is listed as
+    refused, while a stranger's near miss is not listed at all, so a stranger
+    cannot fill the summary. A stranger's pass heading counts for nothing. In
+    an owner's comment, a line
     that looks meant as a marker and is not read is listed as unread, which
     includes an order or after line, since those count only in a body.
 
@@ -918,6 +925,12 @@ def build(
         card = tracker_card(
             gql, issue, names, open_issues, repo, conflicts, kinds_read, after_texts=after_texts
         )
+        # A card cannot wait on itself, so `tracker_card` leaves a line naming
+        # only the card itself with nothing to set.
+        for text in after_texts:
+            refs = AFTER_REF.findall(text)
+            if refs and all(int(r) == n for r in refs):
+                notes.dropped.add((n, "Board after, naming itself"))
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
 
@@ -937,6 +950,9 @@ def build(
         entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts)
         if entry:
             ranked.append(entry)
+        elif orders:
+            # Only a banded card has a place in the priority order.
+            notes.dropped.add((n, "Board order on a card with no band"))
 
         referenced |= _referenced_prs(gql, issue, repo)
 

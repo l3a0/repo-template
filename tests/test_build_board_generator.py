@@ -143,7 +143,7 @@ def issue(
     title: str | None = None,
     milestone: str | None = "Slice 1",
     labels: tuple[str, ...] = ("enhancement",),
-    closed_by: tuple[int, ...] = (),
+    closed_by: tuple[int | tuple[int, str], ...] = (),
     mentioned_by: tuple[int, ...] = (),
     body: str = "",
     blocked_by: tuple[tuple, ...] = (),
@@ -160,11 +160,17 @@ def issue(
         "blockedBy": conn([blocker(*b) for b in blocked_by]),
         "subIssues": {"totalCount": sub_issues},
         "issueComments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
-        "closedByPullRequestsReferences": conn([{"number": p} for p in closed_by]),
+        "closedByPullRequestsReferences": conn([ref(p) for p in closed_by]),
         "timelineItems": conn(
             [{"source": {"number": p, "repository": {"nameWithOwner": REPO}}} for p in mentioned_by]
         ),
     }
+
+
+def ref(entry: int | tuple[int, str]) -> dict:
+    """One closing link, to a number here or to a ``(number, repository)`` pair."""
+    n, repo = entry if isinstance(entry, tuple) else (entry, REPO)
+    return {"number": n, "repository": {"nameWithOwner": repo}}
 
 
 def blocker(n: int, state: str, repo: str = REPO) -> dict:
@@ -185,7 +191,7 @@ def pull(
     *,
     state: str = "OPEN",
     body: str = "",
-    closes: tuple[int, ...] = (),
+    closes: tuple[int | tuple[int, str], ...] = (),
     comments: tuple[tuple[str, str], ...] = (),
     contexts: tuple[dict, ...] = (check("test", "SUCCESS"),),
     fork: bool = False,
@@ -196,7 +202,7 @@ def pull(
         "state": state,
         "body": body,
         "isCrossRepository": fork,
-        "closingIssuesReferences": conn([{"number": i} for i in closes]),
+        "closingIssuesReferences": conn([ref(i) for i in closes]),
         "comments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
         "commits": {
             "nodes": [
@@ -1001,6 +1007,112 @@ def test_a_cross_reference_from_another_repository_reads_nothing_here() -> None:
     assert prs_of(board) == []
     assert report["other_prs_read"] == 0
     assert not any("pullRequest(number:999" in q for q in gh.calls)
+
+
+@pytest.mark.parametrize("here", [False, True])
+def test_an_issue_closed_from_another_repository_reads_nothing_here(here: bool) -> None:
+    """Protects the run from another repository's closing pull request.
+
+    Issue 40 here is closed by pull request 34 in ``other/repo``, which a
+    closing keyword such as "closes octo-org/octo-repo#40" there registers.
+    Read by number in this repository, the reference stops the run when there
+    is no pull request 34 here, and reads an unrelated one when there is.
+    """
+    prs = [pull(34, state="MERGED", body="Bumps ruff.")] if here else []
+    gh = FakeGitHub([issue(40, closed_by=((34, "other/repo"),))], prs)
+    board, report = build(gh)
+    assert prs_of(board) == []
+    assert report["other_prs_read"] == 0
+    assert not any("pullRequest(number:" in q for q in gh.calls)
+
+
+def test_a_closing_link_to_another_repositorys_issue_draws_nothing_here() -> None:
+    """Protects a card from a branch that closes another repository's issue.
+
+    Pull request 10 closes ``other/repo#1``, and issue 1 here is open. Read as
+    this repository's issue 1, the link would draw the branch on that card as
+    a closing link. Pull request 11 closes ``other/repo#3`` and issue 2 here,
+    so it draws on 2 alone. Pull request 12 closes ``other/repo#5`` and is part
+    of issue 5 here, so it draws on 5 as a ``Part of`` branch, not a closing one.
+    """
+    gh = FakeGitHub(
+        [issue(1), issue(2), issue(3), issue(5)],
+        [
+            pull(10, closes=((1, "other/repo"),)),
+            pull(11, closes=((3, "other/repo"), 2)),
+            pull(12, closes=((5, "other/repo"),), body="Part of #5"),
+        ],
+    )
+    board, report = build(gh)
+    assert [(p["pr"], p["issue"], p["linked"], p.get("partOf")) for p in prs_of(board)] == [
+        (11, 2, True, None),
+        (12, 5, False, True),
+    ]
+    assert report["open_prs_left_out"] == [10]
+
+
+def entry_selection(query: str, field: str) -> str:
+    """What a query selects from each entry of the list ``field`` names."""
+    start = query.index("nodes{", query.index(f"{field}(")) + len("nodes{")
+    depth, end = 1, start
+    while depth:
+        depth += {"{": 1, "}": -1}.get(query[end], 0)
+        end += 1
+    return " ".join(query[start : end - 1].split())
+
+
+def test_a_reference_to_another_repository_past_the_first_page_is_dropped() -> None:
+    """Protects the filter on the pages after the first hundred links.
+
+    The fake answers every query from its fixtures whatever the query selects,
+    so the test also reads what each query asks for. A query that stopped
+    selecting the repository would leave every link from it reading as another
+    repository's, and the live board would lose them while every fixture here
+    still carried one.
+    """
+    first = issue(5)
+    first["closedByPullRequestsReferences"] = conn([], more=True, cursor="b1")
+    opened = pull(7)
+    opened["closingIssuesReferences"] = conn([], more=True, cursor="k1")
+    nested = {
+        ("I5", "closedByPullRequestsReferences", "b1"): conn([ref((34, "other/repo")), ref(6)]),
+        ("P7", "closingIssuesReferences", "k1"): conn([ref((5, "other/repo")), ref(8)]),
+    }
+    gh = FakeGitHub([first, issue(8)], [pull(6, state="MERGED", closes=(5,)), opened], nested)
+    board, report = build(gh)
+    assert [(p["pr"], p["issue"]) for p in prs_of(board)] == [(6, 5), (7, 8)]
+    assert report["other_prs_read"] == 1
+    assert not any("pullRequest(number:34" in q for q in gh.calls)
+    wanted = "number repository{nameWithOwner}"
+    reads = {
+        "closedByPullRequestsReferences": [q for q in gh.calls if "issues(states:OPEN" in q],
+        "closingIssuesReferences": [
+            q for q in gh.calls if "pullRequests(states:OPEN" in q or "pullRequest(number:" in q
+        ],
+    }
+    for field, first_pages in reads.items():
+        paged = [q for q in gh.calls if "node(id:$id)" in q and f"{field}: " in q]
+        assert first_pages and paged
+        assert {entry_selection(q, field) for q in first_pages + paged} == {wanted}
+
+
+def test_a_null_reference_is_dropped_rather_than_read() -> None:
+    """Protects the run from an entry GitHub sent as null.
+
+    GitHub's schema lets an entry of either list, or of an issue's "blocked by"
+    links, be null, which it sends for an entry the token cannot read. Every
+    issue and pull request here is readable, so a null one belongs to another
+    repository, and reading its number would stop the run.
+    """
+    first = issue(5)
+    first["closedByPullRequestsReferences"] = conn([None, ref(6)])
+    first["blockedBy"] = conn([None, blocker(8, "OPEN")])
+    opened = pull(7)
+    opened["closingIssuesReferences"] = conn([None, ref(8)])
+    gh = FakeGitHub([first, issue(8)], [pull(6, state="MERGED", closes=(5,)), opened])
+    board, _ = build(gh)
+    assert [(p["pr"], p["issue"]) for p in prs_of(board)] == [(6, 5), (7, 8)]
+    assert card(board, 5)["needs"] == [8]
 
 
 def test_a_closed_part_of_pull_request_reads_as_closed() -> None:

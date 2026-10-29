@@ -67,6 +67,10 @@
           background: var(--panel); border-radius: 4px; color: var(--muted); }
   .chip b { color: var(--ink); font-weight: 600; }
   .chip.live { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  /* A repository's own paragraph under the strip, which its caller sets as the
+     reusable workflow's `note` input. */
+  .repnote { margin: 0 0 4px; font-size: 0.8125rem; color: var(--faint); max-width: 76ch; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
   .sec { margin-top: 38px; }
   .sec > header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px;
@@ -244,10 +248,11 @@
 <div class="wrap">
   <div class="mast">
     <h1 id="title">Build board</h1>
-    <span class="sub">what is in flight, and what to take next</span>
+    <span class="sub" id="sub">what is in flight, and what to take next</span>
   </div>
   <div class="strip" id="strip"></div>
   <div class="caveat warn" id="source" hidden></div>
+  <p class="repnote" id="repnote" hidden></p>
 
   <section class="sec" id="flightsec">
     <header>
@@ -304,7 +309,9 @@ let ISS = "", PRU = "";
    The file holds six sections, state, prs, working, planned, next and tracker.
    Each is { schema: 1, items: [...] }, except state, which is
    { schema: 1, repo, title, updatedAt, issues: { open }, source,
-   longestGapMinutes, staleAfterMinutes }.
+   longestGapMinutes, staleAfterMinutes }, plus subtitle, note and main when
+   the caller sets the reusable workflow's subtitle, note and
+   default-branch-head inputs.
 
    FALLBACK carries no board data. A copy of the six sections in the page goes
    stale silently, because nothing refreshes it once the page is checked in.
@@ -428,7 +435,8 @@ function source() {
      lines here said which copy was showing and how old it was. The harness now
      serves a board.json through a fake fetch instead, so every other line says
      there is no board data and that the page carries no copy. */
-  const age = () => `measured ${esc(ago(STATE.updatedAt))}`;
+  const age = () => `measured ${esc(ago(STATE.updatedAt))}` +
+    (headOf(STATE) ? ` against <span class="mono">${esc(headOf(STATE))}</span>` : ``);
   const none = `<b>Showing no board data.</b> `;
   const lines = {
     loading: none + `The live board has not arrived yet, and the page carries no copy of its own.`,
@@ -615,13 +623,40 @@ function ago(iso) {
   return Math.floor(h / 24) + "d ago";
 }
 
+/* The lines a caller can set through the reusable workflow's inputs. Each is
+   drawn on every draw, from the board when it carries the line and from the
+   page otherwise, so a later board without one puts the page's own back. */
+const SUBTITLE = "what is in flight, and what to take next";
+/* A note is a list of pieces the generator parsed from the caller's text, each
+   { text } or { text, href }. The page escapes each piece and draws an address
+   as a link only when it is https, which the generator also checked, so
+   neither half alone decides what lands in an href. A note in any other shape
+   is left out rather than refusing the state section, because the note says
+   nothing about the tracker. */
+const NOTE_HREF = /^https:\/\/[^\s"<>]+$/;
+function noteHtml(note) {
+  if (!Array.isArray(note) || !note.every(p => p && isStr(p.text))) return "";
+  return note.map(p => isStr(p.href) && NOTE_HREF.test(p.href)
+    ? `<a href="${esc(p.href)}" target="_blank" rel="noopener">${esc(p.text)}</a>`
+    : esc(p.text)).join("");
+}
+/* The first seven characters of the default branch's head, which the
+   generator writes only for a caller that sets default-branch-head, or "". */
+const headOf = s => s && isStr(s.main) && /^[0-9a-f]{7}$/.test(s.main) ? s.main : "";
+
 function strip() {
   const s = STATE;
-  /* The title is the one line of the heading that comes from the board, and an
-     older board with none keeps the page's own. */
+  /* The title, the subtitle and the note are the lines of the heading that come
+     from the board. An older board with none keeps the page's own title and
+     subtitle and draws no note. */
   const title = isStr(s.title) && s.title ? s.title : "Build board";
   document.getElementById("title").innerHTML = esc(title);
   document.title = title;
+  document.getElementById("sub").innerHTML =
+    esc(isStr(s.subtitle) && s.subtitle ? s.subtitle : SUBTITLE);
+  const note = document.getElementById("repnote");
+  note.innerHTML = noteHtml(s.note);
+  note.hidden = !note.innerHTML;
   document.getElementById("strip").innerHTML = [
     `<span class="chip"><b>${s.issues.open}</b> open issues</span>`,
     `<span class="chip live" id="stamp">measured ${esc(ago(s.updatedAt))}</span>`
@@ -655,8 +690,10 @@ function stamped() {
   /* The board is no longer measured by hand, so the footer says how it is
      built. Its figures still date from the stamp rather than from the moment of
      reading, so the decay clause still holds. */
-  const how = `Built from GitHub by an Action on each change and on a schedule, and fetched ` +
-    `again every ${FETCH_EVERY / 60000} minutes`;
+  const head = headOf(STATE)
+    ? ` against the default branch at <span class="mono">${esc(headOf(STATE))}</span>` : ``;
+  const how = `Built from GitHub${head} by an Action on each change and on a schedule, and ` +
+    `fetched again every ${FETCH_EVERY / 60000} minutes`;
   document.getElementById("foot").innerHTML =
     `<p>${how}, so every figure on it is current as of the stamp above rather than live.` +
     (decay.length ? ` The In flight section decays fastest: ${andlist(decay)}.` : ``) +
@@ -1838,14 +1875,17 @@ function inFlight(ctx) {
     : `Nothing is in flight. Every card belongs to the board below.` + hiddenNote;
 }
 
-/* With no board data only the banner is drawn, and both card sections and the
-   footer are hidden, since each states facts about the tracker. The platform's
+/* With no board data only the banner is drawn, and both card sections, the
+   footer and the repository's note are hidden. The first three state facts
+   about the tracker. The note sits beside the banner, where a first draw that
+   throws after strip() would otherwise leave it next to a banner saying no
+   board data is shown. The platform's
    page wrapper makes `hidden` win over a section's own display rule. The strip
    sits outside those sections, so it is emptied: a first live draw that throws
    after strip() has run rolls back to no data, and the strip would otherwise
    keep that draw's count beside a banner saying no board data is shown. */
 function render() {
-  ["flightsec", "ordersec", "foot"].forEach(id => {
+  ["flightsec", "ordersec", "foot", "repnote"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.hidden = NONE;
   });

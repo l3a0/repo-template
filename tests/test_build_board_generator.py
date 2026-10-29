@@ -67,6 +67,8 @@ REPO = "octo-org/octo-repo"
 # input. The one repository that marks such issues uses this name.
 DATA_LABEL = "blocked-on-data"
 NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
+# The commit the fake repository's default branch stands at.
+HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
@@ -212,13 +214,22 @@ class FakeGitHub:
     Open issues and open pull requests are served in pages of the size the
     real queries ask for. A pull request asked for by number comes from
     ``prs``, whatever its state. ``nested`` serves the further pages of a
-    nested list, keyed by the node's id and the list's name.
+    nested list, keyed by the node's id and the list's name. ``head`` is the
+    commit the default branch stands at, and None answers as a repository
+    with no default branch.
     """
 
-    def __init__(self, issues: list[dict], prs: list[dict], nested: dict | None = None):
+    def __init__(
+        self,
+        issues: list[dict],
+        prs: list[dict],
+        nested: dict | None = None,
+        head: str | None = HEAD,
+    ):
         self.issues = issues
         self.prs = {p["number"]: p for p in prs}
         self.nested = nested or {}
+        self.head = head
         self.calls: list[str] = []
 
     def _page(self, nodes: list[dict], size: int, after: str | None) -> dict:
@@ -245,6 +256,9 @@ class FakeGitHub:
             open_prs = [p for p in self.prs.values() if p["state"] == "OPEN"]
             page = self._page(open_prs, 50, variables.get("after"))
             return {"rateLimit": {"cost": 1}, "repository": {"pullRequests": page}}
+        if "defaultBranchRef" in query:
+            ref = {"target": {"oid": self.head}} if self.head else None
+            return {"rateLimit": {"cost": 1}, "repository": {"defaultBranchRef": ref}}
         found = {
             f"p{n}": self.prs.get(int(n)) for n in re.findall(r"pullRequest\(number:(\d+)", query)
         }
@@ -541,6 +555,210 @@ def test_the_command_line_passes_the_title_through(
     assert json.loads((out / "board.json").read_text())["state"]["title"] == "Octo board"
     assert bb.main([*argv, "--title", ""]) == 0
     assert json.loads((out / "board.json").read_text())["state"]["title"] == "octo-repo build board"
+
+
+# The three lines a caller can add, and the state keys they write. A board
+# built with none of them carries exactly the keys it carried before they
+# existed.
+BEFORE_KEYS = {
+    "schema",
+    "repo",
+    "title",
+    "updatedAt",
+    "issues",
+    "source",
+    "longestGapMinutes",
+    "staleAfterMinutes",
+}
+
+
+def _with(gh: FakeGitHub, **lines: str) -> tuple[dict, dict]:
+    """The board built with the caller's subtitle, note or head input."""
+    return bb.build(gh, REPO, 30, NOW, **lines)
+
+
+def test_a_caller_setting_no_line_gets_the_board_it_got_before() -> None:
+    """Protects every current caller from the three new inputs.
+
+    The template's own board, and the two repositories pinned to an older
+    commit, set none of ``subtitle``, ``note`` or ``default-branch-head``. Their
+    ``state`` carries exactly the keys it carried before, written identically
+    whether the inputs are left out or passed empty, and the run sends exactly
+    the requests it sent before, with no request for the default branch.
+    """
+    issues = [issue(1, mentioned_by=(7,)), issue(2)]
+    prs = [pull(5, closes=(1,)), pull(7, state="MERGED", body="Part of #1")]
+    left_out = FakeGitHub(issues, prs)
+    board, _ = build(left_out)
+    passed_empty = FakeGitHub(issues, prs)
+    empty, _ = _with(passed_empty, subtitle="", note="", default_branch_head="")
+    assert set(board["state"]) == BEFORE_KEYS
+    assert json.dumps(empty) == json.dumps(board)
+    assert passed_empty.calls == left_out.calls
+    assert len(left_out.calls) == 3
+    assert not any("defaultBranchRef" in q for q in left_out.calls)
+
+
+def test_the_subtitle_reaches_the_state() -> None:
+    """Protects the reusable workflow's ``subtitle`` input on its way to the page."""
+    state = _with(FakeGitHub([issue(1)], []), subtitle="the order of work on the lake")[0]["state"]
+    assert state["subtitle"] == "the order of work on the lake"
+    assert set(state) == BEFORE_KEYS | {"subtitle"}
+
+
+LINK_A = "https://github.com/octo-org/octo-repo/blob/main/docs/design.md"
+LINK_B = "https://github.com/octo-org/octo-repo/blob/main/docs/build-plan.md"
+
+
+@pytest.mark.parametrize(
+    ("note", "pieces"),
+    [
+        ("Plain words only.", [{"text": "Plain words only."}]),
+        (
+            f"Read [the design doc]({LINK_A}) first.",
+            [
+                {"text": "Read "},
+                {"text": "the design doc", "href": LINK_A},
+                {"text": " first."},
+            ],
+        ),
+        (
+            f"[The design]({LINK_A}) and [the plan]({LINK_B})",
+            [
+                {"text": "The design", "href": LINK_A},
+                {"text": " and "},
+                {"text": "the plan", "href": LINK_B},
+            ],
+        ),
+        (
+            f"  The order\n follows   the rule:\n\tcapture first, in\n[the plan]({LINK_B}).\n",
+            [
+                {"text": "The order follows the rule: capture first, in "},
+                {"text": "the plan", "href": LINK_B},
+                {"text": "."},
+            ],
+        ),
+        ("[brackets] and (parentheses) alone", [{"text": "[brackets] and (parentheses) alone"}]),
+    ],
+    ids=["text", "one-link", "two-links", "line-breaks", "no-link"],
+)
+def test_a_note_is_parsed_into_text_and_link_pieces(note: str, pieces: list[dict]) -> None:
+    """Protects the note's one form of markup, parsed once here so the page only escapes.
+
+    A folded YAML block keeps its line breaks in some forms, so every run of
+    whitespace reads as one space.
+    """
+    state = _with(FakeGitHub([issue(1)], []), note=note)[0]["state"]
+    assert state["note"] == pieces
+    assert set(state) == BEFORE_KEYS | {"note"}
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "javascript:alert(1)",
+        "http://github.com/octo-org/octo-repo",
+        "docs/design.md",
+        'https://github.com/a"onmouseover="alert(1)',
+        "https://github.com/a b",
+        "https://",
+    ],
+    ids=["javascript", "http", "relative", "quote", "space", "no-host"],
+)
+def test_a_note_linking_anywhere_but_https_stops_the_run(href: str) -> None:
+    """Protects every reader's browser from a link the caller did not mean to draw.
+
+    The run stops before reading GitHub, as a refused data label does, so the
+    last good board stays up and the job summary says why.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="not an https:// address"):
+        _with(gh, note=f"See [this]({href}).")
+    assert gh.calls == []
+
+
+def test_the_default_branch_head_costs_one_request_and_writes_seven_characters() -> None:
+    """Protects the footer's commit, and every run that does not ask for it.
+
+    The head is read through a request of its own, so a caller that sets the
+    input pays exactly one more request than one that does not.
+    """
+    without = FakeGitHub([issue(1)], [])
+    build(without)
+    gh = FakeGitHub([issue(1)], [])
+    state = _with(gh, default_branch_head="true")[0]["state"]
+    assert state["main"] == "0a1b2c3"
+    assert set(state) == BEFORE_KEYS | {"main"}
+    assert len(gh.calls) == len(without.calls) + 1
+    assert sum("defaultBranchRef" in q for q in gh.calls) == 1
+
+
+@pytest.mark.parametrize("value", ["yes", "True", "false", "1", " true"])
+def test_a_default_branch_head_other_than_true_stops_the_run(value: str) -> None:
+    """Protects a caller from a value that reads as on and is not.
+
+    The input takes an empty value or ``true``. Anything else stops the run
+    before it reads GitHub, rather than quietly drawing no commit.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="takes only an empty value or true"):
+        _with(gh, default_branch_head=value)
+    assert gh.calls == []
+
+
+def test_a_missing_default_branch_head_stops_the_run() -> None:
+    """Protects the footer from naming a commit the run never read.
+
+    A repository GitHub answers with no default branch would leave the footer
+    saying it was built against nothing, so the run stops and the last good
+    board stays up.
+    """
+    gh = FakeGitHub([issue(1)], [], head=None)
+    with pytest.raises(bb.BoardError, match="no default branch head"):
+        _with(gh, default_branch_head="true")
+    assert [q for q in gh.calls if "defaultBranchRef" in q] == [bb.HEAD_QUERY]
+
+
+def test_the_command_line_passes_the_three_lines_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the ``subtitle``, ``note`` and ``default-branch-head`` inputs on their way.
+
+    The workflow passes each flag joined to its value by ``=`` whether or not
+    the caller set it, so an empty value writes no key, and a refused note
+    fails the run with its reason in the job summary.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def state() -> dict:
+        return json.loads((out / "board.json").read_text())["state"]
+
+    lines = [
+        "--subtitle=-the order of work",
+        f"--note=See [the design]({LINK_A}).",
+        "--default-branch-head=true",
+    ]
+    assert bb.main([*argv, *lines]) == 0
+    assert state()["subtitle"] == "-the order of work"
+    assert state()["note"] == [
+        {"text": "See "},
+        {"text": "the design", "href": LINK_A},
+        {"text": "."},
+    ]
+    assert state()["main"] == "0a1b2c3"
+    assert bb.main([*argv, "--subtitle=", "--note=", "--default-branch-head="]) == 0
+    assert set(state()) == BEFORE_KEYS
+    (out / "board.json").unlink()
+    assert bb.main([*argv, "--note=[x](http://example.com)"]) == 1
+    assert not (out / "board.json").exists()
+    assert "build_board: the note links to 'http://example.com'" in summary.read_text()
 
 
 def test_the_command_line_passes_the_data_label_through(
@@ -1821,6 +2039,9 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.title",
                 "inputs.icon",
                 "inputs.data-label",
+                "inputs.subtitle",
+                "inputs.note",
+                "inputs.default-branch-head",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -1838,11 +2059,10 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     field expanded into a step as critical, which the ruleset refuses to merge.
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
-    of which a stranger writes. ``inputs.title``, ``inputs.icon`` and
-    ``inputs.data-label`` are written by the caller's own file. Each reaches
-    the shell only through an environment variable, and the icon also names a
-    file for the caller's checkout, which is an action's input rather than
-    shell.
+    of which a stranger writes. Every ``inputs.`` field is written by the
+    caller's own file. Each reaches the shell only through an environment
+    variable, and the icon also names a file for the caller's checkout, which
+    is an action's input rather than shell.
     """
     used = set(re.findall(r"\$\{\{\s*([^}]*?)\s*\}\}", path.read_text(encoding="utf-8")))
     assert used == allowed
@@ -1851,6 +2071,14 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     data = re.findall(r"^(.*)\$\{\{\s*inputs\.data-label\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in data] == [("DATA_LABEL:", "")]
     assert '--data-label="$DATA_LABEL"' in _called()
+    for key, var in (
+        ("subtitle", "SUBTITLE"),
+        ("note", "NOTE"),
+        ("default-branch-head", "DEFAULT_BRANCH_HEAD"),
+    ):
+        uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
+        assert [(before.strip(), after) for before, after in uses] == [(f"{var}:", "")]
+        assert f'--{key}="${var}"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
@@ -1887,13 +2115,22 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     only what it needs. A required input, or a default naming a file or a
     label, would fail or change every such run. An empty title gives
     ``<name> build board``, an empty icon serves the template's, and an empty
-    data label reads no ``data`` kind. The README and the l3a0 plugin's
-    update-build-board skill name the inputs by the keys declared here.
+    data label reads no ``data`` kind, and an empty subtitle, note or
+    default-branch-head leaves the board as it was. The README and the l3a0
+    plugin's update-build-board skill name the inputs by the keys declared
+    here.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
     declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
-    assert list(declared) == ["title", "icon", "data-label"]
+    assert list(declared) == [
+        "title",
+        "icon",
+        "data-label",
+        "subtitle",
+        "note",
+        "default-branch-head",
+    ]
     for block in declared.values():
         assert "        type: string\n" in block
         assert '        default: ""' in block
@@ -1901,6 +2138,9 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
     assert f"    with:\n      data-label: {DATA_LABEL}\n" in readme
+    assert "    with:\n      subtitle: " in readme
+    assert "\n      note: >-\n" in readme
+    assert '\n      default-branch-head: "true"\n' in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
     assert f"`with: data-label: {DATA_LABEL}`" in _skill()

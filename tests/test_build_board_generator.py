@@ -1006,6 +1006,14 @@ def test_the_issues_query_reads_each_issues_author() -> None:
         ("Board after: 3", "Board after"),
         ("Board after", "Board after"),
         ("Board verdict: build after 3 passes", "Board verdict"),
+        ("Board after #2", "Board after"),
+        ("> Board order: 3", "Board order"),
+        ("1. Board order: 3", "Board order"),
+        ("1) Board order: 3", "Board order"),
+        ("+ Board order: 3", "Board order"),
+        ("Board  order: 3", "Board order"),
+        ("Board verd\u0130ct: build after 3 passes", "Board verdict"),
+        ("Board verd\u0131ct: build after 3 passes", "Board verdict"),
     ],
 )
 def test_a_near_miss_in_the_owners_body_is_listed_as_unread(near_miss: str, kind: str) -> None:
@@ -1067,6 +1075,8 @@ def test_an_unbanded_cards_near_miss_is_listed_as_unread() -> None:
         ("**Board verdict**: build after 5 passes", ["Board verdict"]),
         ("Board verdict: build after 1234567890123456 passes", ["Board verdict"]),
         ("Board verdict: decide after", ["Board verdict"]),
+        ("Board verd\u0130ct: build after 5 passes", ["Board verdict"]),
+        ("Board verd\u0131ct: build after 5 passes", ["Board verdict"]),
         ("The line `Board verdict: build after 5 passes` goes here.", []),
         ("```\nBoard verdict: ready after 5 passes\n```", []),
     ],
@@ -1264,23 +1274,51 @@ def test_the_job_summary_lists_each_marker_it_did_not_use(
 def test_the_job_summary_lists_a_dropped_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Protects the dropped row, which no read fills yet, from printing nothing.
-
-    l3a0/repo-template#46 adds the first drops, so the row is filled here
-    through the report rather than through a read.
-    """
-    real = bb.build
-
-    def build_with_drops(*args: object, **kwargs: object) -> tuple[dict, dict]:
-        board, report = real(*args, **kwargs)
-        report["dropped"] = [(1, "Board order on a parent"), (2, "Board verdict on a parent")]
-        return board, report
-
-    monkeypatch.setattr(bb, "build", build_with_drops)
-    text = summary_of(monkeypatch, tmp_path, FakeGitHub([issue(1), issue(2)], []))
+    """Protects the dropped row from printing nothing when a marker goes unused."""
+    gh = FakeGitHub([issue(2, body="Board after: #2\n"), issue(1, body="Board order: 3\n")], [])
+    text = summary_of(monkeypatch, tmp_path, gh)
     assert summary_row(text, "Markers dropped") == (
-        "#1 Board order on a parent; #2 Board verdict on a parent"
+        "#1 Board order on a card with no band; #2 Board after, naming itself"
     )
+
+
+def test_an_order_on_a_card_with_no_band_is_listed_as_dropped() -> None:
+    """Protects a well-formed order that ranks nothing from vanishing unseen.
+
+    Only a banded card has a place in the priority order, so the order line on
+    an unbanded card sets nothing. A banded card's order is not listed.
+    """
+    gh = FakeGitHub(
+        [issue(1, body="Board order: 3\n"), issue(2, labels=("band:1",), body="Board order: 3\n")],
+        [],
+    )
+    board, report = build(gh)
+    assert report["dropped"] == [(1, "Board order on a card with no band")]
+    assert board["next"]["items"] == [{"issue": 2, "band": 1, "ready": "plan", "order": 3}]
+    assert build(FakeGitHub([issue(1)], []))[1]["dropped"] == []
+
+
+@pytest.mark.parametrize(
+    ("body", "dropped"),
+    [
+        ("Board after: #5\n", True),
+        ("Board after: #5 and #5\n", True),
+        ("Board after: #5, #2\n", False),
+        ("Board after: #2\n", False),
+        ("Board after: #7\n", False),
+    ],
+)
+def test_an_after_line_naming_only_its_own_card_is_listed_as_dropped(
+    body: str, dropped: bool
+) -> None:
+    """Protects an after line that can never hold its card from vanishing unseen.
+
+    A line naming another issue too still sets something, and a line naming a
+    closed issue is a blocker that has finished, so neither is listed.
+    """
+    board, report = build(FakeGitHub([issue(2), issue(5, body=body)], []))
+    assert report["dropped"] == ([(5, "Board after, naming itself")] if dropped else [])
+    assert card(board, 5).get("after", []) == ([2] if "#2" in body else [])
 
 
 def marker_tracker() -> FakeGitHub:
@@ -1318,6 +1356,7 @@ def marker_tracker() -> FakeGitHub:
             issue(14, comments=(("OWNER", VERDICT_LINE), ("OWNER", PASS))),
             issue(15, comments=passed, labels=("deferred", DATA_LABEL)),
             issue(16, labels=("band:2",), body="Board order: 8\nBoard order: 1\n"),
+            issue(17, body="Board order: 3\nBoard after: #17\n"),
         ],
         [pull(30, closes=(12,)), pull(31, state="MERGED", body="Part of #13")],
     )
@@ -1334,7 +1373,10 @@ def test_every_marker_shape_reaches_its_row() -> None:
         (7, "Board verdict"),
     ]
     assert report["refused"] == [(4, "Board verdict, not the owner's")]
-    assert report["dropped"] == []
+    assert report["dropped"] == [
+        (17, "Board after, naming itself"),
+        (17, "Board order on a card with no band"),
+    ]
     assert report["no_verdict"] == [4, 13, 14]
     assert "#6 carries 2 order lines, read as 4" in report["label_conflicts"]
 
@@ -1342,24 +1384,35 @@ def test_every_marker_shape_reaches_its_row() -> None:
 GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
 
 
-def test_the_marker_rows_change_nothing_in_the_board() -> None:
+class FrozenNow(datetime):
+    """A ``datetime`` whose ``now`` is ``NOW``, so a run's board carries a fixed time."""
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return NOW
+
+
+def test_the_marker_rows_change_nothing_in_the_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Protects every caller that sets no input from a board that moves.
 
     The rows list what the board did not use, so the board itself has to stay
-    as it was. ``GOLDEN`` is the ``board.json`` that the generator at
+    as it was. ``GOLDEN`` is the ``board.json`` that the command line at
     l3a0/repo-template commit cf2959a3 wrote for ``marker_tracker``, and this
-    run has to write the same bytes but one. #2's body ends its lines with
-    ``\\r\\n``, so cf2959a3 lost its order line, and since
-    l3a0/repo-template#48 the generator reads it. No current caller's data
-    carries a ``\\r``.
+    run has to write the same bytes but one. The file is read as the command
+    line writes it, so a change to how it is written fails here too. #2's body
+    ends its lines with ``\\r\\n``, so cf2959a3 lost its order line, and
+    since l3a0/repo-template#48 the generator reads it. No current caller's
+    data carries a ``\\r``.
     """
-    board, _ = build(marker_tracker(), DATA_LABEL)
-    written = json.dumps(board, ensure_ascii=False, separators=(",", ":"))
-    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
-    [entry] = [e for e in golden["next"]["items"] if e["issue"] == 2]
-    assert "order" not in entry
-    entry["order"] = 5
-    assert written == json.dumps(golden, ensure_ascii=False, separators=(",", ":"))
+    monkeypatch.setattr(bb, "datetime", FrozenNow)
+    summary_of(monkeypatch, tmp_path, marker_tracker(), "--data-label", DATA_LABEL)
+    written = (tmp_path / "site" / "board.json").read_bytes()
+    golden = GOLDEN.read_bytes().removesuffix(b"\n")
+    lost = b'{"issue":2,"band":2,"ready":"plan"}'
+    assert golden.count(lost) == 1
+    assert written == golden.replace(lost, b'{"issue":2,"band":2,"ready":"plan","order":5}')
 
 
 def compat_tracker() -> FakeGitHub:
@@ -1909,7 +1962,8 @@ def test_an_issue_closed_from_another_repository_reads_nothing_here(here: bool) 
     assert not any("pullRequest(number:" in q for q in gh.calls)
 
 
-def test_a_closing_link_to_another_repositorys_issue_draws_nothing_here() -> None:
+@pytest.mark.parametrize("here", [REPO, "octo-org/second-repo"])
+def test_a_closing_link_to_another_repositorys_issue_draws_nothing_here(here: str) -> None:
     """Protects a card from a branch that closes another repository's issue.
 
     Pull request 10 closes ``other/repo#1``, and issue 1 here is open. Read as
@@ -1917,21 +1971,43 @@ def test_a_closing_link_to_another_repositorys_issue_draws_nothing_here() -> Non
     a closing link. Pull request 11 closes ``other/repo#3`` and issue 2 here,
     so it draws on 2 alone. Pull request 12 closes ``other/repo#5`` and is part
     of issue 5 here, so it draws on 5 as a ``Part of`` branch, not a closing one.
+    The board is built for two repositories, so "here" is whichever repository
+    the run was given rather than one name the generator could carry.
     """
     gh = FakeGitHub(
         [issue(1), issue(2), issue(3), issue(5)],
         [
             pull(10, closes=((1, "other/repo"),)),
-            pull(11, closes=((3, "other/repo"), 2)),
+            pull(11, closes=((3, "other/repo"), (2, here))),
             pull(12, closes=((5, "other/repo"),), body="Part of #5"),
         ],
     )
-    board, report = build(gh)
+    board, report = bb.build(gh, here, 30, NOW)
     assert [(p["pr"], p["issue"], p["linked"], p.get("partOf")) for p in prs_of(board)] == [
         (11, 2, True, None),
         (12, 5, False, True),
     ]
     assert report["open_prs_left_out"] == [10]
+
+
+def test_a_same_named_repository_under_another_owner_is_not_this_one() -> None:
+    """Protects the board from a fork or namesake of this repository.
+
+    ``elsewhere/octo-repo`` shares this repository's name under another owner.
+    Its issue 1 closed by pull request 10 here, its issue 1 blocking issue 2
+    here, and its pull request 34 closing issue 40 here all name that other
+    repository, so none of them reads as this one's.
+    """
+    other = "elsewhere/octo-repo"
+    gh = FakeGitHub(
+        [issue(1), issue(2, blocked_by=((1, "OPEN", other),)), issue(40, closed_by=((34, other),))],
+        [pull(10, closes=((1, other),))],
+    )
+    board, report = build(gh)
+    assert prs_of(board) == []
+    assert report["open_prs_left_out"] == [10]
+    assert card(board, 2)["needs"] == []
+    assert not any("pullRequest(number:34" in q for q in gh.calls)
 
 
 def entry_selection(query: str, field: str) -> str:
@@ -1947,43 +2023,65 @@ def entry_selection(query: str, field: str) -> str:
 def test_a_reference_to_another_repository_past_the_first_page_is_dropped() -> None:
     """Protects the filter on the pages after the first hundred links.
 
-    The fake answers every query from its fixtures whatever the query selects,
-    so the test also reads what each query asks for. A query that stopped
-    selecting the repository would leave every link from it reading as another
+    It covers each of the four lists the board keeps only this repository's
+    entries of: closed-by links, closing links, cross-references and "blocked
+    by" links. The fake answers every query from its fixtures whatever the
+    query selects, so the test also reads what each query asks for, on the
+    first page and on the pages after it. A query that stopped selecting the
+    repository would leave every entry from it reading as another
     repository's, and the live board would lose them while every fixture here
-    still carried one.
+    still carried one. Whitespace is left out of the comparison, because the
+    first-page query breaks its cross-reference selection across lines.
     """
     first = issue(5)
     first["closedByPullRequestsReferences"] = conn([], more=True, cursor="b1")
+    first["timelineItems"] = conn([], more=True, cursor="t1")
+    first["blockedBy"] = conn([], more=True, cursor="x1")
     opened = pull(7)
     opened["closingIssuesReferences"] = conn([], more=True, cursor="k1")
     nested = {
         ("I5", "closedByPullRequestsReferences", "b1"): conn([ref((34, "other/repo")), ref(6)]),
+        ("I5", "timelineItems", "t1"): conn(
+            [{"source": {"number": 35, "repository": {"nameWithOwner": "other/repo"}}}]
+        ),
+        ("I5", "blockedBy", "x1"): conn([blocker(9, "OPEN", "other/repo"), blocker(8, "OPEN")]),
         ("P7", "closingIssuesReferences", "k1"): conn([ref((5, "other/repo")), ref(8)]),
     }
-    gh = FakeGitHub([first, issue(8)], [pull(6, state="MERGED", closes=(5,)), opened], nested)
+    gh = FakeGitHub(
+        [first, issue(8), issue(9)], [pull(6, state="MERGED", closes=(5,)), opened], nested
+    )
     board, report = build(gh)
     assert [(p["pr"], p["issue"]) for p in prs_of(board)] == [(6, 5), (7, 8)]
     assert report["other_prs_read"] == 1
-    assert not any("pullRequest(number:34" in q for q in gh.calls)
-    wanted = "number repository{nameWithOwner}"
-    reads = {
-        "closedByPullRequestsReferences": [q for q in gh.calls if "issues(states:OPEN" in q],
-        "closingIssuesReferences": [
-            q for q in gh.calls if "pullRequests(states:OPEN" in q or "pullRequest(number:" in q
-        ],
+    assert card(board, 5)["needs"] == [8]
+    assert not any(re.search(r"pullRequest\(number:3[45]\b", q) for q in gh.calls)
+    issues_query = [q for q in gh.calls if "issues(states:OPEN" in q]
+    wanted = {
+        "closedByPullRequestsReferences": ("number repository{nameWithOwner}", issues_query),
+        "timelineItems": (
+            "... on CrossReferencedEvent{source{"
+            "... on PullRequest{number repository{nameWithOwner}}}}",
+            issues_query,
+        ),
+        "blockedBy": ("number state repository{nameWithOwner}", issues_query),
+        "closingIssuesReferences": (
+            "number repository{nameWithOwner}",
+            [q for q in gh.calls if "pullRequests(states:OPEN" in q or "pullRequest(number:" in q],
+        ),
     }
-    for field, first_pages in reads.items():
+    for field, (selection, first_pages) in wanted.items():
         paged = [q for q in gh.calls if "node(id:$id)" in q and f"{field}: " in q]
-        assert first_pages and paged
-        assert {entry_selection(q, field) for q in first_pages + paged} == {wanted}
+        assert first_pages and paged, field
+        selected = {"".join(entry_selection(q, field).split()) for q in first_pages + paged}
+        assert selected == {"".join(selection.split())}, field
 
 
 def test_a_null_reference_is_dropped_rather_than_read() -> None:
     """Protects the run from an entry GitHub sent as null.
 
-    GitHub's schema lets an entry of either list, or of an issue's "blocked by"
-    links, be null, which it sends for an entry the token cannot read. Every
+    GitHub's schema lets an entry of either list, of an issue's "blocked by"
+    links or of its cross-references be null, which it sends for an entry the
+    token cannot read. A cross-reference can also carry a null source. Every
     issue and pull request here is readable, so a null one belongs to another
     repository, and reading its number would stop the run. An entry that names
     no repository is read the same way, since nothing says it is this one's.
@@ -1993,12 +2091,70 @@ def test_a_null_reference_is_dropped_rather_than_read() -> None:
     first = issue(5)
     first["closedByPullRequestsReferences"] = conn([None, {"number": 34}, ref(6)])
     first["blockedBy"] = conn([None, blocker(8, "OPEN")])
+    first["timelineItems"] = conn([None, {"source": None}])
     opened = pull(7)
     opened["closingIssuesReferences"] = conn([None, {"number": 5, "repository": None}, ref(8)])
     gh = FakeGitHub([first, issue(8)], [pull(6, state="MERGED", closes=(5,)), opened])
-    board, _ = build(gh)
+    board, report = build(gh)
     assert [(p["pr"], p["issue"]) for p in prs_of(board)] == [(6, 5), (7, 8)]
     assert card(board, 5)["needs"] == [8]
+    assert report["other_prs_read"] == 1
+
+
+def references_fake() -> FakeGitHub:
+    """Closing links, closed-by links, cross-references and blockers, all in this repository.
+
+    Issue 1 is closed by open pull request 10 on the first page of its
+    closed-by links and by merged pull request 16 on the second. Merged pull
+    request 11 closes issue 2. Issue 3 is cross-referenced by merged pull
+    request 12, which is part of it. Issue 4 is blocked by issue 1, open, and
+    issue 3, closed. Issue 5 is blocked by issue 2 and cross-referenced by
+    closed pull request 13, which is part of it. Open pull request 14 closes
+    issues 4 and 5 and carries the owner's review, and open pull request 15
+    names no issue.
+    """
+    first = issue(1, closed_by=(10,))
+    first["closedByPullRequestsReferences"] = conn([ref(10)], more=True, cursor="c1")
+    issues = [
+        first,
+        issue(2, closed_by=(11,), labels=("band:1",)),
+        issue(3, mentioned_by=(12,)),
+        issue(4, blocked_by=((1, "OPEN"), (3, "CLOSED"))),
+        issue(5, blocked_by=((2, "OPEN"),), mentioned_by=(13,)),
+    ]
+    prs = [
+        pull(10, closes=(1,)),
+        pull(11, state="MERGED", closes=(2,)),
+        pull(12, state="MERGED", body="Part of #3"),
+        pull(13, state="CLOSED", body="Part of #5"),
+        pull(14, closes=(4, 5), comments=(("OWNER", "## Review\n"),)),
+        pull(15, body="Bumps ruff."),
+        pull(16, state="MERGED", closes=(1,)),
+    ]
+    nested = {("I1", "closedByPullRequestsReferences", "c1"): conn([ref(16)])}
+    return FakeGitHub(issues, prs, nested)
+
+
+def board_bytes(board: dict) -> str:
+    """The board as ``cmd_build`` writes it, with the time it was read masked."""
+    board["state"]["updatedAt"] = "MASKED"
+    return json.dumps(board, ensure_ascii=False, separators=(",", ":"))
+
+
+REFERENCES_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "references.json"
+
+
+def test_references_within_this_repository_write_the_board_they_wrote_before() -> None:
+    """Protects every caller from a board that moves when no reference leaves the repository.
+
+    ``REFERENCES_GOLDEN`` is the ``board.json`` that the generator at
+    l3a0/repo-template commit cf2959a3, before the repository filter, wrote
+    for ``references_fake``. Every reference there names this repository, so
+    the filter has nothing to drop, and this run has to write the same bytes.
+    """
+    board, _ = build(references_fake())
+    written = board_bytes(board)
+    assert written == REFERENCES_GOLDEN.read_text(encoding="utf-8").removesuffix("\n")
 
 
 def test_a_closed_part_of_pull_request_reads_as_closed() -> None:

@@ -165,6 +165,11 @@ MARKER_LINE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 MARKER_NAME = {"order": "Board order", "verdict": "Board verdict", "after": "Board after"}
+# A marker line's kind, read from its first letter. Under `re.IGNORECASE` a
+# Turkish dotted or dotless i matches the `i` in "verdict", and lowering the
+# whole word turns `İ` into two characters, which names no kind. None of the
+# three kinds starts with an i.
+MARKER_KIND = {"o": "order", "v": "verdict", "a": "after"}
 
 # The heading each plan-audit pass opens with, per the update-build-board
 # skill. A pass newer than an issue's newest verdict is a plan that finished
@@ -629,10 +634,10 @@ def pr_items(
 
     A pull request names an issue through a closing link to an issue in this
     repository, or through a ``Part of`` reference anywhere in its body outside
-    a code span or a fenced code block. One that names no open issue gets no item, because a branch
-    with no card has nowhere to be drawn and a null issue would make the page
-    refuse the whole section. One that closes two issues gets two items,
-    because the page keys pull requests by issue.
+    a code span or a fenced code block. One that names no open issue gets no
+    item, because a branch with no card has nowhere to be drawn and a null
+    issue would make the page refuse the whole section. One that closes two
+    issues gets two items, because the page keys pull requests by issue.
 
     A pull request opened from a fork gets no item either. Anyone can open one
     on a public repository, and its ``Part of`` reference or closing keyword
@@ -751,7 +756,7 @@ def _marker_lines(text: str) -> list[tuple[str, str, int]]:
     for line in text.split("\n"):
         m = MARKER_LINE.match(line)
         if m:
-            found.append((m.group(1).lower(), line, offset))
+            found.append((MARKER_KIND[m.group(1)[0].lower()], line, offset))
         offset += len(line) + 1
     return found
 
@@ -815,7 +820,8 @@ def read_body(
     and a verdict line, which counts only in a comment. A stranger's near
     misses are not listed, so a stranger cannot fill the summary. A reference
     ``after_refs`` refuses is listed as refused whoever wrote it, which adds at
-    most two entries an issue.
+    most two entries an issue. An after line naming only the card itself is
+    listed as dropped.
     """
     text = unfenced(body)
     if owner_only and not owner:
@@ -837,6 +843,10 @@ def read_body(
                 named, refused = after_refs(m.group(1), repo)
                 after |= named
                 notes.refused |= {(n, phrase) for phrase in refused}
+                # A card cannot wait on itself, so `tracker_card` leaves a
+                # line naming only the card itself with nothing to set.
+                if named == {n} and not refused:
+                    notes.dropped.add((n, "Board after, naming itself"))
                 if named or refused:
                     continue
         if owner:
@@ -898,12 +908,13 @@ def latest_verdict(
     A loop run again on the same issue writes a new verdict, so the last one
     wins. GitHub lists comments oldest first. Only a comment whose
     ``authorAssociation`` is ``OWNER`` counts, for a verdict and for a pass
-    heading alike. A stranger's verdict line is listed as refused, and a
-    stranger's pass heading counts for nothing. In an owner's comment, a line
-    that looks meant as a marker and is not read is listed as unread, which
-    includes an order or after line, since those count only in a body, and a
-    pass count longer than ``MAX_DIGITS``. A verdict not read leaves the one
-    before it standing.
+    heading alike. A stranger's line that ``VERDICT`` reads is listed as
+    refused, while a stranger's near miss is not listed at all, so a stranger
+    cannot fill the summary. A stranger's pass heading counts for nothing. In
+    an owner's comment, a line that looks meant as a marker and is not read is
+    listed as unread, which includes an order or after line, since those count
+    only in a body, and a pass count longer than ``MAX_DIGITS``. A verdict not
+    read leaves the one before it standing.
 
     A plan finished with no verdict when the owner's newest ``## Plan audit,
     pass N`` heading comes after the newest verdict, or when a heading exists
@@ -1091,6 +1102,9 @@ def build(
         entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts)
         if entry:
             ranked.append(entry)
+        elif orders:
+            # Only a banded card has a place in the priority order.
+            notes.dropped.add((n, "Board order on a card with no band"))
 
         referenced |= _referenced_prs(gql, issue, repo)
 

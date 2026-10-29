@@ -24,9 +24,10 @@ name: Build board
 # that pins this workflow to a commit therefore gets that commit's generator
 # and page as well, and its board changes only when it moves the pin.
 #
-# Three rules keep strangers out of this workflow. The first two also keep it
-# inside the ruleset, which refuses a merge while CodeQL reports a high or
-# critical alert.
+# Three rules decide what code runs in this workflow. The first two keep out
+# anyone who can file an issue or open a pull request, and also keep it inside
+# the ruleset, which refuses a merge while CodeQL reports a high or critical
+# alert. The third keeps out whoever can move an action's tag.
 #
 # 1. No step reads the event payload. Anyone can file an issue on a public
 #    repository, so an issue title expanded into a run step would run as
@@ -37,10 +38,11 @@ name: Build board
 #    caller's own checkout takes the default ref, and the other takes this
 #    workflow's commit.
 # 3. Every action is named by a full commit SHA, with its release in a
-#    trailing comment. A tag can be moved to another commit, and the deploy
-#    job holds pages: write and id-token: write, so whoever moved a tag would
-#    choose what runs with them. A SHA cannot be moved. Dependabot's
-#    github-actions entry rewrites a SHA and its comment together.
+#    trailing comment. A tag can be moved to another commit. The deploy job
+#    holds pages: write and id-token: write, and the build job's upload
+#    decides what it publishes, so whoever moved a tag would choose what runs
+#    with those scopes or what they publish. A SHA cannot be moved.
+#    Dependabot's github-actions entry rewrites a SHA and its comment together.
 on:
   workflow_call:
     inputs:

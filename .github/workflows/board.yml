@@ -31,8 +31,9 @@ name: Board
 # pull_request_review run on a merge ref instead, and check_suite never fires
 # for a suite GitHub Actions created, so neither is here.
 #
-# The reusable workflow checks out no pull request's code and no step reads
-# the event payload, which its own header explains.
+# The reusable workflow checks out no pull request's code, no step reads the
+# event payload, and every action it runs is named by a commit SHA, which its
+# own header explains.
 on:
   issues:
   issue_comment:

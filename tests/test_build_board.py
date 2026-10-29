@@ -2159,9 +2159,9 @@ def test_the_lines_draw_where_the_caller_asked(tmp_path: Path) -> None:
 def test_the_subtitle_and_the_note_are_drawn_as_text(tmp_path: Path) -> None:
     """Protects the page from markup a caller's input carries.
 
-    The subtitle and every piece of the note are escaped, and an address that
-    is not https draws as text rather than as a link, whatever the generator
-    let through.
+    The subtitle and every piece of the note are escaped, the words of a link
+    included, and an address that is not https draws as text rather than as a
+    link, whatever the generator let through.
     """
     ids = draw(
         tmp_path,
@@ -2177,6 +2177,10 @@ def test_the_subtitle_and_the_note_are_drawn_as_text(tmp_path: Path) -> None:
     assert ids["sub"]["html"] == "&lt;script&gt;alert(1)&lt;/script&gt;"
     assert ids["repnote"]["html"] == "&lt;script&gt;alert(1)&lt;/script&gt;clickquoted"
     assert "<a" not in ids["repnote"]["html"]
+    ids = draw(tmp_path, lined_board(note=[{"text": "<b>the design</b>", "href": DESIGN}]))
+    assert ids["repnote"]["html"] == (
+        f'<a href="{DESIGN}" target="_blank" rel="noopener">&lt;b&gt;the design&lt;/b&gt;</a>'
+    )
 
 
 @pytest.mark.parametrize(

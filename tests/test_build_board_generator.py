@@ -1463,12 +1463,26 @@ def test_an_order_longer_than_fifteen_digits_is_not_read(order: str, read: objec
     json.dumps(board, allow_nan=False)
 
 
+# Each form a `Board after:` line can name an issue in, with `{n}` for its number.
+AFTER_FORMS = [
+    "#{n}",
+    "octo-org/octo-repo#{n}",
+    "[#{n}](https://github.com/octo-org/octo-repo/issues/{n})",
+]
+
+
+@pytest.mark.parametrize("form", AFTER_FORMS)
 @pytest.mark.parametrize(("number", "read"), [(FIFTEEN, True), (SIXTEEN, False)])
 def test_an_after_reference_longer_than_fifteen_digits_is_no_reference(
-    number: int, read: bool
+    number: int, read: bool, form: str
 ) -> None:
-    """Protects the read of a stranger's line from a number ``int()`` refuses."""
-    gh = FakeGitHub([issue(1, body=f"Board after: #{number}\n"), issue(number)], [])
+    """Protects the read of a stranger's line from a number ``int()`` refuses.
+
+    Every form a reference takes has the limit, because each one is turned
+    into an ``int``.
+    """
+    line = form.format(n=number)
+    gh = FakeGitHub([issue(1, body=f"Board after: {line}\n"), issue(number)], [])
     board, report = build(gh)
     assert card(board, 1).get("after") == ([number] if read else None)
     assert report["unread"] == ([] if read else [(1, "Board after")])
@@ -1512,7 +1526,11 @@ def test_a_number_too_long_for_int_still_builds_the_board() -> None:
     """
     gh = FakeGitHub(
         [
-            issue(1, body=f"Board after: #{HUGE}\n", association="NONE"),
+            issue(
+                1,
+                body="".join(f"Board after: {form.format(n=HUGE)}\n" for form in AFTER_FORMS),
+                association="NONE",
+            ),
             issue(2, labels=("band:1",), body=f"Board order: {HUGE}\n"),
             issue(3, comments=(("OWNER", f"Board verdict: build after {HUGE} passes"),)),
         ],

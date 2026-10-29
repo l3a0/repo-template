@@ -1660,8 +1660,26 @@ def review_github() -> FakeGitHub:
         ),
         pull(29, closes=(19,), committed=HEAD, reviews=()),
     ]
+    # Pull request 29's comments and checks run past their first page, so the
+    # query text recorded for a later page is compared too.
+    later = prs[-1]
+    later["comments"] = conn([], more=True, cursor="k1")
+    later["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(
+        [], more=True, cursor="x1"
+    )
+    nested = {
+        ("P29", "comments", "k1"): conn(
+            [{"authorAssociation": owner, "body": "## Review complete", "createdAt": AFTER}]
+        ),
+        ("R29", "contexts", "x1"): conn(
+            [
+                check("board / deploy", "SUCCESS", workflow=WORKFLOW_PATH),
+                check("test", "SKIPPED", workflow=CI_PATH),
+            ]
+        ),
+    }
     issues = [issue(n) for n in range(10, 19)] + [issue(19, labels=("working:build",))]
-    return FakeGitHub(issues, prs)
+    return FakeGitHub(issues, prs, nested)
 
 
 class _Fixed(datetime):
@@ -1726,8 +1744,8 @@ def test_the_golden_tracker_reads_differently_under_each_input(
     def reviewed(board: dict) -> list[int]:
         return [p["pr"] for p in board["prs"]["items"] if p["reviewed"]]
 
-    assert reviewed(plain) == [20, 21, 22, 23, 24]
-    assert reviewed(heading) == [20, 27]
+    assert reviewed(plain) == [20, 21, 22, 23, 24, 29]
+    assert reviewed(heading) == [20, 27, 29]
     assert plain["prs"]["items"][0]["rollup"] != settled["prs"]["items"][0]["rollup"]
 
 

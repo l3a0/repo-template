@@ -23,7 +23,10 @@ l3a0/repo-template#24. On the way the fixture board gained ``state.repo`` and
 the cut "Waiting on data" column were rewritten for a kind no reason names,
 tests were added for the links, the title and the Show all key the page now
 takes from the board, and docstrings citing that repository's history were
-restated as the rules they protect.
+restated as the rules they protect. The pull request that closes
+l3a0/repo-template#40 brought the column back for a board holding a ``data``
+card, with the ``data`` cases of the same file at l3a0/quantitative-trading
+commit ``4755ac62``.
 
 The engine is ``node`` where it is installed, which it is on GitHub's runners,
 and ``osascript -l JavaScript`` otherwise, which is JavaScriptCore and ships
@@ -112,7 +115,8 @@ var __MARK = "<!--first draw-->";
   __board.innerHTML = __board.innerHTML.replace(__MARK, "");
   out.title = typeof document.title === "string" ? document.title : null;
   Object.keys(store).forEach(function (id) {
-    out.ids[id] = { html: store[id].innerHTML, hidden: store[id].hidden === true };
+    out.ids[id] = { html: store[id].innerHTML, hidden: store[id].hidden === true,
+                    classes: store[id].classList.names.slice() };
   });
   var line = "BOARD_RESULT " + JSON.stringify(out);
   if (typeof console !== "undefined" && console.log) { console.log(line); } else { print(line); }
@@ -341,10 +345,78 @@ def test_the_show_all_choice_is_kept_per_repository(tmp_path: Path) -> None:
     assert text(draw(tmp_path, two, page=page), "more").startswith("Showing the 1 ranked card")
 
 
-def test_the_build_order_draws_three_columns(tmp_path: Path) -> None:
-    """Protects the cut of the fourth column, which only one repository used."""
+def _column(ids: dict, k: int) -> str:
+    """The raw HTML of one build-order column, up to the next one."""
+    return ids["board"]["html"].split(f'<div class="col k{k}')[1].split('<div class="col k')[0]
+
+
+def _data_docs(**fields: object) -> dict:
+    """The fixture with issue 90504 carrying the data label, as the generator writes it."""
+    return _with_fields(fixture_docs(), 90504, kind="data", labels=["blocked-on-data"], **fields)
+
+
+def test_a_board_with_no_data_card_draws_three_columns(tmp_path: Path) -> None:
+    """Protects every repository that names no data label from a fourth column.
+
+    The fixture board holds no ``data`` card, so the build order draws the
+    three depth columns and none of the column's legend entry or note sentence.
+    """
     ids = draw(tmp_path, fixture_docs(), page=_show_all_page(tmp_path))
     assert ids["board"]["html"].count('<div class="col k') == 3
+    assert "data" not in ids["board"]["classes"]
+    assert "Waiting on data" not in ids["board"]["html"]
+    assert "waiting on data" not in text(ids, "key")
+    assert "fourth column" not in text(ids, "boardnote")
+
+
+def test_a_data_card_draws_in_a_fourth_column(tmp_path: Path) -> None:
+    """Protects the column a repository naming a data label gets.
+
+    Fixture issue 90504 becomes a ``data`` card waiting on 90502, which would
+    put it one step behind. A purchase is not a step along the chain, so it
+    draws in the fourth column, under "Waiting on data", with its legend entry
+    and the board note's sentence about the column. The grid takes four columns
+    only through the board's ``data`` class, and the label's chip takes its
+    colour from ``LABEL_HUE``.
+    """
+    ids = draw(tmp_path, _data_docs(needs=[90502]), page=_show_all_page(tmp_path))
+    assert ids["board"]["html"].count('<div class="col k') == 4
+    assert "data" in ids["board"]["classes"]
+    assert '<b style="color:#B60205">blocked-on-data</b>' in _column(ids, 3)
+    fourth = _column(ids, 3)
+    assert "Waiting on data" in fourth
+    assert "not a backlog, a purchase" in fourth
+    assert 'data-n="90504"' in fourth
+    assert all('data-n="90504"' not in _column(ids, k) for k in range(3))
+    assert "waiting on data, so not a backlog" in text(ids, "key")
+    assert (
+        "The fourth column is not a backlog, because nothing in it is waiting on anyone's time."
+        in text(ids, "boardnote")
+    )
+
+
+@pytest.mark.parametrize("where", ["hidden", "in flight"])
+def test_the_fourth_column_follows_the_tracker_rather_than_the_view(
+    tmp_path: Path, where: str
+) -> None:
+    """Protects the layout from shifting when the data card leaves the columns.
+
+    The short view hides 90504, which nothing ranks, and a session holding it
+    puts it in the In flight section instead. Either way the tracker still
+    holds a ``data`` card, so the column stays, empty, and the note says
+    nothing about a column with no card in it.
+    """
+    docs = _data_docs()
+    page = PAGE
+    if where == "in flight":
+        docs["working"]["items"] = [{"n": 90504, "kind": "build"}]
+        page = _show_all_page(tmp_path)
+    ids = draw(tmp_path, docs, page=page)
+    assert ids["board"]["html"].count('<div class="col k') == 4
+    assert "data" in ids["board"]["classes"]
+    assert 'data-n="90504"' not in ids["board"]["html"]
+    assert '<span class="c">0</span>' in _column(ids, 3)
+    assert "fourth column" not in text(ids, "boardnote")
 
 
 def test_a_view_with_no_fetch_says_it_has_no_copy(tmp_path: Path) -> None:
@@ -1331,17 +1403,18 @@ def test_an_unlinked_card_with_nothing_holding_it_can_be_taken_on_its_own(
     assert "#90504 is linked to nothing else here, so it can be taken on its own." in said
 
 
+@pytest.mark.parametrize("kind", ["unlisted", "data"])
 def test_an_unlinked_card_of_no_listed_kind_says_only_what_its_links_show(
-    tmp_path: Path,
+    tmp_path: Path, kind: str
 ) -> None:
     """Protects the bar from claiming freedom for a kind the free list never reads.
 
-    A kind no row of the board's reasons names, such as one a later generator
-    adds before the page learns it, is not ``ready``, so the free list turns it
-    down, and no reason applies either. The bar says what the links show and
-    stops.
+    A card blocked on data, or of a kind no row of the board's reasons names,
+    such as one a later generator adds before the page learns it, is not
+    ``ready``, so the free list turns it down, and no reason applies either.
+    The bar says what the links show and stops.
     """
-    docs = _with_fields(fixture_docs(), 90504, kind="unlisted")
+    docs = _with_fields(fixture_docs(), 90504, kind=kind)
     said = _picked(tmp_path, docs, 90504)
     assert "#90504 is linked to nothing else here." in said
     assert FREE_CLAIM not in said
@@ -1432,6 +1505,21 @@ def test_a_planned_card_of_an_unlisted_kind_is_not_called_free_in_flight(tmp_pat
     assert FREE_CLAIM not in _picked(tmp_path, docs, 90504)
 
 
+def test_a_planned_card_blocked_on_data_is_not_called_free_in_flight(tmp_path: Path) -> None:
+    """Protects the note for the one kind no row of the board's reasons names.
+
+    A card blocked on data with a finished plan and no open blocker sits under
+    "Planned, no builder" as well. `takeable` turns it down while no reason
+    holds it, so the chain bar says only what its links show. The note says it
+    is not free and gives no reason, rather than calling it free.
+    """
+    docs = _planned(_with_fields(fixture_docs(), 90504, kind="data"), 90504, "build")
+    flownote = text(draw(tmp_path, docs), "flownote")
+    assert "free for anyone to pick up" not in flownote
+    assert "#90504 is planned, and is not free to take." in flownote
+    assert FREE_CLAIM not in _picked(tmp_path, docs, 90504)
+
+
 def test_planned_cards_held_for_one_reason_share_a_sentence(tmp_path: Path) -> None:
     """Protects the grouping of held planned cards by the reasons that hold them.
 
@@ -1453,16 +1541,20 @@ def test_planned_cards_held_for_one_reason_share_a_sentence(tmp_path: Path) -> N
     )
 
 
-def test_two_planned_cards_held_for_no_named_reason_share_one_sentence(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", ["unlisted", "data"])
+def test_two_planned_cards_held_for_no_named_reason_share_one_sentence(
+    tmp_path: Path, kind: str
+) -> None:
     """Protects the plural of the sentence that gives no reason.
 
-    Fixture issues 90504 and 90505 are both of a kind no reason names, with
-    plans ready to build and nothing open ahead of them. "Each is not free to take" can be
-    read as "not every one is free", so the plural says none of them is.
+    Fixture issues 90504 and 90505 are both blocked on data, or of a kind the
+    page does not know, with plans ready to build and nothing open ahead of
+    them. No reason names either kind. "Each is not free to take" can be read
+    as "not every one is free", so the plural says none of them is.
     """
     docs = _with_needs(fixture_docs(), {90505: []})
     for n in (90504, 90505):
-        docs = _planned(_with_fields(docs, n, kind="unlisted"), n, "build")
+        docs = _planned(_with_fields(docs, n, kind=kind), n, "build")
     flownote = text(draw(tmp_path, docs), "flownote")
     assert "#90504 and #90505 are planned, and none of them is free to take." in flownote
 
@@ -1503,6 +1595,7 @@ def _card_text(ids: dict, element: str, n: int) -> str:
         ("decision", "is planned, and needs a decision rather than a session"),
         ("deferred", "is planned, and is deferred on purpose"),
         ("parent", "is planned, and is a parent whose children carry the work"),
+        ("data", "is planned, and is not free to take"),
         ("unlisted", "is planned, and is not free to take"),
     ],
 )
@@ -1792,16 +1885,23 @@ def test_only_open_blockers_of_cards_in_the_columns_are_counted(tmp_path: Path) 
     closed issues, and neither counts. Fixture issue 90503 waits on one open
     issue and one closed one, so it is not named as waiting on several, and
     90505 waits on two open issues and a closed one, so it is named with two.
+    Fixture issue 90504 becomes a data card waiting on two open issues and
+    sitting three steps deep. A data card sits in the fourth column, outside
+    the chain the sentence measures, so it is neither named nor allowed to
+    deepen the chain past 90503's two steps.
     """
     docs = _with_needs(
         fixture_docs(),
-        {90503: [90502, 99998], 90505: [90501, 90502, 99999]},
+        {90503: [90502, 99998], 90505: [90501, 90502, 99999], 90504: [90503, 90505]},
     )
+    docs = _with_fields(docs, 90504, kind="data")
     note = text(draw(tmp_path, docs, page=_show_all_page(tmp_path)), "boardnote")
     assert "#90505 waits on 2 open issues at once, #90501 and #90502." in note
     assert "#99999" not in note
     assert "#99998" not in note
     assert "#90503 waits on" not in note
+    assert "#90504" not in note.split("free for a session")[1].split("frees the most")[0]
+    assert "and the deepest is 2 steps behind." in note
 
 
 def test_one_deep_card_takes_a_singular_verb(tmp_path: Path) -> None:
@@ -1826,17 +1926,25 @@ def test_the_hidden_pointer_lists_top_cards_and_blocked_cards_in_order(tmp_path:
     assert "#90503, #90504 and #90505 are hidden in this view" in note
 
 
-def test_a_board_with_nothing_in_the_chain_columns_gives_no_depth(tmp_path: Path) -> None:
+@pytest.mark.parametrize("why", ["in flight", "data"])
+def test_a_board_with_nothing_in_the_chain_columns_gives_no_depth(tmp_path: Path, why: str) -> None:
     """Protects the longest chain's floor when no card is in the columns.
 
-    A session holds every card, so all of them are in flight, the chain the
-    sentence measures holds no card at all, and its longest is zero rather
-    than an empty maximum.
+    Either a session holds every card, so all of them are in flight, or every
+    card but the one in flight becomes a data card. The chain the sentence
+    measures then holds no card at all, and its longest is zero rather than an
+    empty maximum.
     """
     docs = fixture_docs()
-    docs["working"]["items"] = [
-        {"n": card["n"], "kind": "build"} for card in docs["tracker"]["items"]
-    ]
+    if why == "in flight":
+        docs["working"]["items"] = [
+            {"n": card["n"], "kind": "build"} for card in docs["tracker"]["items"]
+        ]
+    else:
+        docs["working"]["items"] = [{"n": 90501, "kind": "build"}]
+        for card in docs["tracker"]["items"]:
+            if card["n"] != 90501:
+                card["kind"] = "data"
     note = text(draw(tmp_path, docs, page=_show_all_page(tmp_path)), "boardnote")
     assert "Infinity" not in note
     assert "behind." not in note

@@ -20,10 +20,23 @@
 // .claude/skills/update-build-board/dom-stub.js in l3a0/quantitative-trading at
 // commit 6da0ee3, landed here by the pull request that closes
 // l3a0/repo-template#24. favicon.ico beside it came across unchanged too.
+// The pull request that closes l3a0/repo-template#40 made `classList` keep
+// its names, because the page sets the build order's four-column grid with a
+// class, and a class nothing records is a layout no test can see.
 var store = {};
+function mkClassList() {
+  var names = [];
+  function drop(n) { var i = names.indexOf(n); if (i >= 0) names.splice(i, 1); }
+  return { names: names,
+    add: function(){ for (var i = 0; i < arguments.length; i++) { drop(arguments[i]); names.push(arguments[i]); } },
+    remove: function(){ for (var i = 0; i < arguments.length; i++) { drop(arguments[i]); } },
+    toggle: function(n, force){
+      var on = force === undefined ? names.indexOf(n) < 0 : !!force;
+      drop(n); if (on) names.push(n); return on; } };
+}
 function mkEl(id) {
   return { id: id, innerHTML: "", textContent: "",
-    classList: { add: function(){}, remove: function(){}, toggle: function(){} },
+    classList: mkClassList(),
     querySelectorAll: function(){ return []; },
     onclick: null, onkeydown: null };
 }

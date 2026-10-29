@@ -1238,6 +1238,21 @@ def test_the_review_heading_counts_only_its_own_line_after_the_head(
         ((), (("OWNER", "## Review complete", SECOND_AFTER),), HEAD, True),
         ((), (("OWNER", "## Review complete", AFTER, "c-older"),), HEAD, False),
         ((), (("OWNER", "## Review complete", AFTER, None),), HEAD, False),
+        ((("NONE", "Thanks", BEFORE), ("OWNER", "## Review complete", AFTER)), (), HEAD, True),
+        (
+            (
+                ("OWNER", "## Review round 1, lenses running", AFTER),
+                ("OWNER", "## Review complete", AFTER),
+            ),
+            (),
+            HEAD,
+            True,
+        ),
+        ((("OWNER", "## Review complete", AFTER), ("NONE", "LGTM", AFTER)), (), HEAD, True),
+        ((("MEMBER", "## Review complete", AFTER),), (), HEAD, False),
+        ((("FIRST_TIMER", "## Review complete", AFTER),), (), HEAD, False),
+        ((("FIRST_TIME_CONTRIBUTOR", "## Review complete", AFTER),), (), HEAD, False),
+        ((("MANNEQUIN", "## Review complete", AFTER),), (), HEAD, False),
     ],
     ids=[
         "whole-body",
@@ -1258,6 +1273,13 @@ def test_the_review_heading_counts_only_its_own_line_after_the_head(
         "review-one-second-after-head",
         "review-of-an-older-commit",
         "review-naming-no-commit",
+        "stranger-before-the-marker",
+        "round-heading-before-the-marker",
+        "stranger-after-the-marker",
+        "member-comment",
+        "first-timer-comment",
+        "first-time-contributor-comment",
+        "mannequin-comment",
     ],
 )
 def test_a_review_heading_needs_the_owner_and_a_time_after_the_head(
@@ -1272,7 +1294,9 @@ def test_a_review_heading_needs_the_owner_and_a_time_after_the_head(
     rule that adds slack to the comparison fails here. A submitted review
     names the commit it reviewed, and one started on an older commit reviewed
     code the head no longer holds, so it does not count however late it was
-    submitted.
+    submitted. Every entry is read, so a marker counts wherever it sits among
+    the other comments. Only ``OWNER`` counts, whatever other association
+    GitHub gives the author.
     """
     pr = pull(6, closes=(5,), comments=comments, reviews=reviews)
     if committed is not None:
@@ -1306,6 +1330,30 @@ def test_the_review_words_come_from_the_heading_and_name_no_session() -> None:
     ]
     board, _ = build(FakeGitHub([held], [unmarked]))
     assert prs_of(board)[0]["review"] == "review in progress"
+
+
+def test_a_heading_is_matched_as_written_and_keeps_its_case() -> None:
+    """Protects a heading that holds characters a pattern reads specially.
+
+    The heading is matched as text, so its parentheses and dot match only
+    themselves, and only its first letter is lowered in the card's words.
+    """
+    heading = "Review Complete (v2)"
+    marked = pull(
+        6, closes=(5,), comments=(("OWNER", f"## {heading}", AFTER),), reviews=(), committed=HEAD
+    )
+    assert _reviewed(marked, review_heading=heading) == (True, "review Complete (v2)")
+    near = pull(
+        6,
+        closes=(5,),
+        comments=(("OWNER", "## Review Complete v2", AFTER),),
+        reviews=(),
+        committed=HEAD,
+    )
+    assert _reviewed(near, review_heading=heading) == (
+        False,
+        "no Review Complete (v2) marker since the head commit",
+    )
 
 
 def test_a_review_list_longer_than_a_page_is_read_to_its_end() -> None:
@@ -1367,6 +1415,26 @@ def test_each_input_selects_only_the_fields_it_reads(heading: bool, settle: bool
     assert "submittedAt commit{oid}" in table["reviews"][3]
     assert (RUN_FIELD in fragment) is settle
     assert (RUN_FIELD in table["contexts"][3]) is settle
+    # The whole selections, so a field dropped from one or moved to another
+    # object fails here rather than only on GitHub.
+    assert table["reviews"] == (
+        "PullRequest",
+        "reviews",
+        "",
+        "authorAssociation body submittedAt commit{oid}",
+    )
+    reviews = (
+        "reviews(first:100){pageInfo{hasNextPage endCursor} "
+        "nodes{authorAssociation body submittedAt commit{oid}}}"
+    )
+    assert (reviews in fragment) is heading
+    head = (
+        "commit{oid committedDate statusCheckRollup{id"
+        if heading
+        else "commit{statusCheckRollup{id"
+    )
+    assert head in fragment
+    assert ("nodes{authorAssociation body createdAt}" in fragment) is heading
     pr = pull(6, closes=(5,), committed=HEAD, reviews=())
     pr["comments"] = conn([], more=True, cursor="k1")
     pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(

@@ -970,6 +970,21 @@ def summary_row(text: str, name: str) -> str:
 
 PASS = "## Plan audit, pass 1\n\nFound nothing.\n"
 VERDICT_LINE = "Board verdict: build after 2 passes"
+# More lines than the pass heading has characters, so an offset that dropped
+# each line's newline would put a verdict right after the heading above it.
+PREAMBLE = "Note.\n" * 30
+
+
+def test_the_issues_query_reads_each_issues_author() -> None:
+    """Protects the unread row from going quiet on every real run.
+
+    ``FakeGitHub`` answers from fixtures whatever a query selects, so only the
+    query's own text shows that a run reads who wrote each issue. Without it
+    every body reads as a stranger's, and no near miss in one is ever listed.
+    """
+    node = re.search(r"nodes \{\n\s*(id [^\n]*)\n", bb.ISSUES_QUERY)
+    assert node, "the issues query's node selection moved"
+    assert "authorAssociation" in node.group(1).split()
 
 
 @pytest.mark.parametrize(
@@ -1126,6 +1141,7 @@ def test_a_pass_after_the_newest_verdict_is_a_plan_with_no_verdict(
     [
         (),
         (("OWNER", f"{PASS}\n{VERDICT_LINE}\n"),),
+        (("OWNER", f"{PREAMBLE}{PASS.splitlines()[0]}\n{VERDICT_LINE}\n"),),
         (("OWNER", PASS), ("OWNER", VERDICT_LINE)),
         (("NONE", PASS),),
         (("OWNER", f"```\n{PASS}```\n"),),

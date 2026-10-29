@@ -42,8 +42,7 @@ from whichever copy it was cloned off.
 - **The build board** is a page on GitHub Pages saying what is in flight and
   what to take next, rebuilt from GitHub by a reusable workflow that every
   seeded repo calls. The section below explains it.
-- **[docs/design.md](docs/design.md)** and
-  **[docs/build-plan.md](docs/build-plan.md)** are skeletons for the two docs
+- **[docs/design.md](docs/design.md)** is the skeleton for the design doc
   CLAUDE.md refers to by name.
 - **[docs/optional-policies.md](docs/optional-policies.md)** holds two policy
   modules that only some repos need, ready to move into CLAUDE.md.
@@ -69,7 +68,9 @@ Then do the six things nothing can guess.
    from the repo they are already looking at.
 3. Rename `src/project/`, and update `packages`, `name` and `description` in
    `pyproject.toml`.
-4. Create one milestone per slice, named as `docs/build-plan.md` names them.
+4. Create the first slice on the tracker, in the three parts
+   `docs/design.md`'s `## How work is cut and ordered` lists, and link its
+   parent issue in that section's slot.
 5. Decide on both modules in `docs/optional-policies.md`, move what applies
    into the **Repo-specific policy** heading in `CLAUDE.md`, and delete the
    file.

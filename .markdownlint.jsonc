@@ -9,8 +9,8 @@
   // Readability here is the renderer's job, not the source's.
   //
   // MD024 (no-duplicate-heading): siblings_only allows a repeated heading
-  // under different parents, such as a "Test surface" heading under each
-  // slice of the build plan, while still catching two same-named headings
+  // under different parents, such as one subheading reused under each of two
+  // sections, while still catching two same-named headings
   // inside one section.
   //
   // MD033 (no-inline-html): <details> and <summary> render on GitHub and are

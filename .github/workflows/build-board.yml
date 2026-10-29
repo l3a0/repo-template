@@ -75,8 +75,11 @@ on:
           The heading, without its "## ", that closes a review, such as
           Review complete. A pull request reads as reviewed only when the
           owner posts a comment or a review whose whole first line is that
-          heading after its head commit. Empty counts any owner comment
-          opening with "## Review", posted at any time.
+          heading after its head commit. A review counts only when it names
+          the head commit, and it reaches the board on the next run of any
+          other kind, because no event the board listens to fires when a
+          review is submitted. Empty counts any owner comment opening with
+          "## Review", posted at any time.
         type: string
         default: ""
       settled-rollup:

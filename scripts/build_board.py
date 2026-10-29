@@ -60,9 +60,10 @@ otherwise freeze the whole board.
 
 Two of its rules exist because the repository is public.
 
-1. ``reviewed`` reads a comment opening with ``## Review``, or with the
-   caller's review heading, and ``planned`` a comment carrying a ``Board
-   verdict:`` line, only when its author association is ``OWNER``. Anyone
+1. ``reviewed`` reads a comment opening with ``## Review``, or under a
+   caller's review heading a comment or a submitted review opening with it,
+   and ``planned`` a comment carrying a ``Board verdict:`` line, only when its
+   author association is ``OWNER``. Anyone
    can comment, and a stranger's comment would otherwise move a card. Labels
    and links need triage access, so they need no such filter.
 2. Nothing here reads the event that started the run. Every fact comes from
@@ -116,6 +117,9 @@ PART_OF = re.compile(r"\bPart of #(\d+)\b")
 # A review comment opens with a line reading `## Review`, which the l3a0
 # plugin's update-build-board skill states as the convention. "## Reviewer" is not one.
 REVIEW = re.compile(r"## Review\b")
+# The same heading as the rule with no caller's heading reads it: after any
+# leading whitespace, posted at any time.
+ANY_REVIEW = re.compile(r"\s*" + REVIEW.pattern)
 
 
 def review_rule(heading: str) -> re.Pattern[str] | None:
@@ -158,23 +162,35 @@ def _when(value: str | None) -> datetime | None:
 
 
 def review_complete(
-    entries: list[dict], stamp_field: str, head_date: datetime | None, rule: re.Pattern[str]
+    entries: list[dict],
+    rule: re.Pattern[str],
+    stamp_field: str | None = None,
+    head_date: datetime | None = None,
 ) -> bool:
-    """Whether the owner posted the review heading after the head commit.
+    """Whether the owner posted an entry opening with ``rule``, after the head when timed.
 
-    A comment's time is its ``createdAt`` and a submitted review's its
-    ``submittedAt``. A review still pending has no ``submittedAt``, and a head
-    commit with no ``committedDate`` cannot be compared, so either reads as no
-    review. The time check has one gap. GitHub reports when a commit was made
-    rather than when it was pushed, so a commit made before the heading and
-    pushed after it reads as reviewed. Sessions post the heading after their
-    last push, which is what closes it.
+    Every review rule reads only the owner's entries, because anyone can
+    comment on a public repository. With no ``stamp_field`` the entry counts
+    whenever it was posted, which is the rule with no caller's heading. With
+    one, it counts only when posted after ``head_date``. A comment's time is
+    its ``createdAt`` and a submitted review's its ``submittedAt``. A review
+    still pending has no ``submittedAt``, and a head commit with no
+    ``committedDate`` cannot be compared, so either reads as no review.
+
+    The time check has one gap. ``committedDate`` is when the commit says it
+    was made, which whoever makes it sets, and not when it was pushed. So a
+    commit made before the heading, or dated before it on purpose, and pushed
+    after it reads as reviewed. Sessions post the heading after their last
+    push, which is what closes the gap for a comment. A submitted review names
+    the commit it reviewed, so ``pr_items`` counts only a review of the head.
     """
     for entry in entries:
         if entry.get("authorAssociation") != "OWNER":
             continue
         if not rule.match(entry.get("body") or ""):
             continue
+        if stamp_field is None:
+            return True
         posted = _when(entry.get(stamp_field))
         if posted is not None and head_date is not None and posted > head_date:
             return True
@@ -334,18 +350,37 @@ SETTLED_CHECK_WORD = {
 
 PAGE_INFO = "pageInfo{hasNextPage endCursor}"
 
-PR_FIELDS = f"""
+# What a submitted review is read for, and what a check run adds for the
+# workflow file it came from. Each is selected only for a caller that sets the
+# input reading it. A caller that sets neither sends the query it sent before
+# either input existed, so it pays no point for them, and a field its token
+# cannot read cannot stop its board.
+REVIEW_SELECTION = "authorAssociation body submittedAt commit{oid}"
+RUN_FILE = "checkSuite{workflowRun{file{path}}}"
+
+
+def pr_fields(heading: bool = False, settle: bool = False) -> str:
+    """The pull request fragment, with what ``review-heading`` and ``settled-rollup`` read."""
+    comment = " createdAt" if heading else ""
+    reviews = (
+        f"\n  reviews(first:100){{{PAGE_INFO} nodes{{{REVIEW_SELECTION}}}}}" if heading else ""
+    )
+    head = "oid committedDate " if heading else ""
+    run = f" {RUN_FILE}" if settle else ""
+    return f"""
 fragment pr on PullRequest {{
   id number state body isCrossRepository
   closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number}}}}
-  comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body createdAt}}}}
-  reviews(first:100){{{PAGE_INFO} nodes{{authorAssociation body submittedAt}}}}
-  commits(last:1){{nodes{{commit{{committedDate statusCheckRollup{{id
+  comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body{comment}}}}}{reviews}
+  commits(last:1){{nodes{{commit{{{head}statusCheckRollup{{id
     contexts(first:100){{{PAGE_INFO} nodes{{__typename
-      ... on CheckRun{{name status conclusion checkSuite{{workflowRun{{file{{path}}}}}}}}
+      ... on CheckRun{{name status conclusion{run}}}
       ... on StatusContext{{context state}}}}}}}}}}}}}}
 }}
 """
+
+
+PR_FIELDS = pr_fields()
 
 ISSUES_QUERY = f"""
 query($owner:String!, $name:String!, $after:String) {{
@@ -371,7 +406,10 @@ query($owner:String!, $name:String!, $after:String) {{
 }}
 """
 
-OPEN_PRS_QUERY = f"""
+
+def open_prs_query(fields: str = PR_FIELDS) -> str:
+    """The query for the open pull requests, with the fragment ``fields`` gives."""
+    return f"""
 query($owner:String!, $name:String!, $after:String) {{
   rateLimit{{cost}}
   repository(owner:$owner, name:$name) {{
@@ -381,8 +419,11 @@ query($owner:String!, $name:String!, $after:String) {{
     }}
   }}
 }}
-{PR_FIELDS}
+{fields}
 """
+
+
+OPEN_PRS_QUERY = open_prs_query()
 
 # Pull requests fetched by number, for the merged and closed ones an open issue
 # still names. Fifty a query keeps one response small.
@@ -411,16 +452,32 @@ NESTED = {
         "... on CrossReferencedEvent{source{... on PullRequest{number repository{nameWithOwner}}}}",
     ),
     "closingIssuesReferences": ("PullRequest", "closingIssuesReferences", "", "number"),
-    "comments": ("PullRequest", "comments", "", "authorAssociation body createdAt"),
-    "reviews": ("PullRequest", "reviews", "", "authorAssociation body submittedAt"),
+    "comments": ("PullRequest", "comments", "", "authorAssociation body"),
+    "reviews": ("PullRequest", "reviews", "", REVIEW_SELECTION),
     "contexts": (
         "StatusCheckRollup",
         "contexts",
         "",
-        "__typename ... on CheckRun{name status conclusion checkSuite{workflowRun{file{path}}}}"
-        " ... on StatusContext{context state}",
+        "__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}",
     ),
 }
+
+
+def nested(heading: bool = False, settle: bool = False) -> dict:
+    """``NESTED`` with what each input reads on a later page, as ``pr_fields`` selects it."""
+    table = dict(NESTED)
+    if heading:
+        table["comments"] = ("PullRequest", "comments", "", "authorAssociation body createdAt")
+    if settle:
+        table["contexts"] = (
+            "StatusCheckRollup",
+            "contexts",
+            "",
+            f"__typename ... on CheckRun{{name status conclusion {RUN_FILE}}}"
+            " ... on StatusContext{context state}",
+        )
+    return table
+
 
 Gql = Callable[[str, dict], dict]
 
@@ -504,11 +561,11 @@ class GhGraphql:
         return data
 
 
-def _all_nodes(gql: Gql, node_id: str, field: str, conn: dict) -> list:
-    """Every entry of a nested list, reading further pages where there are any."""
+def _all_nodes(gql: Gql, node_id: str, field: str, conn: dict, table: dict = NESTED) -> list:
+    """Every entry of a nested list, reading further pages as ``table`` says."""
     nodes = list(conn["nodes"])
     page = conn["pageInfo"]
-    typename, real, args, selection = NESTED[field]
+    typename, real, args, selection = table[field]
     head = f"{args}, " if args else ""
     while page["hasNextPage"]:
         query = (
@@ -612,7 +669,7 @@ def _rollup(gql: Gql, pr: dict, unknown: set[str], settle: bool = False) -> list
     rollup = commits[0]["commit"]["statusCheckRollup"] if commits else None
     if not rollup:
         return []
-    contexts = _all_nodes(gql, rollup["id"], "contexts", rollup["contexts"])
+    contexts = _all_nodes(gql, rollup["id"], "contexts", rollup["contexts"], nested(settle=settle))
     words = SETTLED_CHECK_WORD if settle else CHECK_WORD
     out = []
     for c in contexts:
@@ -674,19 +731,26 @@ def pr_items(
     named = sorted((closing | part_of) & open_issues)
     if not named:
         return []
-    comments = _all_nodes(gql, pr["id"], "comments", pr["comments"])
     rule = review_rule(review_heading)
+    table = nested(heading=rule is not None)
+    comments = _all_nodes(gql, pr["id"], "comments", pr["comments"], table)
     if rule is None:
-        reviewed = any(
-            c.get("authorAssociation") == "OWNER" and REVIEW.match((c.get("body") or "").lstrip())
-            for c in comments
-        )
+        reviewed = review_complete(comments, ANY_REVIEW)
     else:
         commits = pr["commits"]["nodes"]
-        head_date = _when(commits[0]["commit"].get("committedDate") if commits else None)
-        reviews = _all_nodes(gql, pr["id"], "reviews", pr["reviews"])
-        reviewed = review_complete(comments, "createdAt", head_date, rule) or review_complete(
-            reviews, "submittedAt", head_date, rule
+        head = commits[0]["commit"] if commits else {}
+        head_date = _when(head.get("committedDate"))
+        # A review started on an older commit and submitted after a push
+        # reviewed code the head no longer holds, so only a review of the head
+        # itself counts.
+        oid = head.get("oid")
+        reviews = [
+            r
+            for r in _all_nodes(gql, pr["id"], "reviews", pr["reviews"], table)
+            if oid is not None and (r.get("commit") or {}).get("oid") == oid
+        ]
+        reviewed = review_complete(comments, rule, "createdAt", head_date) or review_complete(
+            reviews, rule, "submittedAt", head_date
         )
     state = {"OPEN": "open", "MERGED": "merged", "CLOSED": "closed"}[pr["state"]]
     rollup = _rollup(gql, pr, unknown, settled(settled_rollup))
@@ -735,14 +799,16 @@ def _referenced_prs(gql: Gql, issue: dict, repo: str) -> set[int]:
     return numbers
 
 
-def _prs_by_number(gql: Gql, owner: str, name: str, numbers: list[int]) -> list[dict]:
+def _prs_by_number(
+    gql: Gql, owner: str, name: str, numbers: list[int], fields: str = PR_FIELDS
+) -> list[dict]:
     found = []
     for i in range(0, len(numbers), BATCH):
         chunk = numbers[i : i + BATCH]
-        fields = " ".join(f"p{n}: pullRequest(number:{n}){{...pr}}" for n in chunk)
+        aliases = " ".join(f"p{n}: pullRequest(number:{n}){{...pr}}" for n in chunk)
         query = (
             "query($owner:String!, $name:String!) { rateLimit{cost} "
-            f"repository(owner:$owner, name:$name) {{ {fields} }} }}\n{PR_FIELDS}"
+            f"repository(owner:$owner, name:$name) {{ {aliases} }} }}\n{fields}"
         )
         data = gql(query, {"owner": owner, "name": name})
         for n in chunk:
@@ -922,8 +988,7 @@ def build(
     are checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
-    review_rule(review_heading)
-    settled(settled_rollup)
+    fields = pr_fields(review_rule(review_heading) is not None, settled(settled_rollup))
     owner, name = repo.split("/", 1)
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
     open_issues = {i["number"] for i in issues}
@@ -959,9 +1024,9 @@ def build(
 
         referenced |= _referenced_prs(gql, issue, repo)
 
-    open_prs = _top_pages(gql, OPEN_PRS_QUERY, owner, name, "pullRequests")
+    open_prs = _top_pages(gql, open_prs_query(fields), owner, name, "pullRequests")
     seen = {p["number"] for p in open_prs}
-    others = _prs_by_number(gql, owner, name, sorted(referenced - seen))
+    others = _prs_by_number(gql, owner, name, sorted(referenced - seen), fields)
 
     unknown: set[str] = set()
     prs = []

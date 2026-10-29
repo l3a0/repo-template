@@ -1572,10 +1572,12 @@ function buildOrder() {
    next move was theirs, which invites a merge of a branch that can still go red.
 
    `checkword` returns "ok" only when every entry succeeded or was skipped, and
-   at least one succeeded, so three states all stay on this side: a check still running, a check that failed, and no checks
-   reported at all. The last is not an oversight. A conflicting pull request gets
-   no run created, which `CLAUDE.md` records as its own failure mode, and a
-   branch nothing built is not one to hand over either.
+   at least one succeeded. So anything else stays on this side: a check still
+   running, a check that failed, a check reported neither way, every check
+   skipped, and no checks reported at all. The last two are not an oversight. A
+   conflicting pull request gets no run created, which `CLAUDE.md` records as
+   its own failure mode, and a branch nothing built is not one to hand over
+   either.
 
    The third thing is that the branch's own session has finished with it. A
    branch can be reviewed and green while its session is still pushing to it,

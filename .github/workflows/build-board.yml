@@ -18,7 +18,10 @@ name: Build board
 # repository serve its own tab icon in place of the template's. A `data-label`
 # input, added by the pull request that closes l3a0/repo-template#40, names
 # the label that marks a card waiting on data, which the page then draws in a
-# fourth column.
+# fourth column. The `review-heading` and `settled-rollup` inputs, added by
+# the pull request that closes l3a0/repo-template#47, count a review only
+# when the owner posts the named heading after the head commit, and leave the
+# board's own checks out of a pull request's rollup.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -67,6 +70,23 @@ on:
           data" column. Empty reads no such label.
         type: string
         default: ""
+      review-heading:
+        description: >-
+          The heading, without its "## ", that closes a review, such as
+          Review complete. A pull request reads as reviewed only when the
+          owner posts a comment or a review whose whole first line is that
+          heading after its head commit. Empty counts any owner comment
+          opening with "## Review", posted at any time.
+        type: string
+        default: ""
+      settled-rollup:
+        description: >-
+          "true" leaves the board's own checks out of a pull request's
+          rollup, reads a skipped check as settled, reads a cancelled one as
+          neither way, and sorts the checks by name. Empty keeps the rollup
+          as GitHub lists it.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -76,12 +96,15 @@ jobs:
     timeout-minutes: 10
     # Declaring any scope sets every unlisted one to none, so each scope the
     # generator reads is named. The caller's job grants at least these.
+    # `actions: read` covers the workflow run behind each check run, whose
+    # file tells the board's own checks apart.
     permissions:
       contents: read
       issues: read
       pull-requests: read
       checks: read
       statuses: read
+      actions: read
     outputs:
       updated_at: ${{ steps.board.outputs.updated_at }}
     steps:
@@ -111,12 +134,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ inputs.title }}
           DATA_LABEL: ${{ inputs.data-label }}
+          REVIEW_HEADING: ${{ inputs.review-heading }}
+          SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
           --workflow caller/.github/workflows/board.yml
           --title="$TITLE"
           --data-label="$DATA_LABEL"
+          --review-heading="$REVIEW_HEADING"
+          --settled-rollup="$SETTLED_ROLLUP"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

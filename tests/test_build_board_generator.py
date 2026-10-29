@@ -1367,10 +1367,28 @@ def test_each_input_selects_only_the_fields_it_reads(heading: bool, settle: bool
     assert "submittedAt commit{oid}" in table["reviews"][3]
     assert (RUN_FIELD in fragment) is settle
     assert (RUN_FIELD in table["contexts"][3]) is settle
-    gh = FakeGitHub([issue(5)], [pull(6, closes=(5,), committed=HEAD, reviews=())])
+    pr = pull(6, closes=(5,), committed=HEAD, reviews=())
+    pr["comments"] = conn([], more=True, cursor="k1")
+    pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(
+        [], more=True, cursor="x1"
+    )
+    pages = {("P6", "comments", "k1"): conn([]), ("R6", "contexts", "x1"): conn([])}
+    gh = FakeGitHub([issue(5)], [pr], pages)
     build(gh, review_heading=HEADING if heading else "", settled_rollup="true" if settle else "")
     sent = next(q for q in gh.calls if "pullRequests(states:OPEN" in q)
     assert sent == bb.open_prs_query(fragment)
+    comment_page = next(q for q in gh.calls if "comments: comments(" in q)
+    check_page = next(q for q in gh.calls if "contexts: contexts(" in q)
+    assert ("createdAt" in comment_page) is heading
+    assert (RUN_FIELD in check_page) is settle
+
+
+def test_a_head_with_no_oid_matches_no_review() -> None:
+    """Protects the head-commit check from two missing oids reading as equal."""
+    pr = pull(6, closes=(5,), committed=HEAD, reviews=(("OWNER", "## Review complete", AFTER),))
+    del pr["commits"]["nodes"][0]["commit"]["oid"]
+    pr["reviews"]["nodes"][0]["commit"] = None
+    assert _reviewed(pr, review_heading=HEADING) == (False, UNMARKED)
 
 
 @pytest.mark.parametrize(

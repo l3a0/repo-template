@@ -1102,13 +1102,16 @@ def test_a_null_reference_is_dropped_rather_than_read() -> None:
     GitHub's schema lets an entry of either list, or of an issue's "blocked by"
     links, be null, which it sends for an entry the token cannot read. Every
     issue and pull request here is readable, so a null one belongs to another
-    repository, and reading its number would stop the run.
+    repository, and reading its number would stop the run. An entry that names
+    no repository is read the same way, since nothing says it is this one's.
+    Pull request 34 does not exist here, and issue 5 is open, so reading either
+    unnamed entry as this repository's would fail the run or add an item.
     """
     first = issue(5)
-    first["closedByPullRequestsReferences"] = conn([None, ref(6)])
+    first["closedByPullRequestsReferences"] = conn([None, {"number": 34}, ref(6)])
     first["blockedBy"] = conn([None, blocker(8, "OPEN")])
     opened = pull(7)
-    opened["closingIssuesReferences"] = conn([None, ref(8)])
+    opened["closingIssuesReferences"] = conn([None, {"number": 5, "repository": None}, ref(8)])
     gh = FakeGitHub([first, issue(8)], [pull(6, state="MERGED", closes=(5,)), opened])
     board, _ = build(gh)
     assert [(p["pr"], p["issue"]) for p in prs_of(board)] == [(6, 5), (7, 8)]

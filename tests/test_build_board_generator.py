@@ -1803,6 +1803,39 @@ def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(
     assert [int(n) for n in re.findall(r'data-n="(\d+)"', column)] == [3, 4, 2, 1]
 
 
+def test_the_build_order_sorts_by_band_then_order_then_readiness_then_number(
+    tmp_path: Path,
+) -> None:
+    """Protects the comparator's four terms and the order it applies them in.
+
+    Each pair of cards here differs on one term and ties on every term before
+    it, so dropping, reversing or moving any term changes the chips.
+
+    1. #1 in band 2 with no order sorts after #2 in band 1 at order 60, so band
+       comes before order and a lower band lands first.
+    2. #3, #4 and #5 share order 10, ahead of #6 and #7 at the default of 50
+       and #2 at 60, so order comes before readiness.
+    3. #5 carries a decision, so it is ready to decide rather than to plan, and
+       sorts ahead of #3 and #4 at the same order.
+    4. #3 sorts ahead of #4, and #6 ahead of #7, on the issue number alone.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("band:2",)),
+            issue(2, labels=("band:1", "decision"), body="Board order: 60\n"),
+            issue(3, labels=("band:1",), body="Board order: 10\n"),
+            issue(4, labels=("band:1",), body="Board order: 10\n"),
+            issue(5, labels=("band:1", "decision"), body="Board order: 10\n"),
+            issue(6, labels=("band:1",)),
+            issue(7, labels=("band:1",)),
+        ],
+        [],
+    )
+    board, _ = build(gh)
+    chips, _ = _rank_chips(tmp_path, board)
+    assert sorted(chips, key=chips.get) == [5, 3, 4, 6, 7, 2, 1]
+
+
 def _rank_chips(tmp_path: Path, board: dict) -> tuple[dict[int, int], str]:
     """Each ranked card's priority chip as the page draws it, and the build order's HTML."""
     board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

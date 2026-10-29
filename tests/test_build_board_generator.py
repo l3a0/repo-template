@@ -365,6 +365,17 @@ def test_a_part_of_reference_after_a_fence_counts_in_a_crlf_body() -> None:
     assert [(p["pr"], p["issue"], p.get("partOf")) for p in prs_of(board)] == [(481, 482, True)]
 
 
+def test_a_crlf_inside_a_code_span_keeps_its_paragraph() -> None:
+    """Protects a ``Part of`` quoted in a code span that crosses a CRLF line end.
+
+    Each ``\\r\\n`` is one line end. Read as ``\\r`` and ``\\n`` apart, it
+    would be a blank line, which ends the paragraph, so the span would never
+    close and the quoted reference would count.
+    """
+    gh = FakeGitHub([issue(4)], [pull(20, body="`x\r\nPart of #4`")])
+    assert prs_of(build(gh)[0]) == []
+
+
 @pytest.mark.parametrize(
     ("body", "credited"),
     [
@@ -1715,13 +1726,16 @@ def test_a_fence_in_a_crlf_body_still_hides_what_it_quotes() -> None:
     assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 3}]
 
 
+@pytest.mark.parametrize("run_repo", [REPO, "Octo-Org/Octo-Repo"])
 @pytest.mark.parametrize(
     "spelling", ["octo-org/octo-repo", "Octo-Org/Octo-Repo", "OCTO-ORG/OCTO-REPO"]
 )
-def test_a_repository_is_the_same_whatever_its_case(spelling: str) -> None:
+def test_a_repository_is_the_same_whatever_its_case(spelling: str, run_repo: str) -> None:
     """Protects a reference typed in another case from reading as another repository.
 
-    GitHub treats an owner and a repository named in any case as the same one.
+    GitHub treats an owner and a repository named in any case as the same one,
+    so the run's own name is folded too, not only the name each reference
+    carries.
     """
     gh = FakeGitHub(
         [
@@ -1733,7 +1747,7 @@ def test_a_repository_is_the_same_whatever_its_case(spelling: str) -> None:
         ],
         [pull(20, closes=((5, spelling),))],
     )
-    board, report = build(gh)
+    board, report = bb.build(gh, run_repo, 30, NOW)
     assert card(board, 1)["needs"] == [2]
     assert card(board, 3)["after"] == [2]
     assert card(board, 4)["after"] == [2]
@@ -1774,9 +1788,22 @@ HERE = "https://github.com/octo-org/octo-repo"
         ("[#2](../issues/2)", None, [OTHER]),
         (f"[#2]({HERE}/discussions/2)", None, [OTHER]),
         (f"[#2]({HERE}/issues/02)", None, [DISAGREE]),
-        # A link `LINK_REF` does not read still reads as its `#N`.
-        ('[#2](https://github.com/other/repo/issues/2 "title")', [2], []),
+        # A link that opens with `[#N](` and that `LINK_REF` cannot read is
+        # refused, so its `#N` never reads as an issue here.
+        ('[#2](https://github.com/other/repo/issues/2 "title")', None, [OTHER]),
+        ("[#2]( https://github.com/other/repo/issues/2)", None, [OTHER]),
+        ("[#2](https://github.com/other/repo/issues/2(x))", None, [OTHER]),
+        # A reference-style link names no address on the line, so it reads as
+        # its `#N`.
         ("[#2][ref]", [2], []),
+        ("[#2](https://gitlab.com/octo-org/octo-repo/issues/2)", None, [OTHER]),
+        (
+            "[#2](https://evil.example/https://github.com/octo-org/octo-repo/issues/2)",
+            None,
+            [OTHER],
+        ),
+        ("x-#2 and x.#2", None, []),
+        (f"[#2]({HERE}/issues/2#3)", [2], []),
     ],
 )
 def test_each_reference_shape_on_an_after_line(

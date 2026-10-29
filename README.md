@@ -15,8 +15,9 @@ from whichever copy it was cloned off.
 
 - **[CLAUDE.md](CLAUDE.md)** is the agent instruction file. Scope authority,
   how to rank work, plan audits, writing style, markdown hygiene, secrets,
-  committing, and pull request review. It has template slots for the premise
-  and for repo-specific policy, marked as HTML comments.
+  committing, pull request review and the build board. It has template slots,
+  marked as HTML comments, for what only the new repo can say, such as its
+  premise and what each band on its board means.
 - **[.github/workflows/ci.yml](.github/workflows/ci.yml)** runs two jobs. `test`
   runs ruff, a format check, and pytest under uv. `docs` runs markdownlint.
   The ruleset requires both by name.
@@ -102,8 +103,8 @@ The pieces are these.
   [.claude/skills/update-build-board/board.html](.claude/skills/update-build-board/board.html).
   It checks both out from this repo at the commit the caller pinned. The page,
   its test stub and its icon stay in that folder although no skill lives there
-  any more, because the reusable workflow publishes them from that path and the
-  plugin's skill finds this setup by it.
+  any more. The reusable workflow publishes the page and the icon from that
+  path, and the plugin's harness fetches the page and the stub from it.
 - **[.github/workflows/board.yml](.github/workflows/board.yml)** is the caller.
   It holds the triggers, the permissions and the concurrency group, and calls
   the reusable workflow. This repo calls it at `main`, so its own board runs
@@ -147,8 +148,11 @@ share the label names and line formats, so a skill newer or older than the
 pinned generator tells a session to set something the board does not read.
 The plugin's `update-build-board` skill therefore names, under
 `## Generator compatibility`, the generator commits its formats were checked
-against. When `scripts/build_board.py` changed between the old pin and the new
-one, move the pin only once a plugin release names the new commit there.
+against. When a regex, a label list or a query field in
+`scripts/build_board.py` changed between the old pin and the new one, move the
+pin only once a plugin release names the new commit there. A seeded repo keeps
+no test between its pin and the plugin, so this comparison is a step to take by
+hand. The template's own suite reads the skill at a pinned plugin commit.
 
 ## Running the checks locally
 

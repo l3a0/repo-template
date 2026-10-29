@@ -164,7 +164,7 @@ Review by fanning out independent lenses, then verifying each finding adversaria
 1. Fixing the instance rather than the class, such as a false claim corrected in one file while it still stands in three more.
 2. Fixing past the class, such as generalising a change into places it does not belong.
 
-**Consult the build team on every review (owner directive, 2026-10-29).** Beside completeness and over-reach, run `/l3a0:ask-team` in its lens mode. It seats the engineering roles the change touches, such as a risk engineer on a path that sends orders or a data engineer on a write that cannot be repeated, as more blind lenses, and returns their findings to the review rather than posting them. Their findings go through the same refutation pass as every other lens before anything is acted on, and the review folds what survives into its own comment. The skill ships in the `l3a0` Claude Code plugin from 0.5.0, which `## Keep the build board current` below says how to install. A review that cannot run it says so rather than skipping it silently.
+**Consult the build team on every review (owner directive, 2026-10-29).** Beside completeness and over-reach, run `/l3a0:ask-team` in its lens mode. It seats the engineering roles the change touches, such as a risk engineer on a path that sends orders or a data engineer on data that cannot be recaptured, as more blind lenses, and returns their findings to the review rather than posting them. Their findings go through the same refutation pass as every other lens before anything is acted on, and the review folds what survives into its own comment. The skill ships in the `l3a0` Claude Code plugin from 0.5.0, which `## Keep the build board current` below says how to install. A review that cannot run it says so rather than skipping it silently.
 
 Verify by executing, not by reading. Mutate the code and confirm a test fails. A test that still passes under mutation does not cover what it claims to cover.
 
@@ -202,14 +202,14 @@ PR bodies use Markdown section headings, not a wall of prose. Lead with `## Why`
 
 The build board is a page on GitHub Pages that answers what is in flight and what to take next. A GitHub Action rebuilds it from GitHub on every issue, comment and pull request change and on a schedule, so no session writes it. What the board cannot read from GitHub on its own is judgement: which cards are ranked and in what order, which session holds a card, whether a plan is finished, and what a card waits on. A session that makes one of those calls and does not set it on GitHub has made the board wrong, and nothing else notices.
 
-So a session sets the matching label, "blocked by" link, marker line or `## Review` comment at the moment it makes the call. The `update-build-board` skill in the `l3a0` Claude Code plugin owns the formats and the full list of moments, and the plugin's `sync-prune-next` skill runs the status round that checks them. This repository keeps no copy of either skill, because the copies each repository once kept drifted apart. Install the plugin at 0.5.0 or later on each machine that runs a session here.
+So a session sets the matching label, "blocked by" link, marker line or `## Review` comment at the moment it makes the call. The `update-build-board` skill in the `l3a0` Claude Code plugin owns the formats and the full list of moments, and the plugin's `sync-prune-next` skill runs the status round that checks them. This repository keeps no copy of either skill, because the copies each repository once kept drifted apart. Install the plugin at 0.5.0 or later on each machine that runs a session here. These commands install it for the user, so it serves every repository on that machine, and they follow the plugin's `main` rather than a fixed version. Every session then runs what that `main` holds, including the plugin's hooks.
 
 ```bash
 claude plugin marketplace add l3a0/claude-plugins
 claude plugin install l3a0@l3a0
 ```
 
-The skill leaves what each `band:N` label means to the repository and reads it here.
+The skill leaves what each `band:N` label means to the repository, so a session reads it here.
 
 <!-- TEMPLATE: say what band:1, band:2 and band:3 mean in this repo, under
      the ranking directive at the top of this file. For example, band:1 is

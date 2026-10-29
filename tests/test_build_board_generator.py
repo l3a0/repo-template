@@ -14,7 +14,7 @@ sections the board's page draws. Two failures matter more than any other here.
 Each test feeds the generator a fake GitHub that answers its queries from
 fixtures, so no test of the generator touches the network. The last tests run
 the page on what the generator wrote, and check the workflows and the setup
-script that publish it. Five of those read the update-build-board skill, which
+script that publish it. Six tests read the update-build-board skill, which
 lives in the ``l3a0`` Claude Code plugin rather than here, so they fetch it from
 GitHub at the plugin commit ``PLUGIN_COMMIT`` names.
 
@@ -65,35 +65,59 @@ NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
-# this commit, the 0.5.0 release. A change here to a format the skill states
-# fails them until the plugin releases a matching skill and this pin moves to
-# it, which is the plugin's rule that a generator's format change ships with a
-# plugin release in the same step.
+# this commit, the 0.5.0 release. A change here to a marker, a label or a
+# string these tests compare with the skill fails them until the plugin
+# releases a skill that matches and this pin moves to it. Any other format
+# change rests on the plugin's own rule that a generator's format change ships
+# with a plugin release in the same step.
 PLUGIN_COMMIT = "37555c51743277d7ab92f29d571349de0858a60a"
-PLUGIN_SKILL = (
-    "https://raw.githubusercontent.com/l3a0/claude-plugins/"
-    f"{PLUGIN_COMMIT}/skills/update-build-board/SKILL.md"
+PLUGIN_FILES = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/update-build-board/"
+
+# The skill lists the strings these tests pin, so that a release keeps them.
+# That list alone would satisfy most of the assertions, so the tests read the
+# skill with it removed.
+PINNED_LIST = re.compile(
+    r"\nTwo repositories have tests that read this skill's text.*?\n(?=## )", re.S
 )
 
 
 @functools.cache
-def _skill() -> str:
-    """The plugin's update-build-board skill at ``PLUGIN_COMMIT``.
+def _fetch(name: str) -> tuple[str, OSError | None]:
+    """One file of the plugin's skill at ``PLUGIN_COMMIT``, or why it failed.
 
-    An offline local run skips the tests that read it. CI sets ``CI``, and
-    there a failed fetch fails the test, so the check cannot vanish from the
-    run that gates a merge. An answer from GitHub that is not the file, such
-    as a 404 for a pin naming no such commit or path, fails everywhere.
+    The failure is cached with the text, so a network that drops packets
+    costs one timeout per run rather than one per test.
     """
     try:
-        with urllib.request.urlopen(PLUGIN_SKILL, timeout=30) as response:
-            return response.read().decode("utf-8")
-    except urllib.error.HTTPError:
-        raise
+        with urllib.request.urlopen(PLUGIN_FILES + name, timeout=30) as response:
+            return response.read().decode("utf-8"), None
     except OSError as error:
-        if os.environ.get("CI"):
-            raise
-        pytest.skip(f"cannot fetch the plugin's skill: {error}")
+        return "", error
+
+
+def _plugin(name: str) -> str:
+    """The file's text, or a skip on an offline local run.
+
+    CI sets ``CI=true``, and there a failed fetch fails the test, so the check
+    cannot vanish from the run that gates a merge. An answer from GitHub that
+    is not the file, such as a 404 for a pin naming no such commit or path,
+    fails everywhere.
+    """
+    text, error = _fetch(name)
+    if error is None:
+        return text
+    if isinstance(error, urllib.error.HTTPError):
+        raise error
+    if os.environ.get("CI", "").lower() in {"true", "1"}:
+        raise error
+    pytest.skip(f"cannot fetch the plugin's {name}: {error}")
+
+
+def _skill() -> str:
+    """The plugin's ``SKILL.md``, without its list of the strings pinned here."""
+    skill, removed = PINNED_LIST.subn("\n", _plugin("SKILL.md"))
+    assert removed == 1, "the skill's list of pinned strings moved, so it would match itself"
+    return skill
 
 
 _spec = importlib.util.spec_from_file_location("build_board", SCRIPT)
@@ -1499,6 +1523,31 @@ def test_the_stale_threshold_is_the_longest_gap_plus_ten_hours_for_a_dropped_run
     assert bb.stale_after_minutes(bb.longest_gap_minutes(WORKFLOW)) == 630
 
 
+def test_the_plugin_pin_is_a_full_commit() -> None:
+    """Protects the skill these tests read from moving under them.
+
+    GitHub serves the file at a branch name or a short sha too, and either can
+    come to name other text later. Only a full commit sha always names the
+    same file.
+    """
+    assert re.fullmatch(r"[0-9a-f]{40}", PLUGIN_COMMIT)
+
+
+def test_the_skill_states_every_marker_the_generator_reads() -> None:
+    """Protects a session from setting a line or a label the board ignores.
+
+    The skill tells a session what to write, and the generator decides what
+    counts. Each line the generator matches has to match an example the skill
+    writes in a code span, and each label it reads has to appear there by name,
+    so renaming one in the generator fails here until the skill says the same.
+    """
+    spans = [s.replace("#N", "#1") for s in re.findall(r"`([^`\n]+)`", _skill())]
+    for marker in (bb.VERDICT, bb.ORDER, bb.AFTER, bb.REVIEW, bb.PART_OF, bb.BAND):
+        assert any(marker.search(s) for s in spans), marker.pattern
+    for label in [*bb.WORKING, *(name for name, _ in bb.KIND_LABELS)]:
+        assert label in spans, label
+
+
 def test_the_skill_quotes_the_allowance_the_script_adds() -> None:
     """Protects the skill's data table from a second copy of the allowance."""
     skill = _skill()
@@ -1735,7 +1784,8 @@ def test_both_inputs_are_optional_strings_that_default_to_empty() -> None:
     sets only what it needs. A required input, or a default naming a file,
     would fail every such run. An empty title gives ``<name> build board``,
     and an empty icon serves the template's. The README and the
-    update-build-board skill name the icon input by the key declared here.
+    page notes of the l3a0 plugin's update-build-board skill name the icon
+    input by the key declared here.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      (\w+):\n", inputs, flags=re.M)[1:]
@@ -1747,8 +1797,8 @@ def test_both_inputs_are_optional_strings_that_default_to_empty() -> None:
         assert "required" not in block
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
-    skill = _skill()
-    assert "`with: icon: <path>`" in skill
+    page = _plugin("page.md")
+    assert "`with: icon: <path>`" in page
 
 
 def test_nothing_checks_out_a_pull_requests_code() -> None:

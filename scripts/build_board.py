@@ -29,9 +29,10 @@ It writes the six sections the page reads.
    from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
    native "blocked by" links, and ``after`` from a ``Board after:`` line in the
    body.
-3. ``prs``, one item per pull request and issue it names, with its state, its
-   checks at the current head, whether GitHub registered the closing link, and
-   whether the owner posted a review.
+3. ``prs``, one item per pull request and each issue in this repository it
+   names, with its state, its checks at the current head, whether GitHub
+   registered a closing link to that issue, and whether the owner posted a
+   review.
 4. ``working``, one item per issue carrying a ``working:build`` or
    ``working:decompose`` label, which a session sets while it holds the card.
 5. ``planned``, one item per issue with an owner comment carrying a
@@ -235,7 +236,7 @@ PAGE_INFO = "pageInfo{hasNextPage endCursor}"
 PR_FIELDS = f"""
 fragment pr on PullRequest {{
   id number state body isCrossRepository
-  closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number}}}}
+  closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
   comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
   commits(last:1){{nodes{{commit{{statusCheckRollup{{id
     contexts(first:100){{{PAGE_INFO} nodes{{__typename
@@ -258,7 +259,7 @@ query($owner:String!, $name:String!, $after:String) {{
         subIssues{{totalCount}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
         closedByPullRequestsReferences(first:100, includeClosedPrs:true){{
-          {PAGE_INFO} nodes{{number}}}}
+          {PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
         timelineItems(itemTypes:[CROSS_REFERENCED_EVENT], first:100){{{PAGE_INFO} nodes{{
           ... on CrossReferencedEvent{{source{{
             ... on PullRequest{{number repository{{nameWithOwner}}}}}}}}}}}}
@@ -299,7 +300,7 @@ NESTED = {
         "Issue",
         "closedByPullRequestsReferences",
         "includeClosedPrs:true",
-        "number",
+        "number repository{nameWithOwner}",
     ),
     "timelineItems": (
         "Issue",
@@ -307,7 +308,12 @@ NESTED = {
         "itemTypes:[CROSS_REFERENCED_EVENT]",
         "... on CrossReferencedEvent{source{... on PullRequest{number repository{nameWithOwner}}}}",
     ),
-    "closingIssuesReferences": ("PullRequest", "closingIssuesReferences", "", "number"),
+    "closingIssuesReferences": (
+        "PullRequest",
+        "closingIssuesReferences",
+        "",
+        "number repository{nameWithOwner}",
+    ),
     "comments": ("PullRequest", "comments", "", "authorAssociation body"),
     "contexts": (
         "StatusCheckRollup",
@@ -504,21 +510,42 @@ def _rollup(gql: Gql, pr: dict, unknown: set[str]) -> list[list[str]]:
     return out
 
 
+def in_repo(node: dict | None, repo: str) -> bool:
+    """Whether an issue or pull request GitHub listed belongs to ``repo``.
+
+    A closing link, a cross-reference or a "blocked by" link can name an issue
+    or pull request in another repository, whose number means nothing here.
+    Read as this repository's, it would fetch an unrelated pull request of the
+    same number, stop the run when there is none, or draw a branch on the
+    wrong card.
+
+    A null entry, or one with no repository, reads as another repository's.
+    That does not break the rule that the run fails closed. ``GhGraphql``
+    stops the run on any response carrying GraphQL errors, so a null here is
+    one GitHub sent with no error, an entry the token cannot read. The build
+    job's token reads every issue and pull request in the caller's repository,
+    so such an entry is never this repository's, and dropping it loses
+    nothing from the board.
+    """
+    return bool(node) and (node.get("repository") or {}).get("nameWithOwner") == repo
+
+
 def pr_items(
     gql: Gql,
     pr: dict,
     open_issues: set[int],
+    repo: str,
     unknown: set[str],
     working: frozenset[int] = frozenset(),
 ) -> list[dict]:
     """One item per open issue the pull request names, or none at all.
 
-    A pull request names an issue through GitHub's closing link or through a
-    ``Part of`` reference anywhere in its body outside a code span or a fenced
-    code block. One that names no open issue gets no item, because a branch
-    with no card has nowhere to be drawn and a null issue would make the page
-    refuse the whole section. One that closes two issues gets two items,
-    because the page keys pull requests by issue.
+    A pull request names an issue through a closing link to an issue in this
+    repository, or through a ``Part of`` reference anywhere in its body outside
+    a code span or a fenced code block. One that names no open issue gets no
+    item, because a branch with no card has nowhere to be drawn and a null
+    issue would make the page refuse the whole section. One that closes two
+    issues gets two items, because the page keys pull requests by issue.
 
     A pull request opened from a fork gets no item either. Anyone can open one
     on a public repository, and its ``Part of`` reference or closing keyword
@@ -541,6 +568,7 @@ def pr_items(
     closing = {
         n["number"]
         for n in _all_nodes(gql, pr["id"], "closingIssuesReferences", pr["closingIssuesReferences"])
+        if in_repo(n, repo)
     }
     part_of = {int(m) for m in PART_OF.findall(outside_code(pr.get("body") or ""))}
     named = sorted((closing | part_of) & open_issues)
@@ -585,10 +613,11 @@ def _referenced_prs(gql: Gql, issue: dict, repo: str) -> set[int]:
             "closedByPullRequestsReferences",
             issue["closedByPullRequestsReferences"],
         )
+        if in_repo(n, repo)
     }
     for event in _all_nodes(gql, issue["id"], "timelineItems", issue["timelineItems"]):
-        source = (event or {}).get("source") or {}
-        if "number" in source and source.get("repository", {}).get("nameWithOwner") == repo:
+        source = (event or {}).get("source")
+        if in_repo(source, repo) and "number" in source:
             numbers.add(source["number"])
     return numbers
 
@@ -641,11 +670,7 @@ def tracker_card(
         "label": issue["title"],
         "kind": (kinds or ["ready"])[0],
         "needs": sorted(
-            {
-                b["number"]
-                for b in blockers
-                if b["state"] == "OPEN" and (b.get("repository") or {}).get("nameWithOwner") == repo
-            }
+            {b["number"] for b in blockers if in_repo(b, repo) and b["state"] == "OPEN"}
             & open_issues
         ),
         "labels": [x for x in names if not BAND.match(x) and x not in WORKING],
@@ -813,7 +838,7 @@ def build(
     left_out = []
     busy = frozenset(w["n"] for w in working)
     for pr in open_prs + others:
-        items = pr_items(gql, pr, open_issues, unknown, busy)
+        items = pr_items(gql, pr, open_issues, repo, unknown, busy)
         if not items and pr["state"] == "OPEN":
             left_out.append(pr["number"])
         prs += items

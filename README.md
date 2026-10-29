@@ -163,13 +163,14 @@ back before that commit, remove the `data-label` line in the same change.
 
 A repository can name the heading that closes a review. A pull request then
 reads as reviewed only when the owner posts a comment or a pull request review
-whose whole first line is `## ` followed by that heading, after the branch's
-head commit. So a heading such as `## Review round 1, lenses running`, posted
-while a review is still under way, does not count, and a commit made after the
-review sends the branch back for another. Write the heading without its `## `,
-because YAML reads an unquoted `#` after a space as the start of a comment and
-would leave the input empty. Left out, any owner comment opening with
-`## Review` counts, whenever it was posted.
+whose whole first line is two `#` signs, a space and that heading, after the
+branch's head commit. So a heading such as
+`## Review round 1, lenses running`, posted while a review is still under way,
+does not count, and a commit made after the review sends the branch back for
+another. Write the heading without its two `#` signs and the space after
+them, because YAML reads an unquoted `#` after a space as the start of a
+comment and would leave the input empty. Left out, any owner comment opening with `## Review` counts,
+whenever it was posted.
 
 ```yaml
     uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>

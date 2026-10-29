@@ -386,7 +386,7 @@ function adopt(src) {
   PRU = `https://github.com/${STATE.repo}/pull/`;
   NEXT_SORTED = NEXT.slice().sort((a, b) =>
     a.band - b.band ||
-    (a.order || 50) - (b.order || 50) ||
+    (a.order ?? 50) - (b.order ?? 50) ||
     READY_RANK[a.ready] - READY_RANK[b.ready] ||
     a.issue - b.issue);
 }
@@ -495,10 +495,10 @@ function source() {
    built from the tracker. That happened once, and the fix was to file the
    issue rather than to give the page a second source of truth.
 
-   `linked` is GitHub's own closingIssuesReferences. The Action writes an
-   entry only for an issue GitHub links or a `Part of` reference names, so
-   `linked` is false exactly when `partOf` is true, and the page does not read
-   it. A closing keyword written inside a code span, where GitHub does not read
+   `linked` is GitHub's own closingIssuesReferences to an issue in this
+   repository. The Action writes an entry only for an issue GitHub links or a
+   `Part of` reference names, so `linked` is false exactly when `partOf` is
+   true, and the page does not read it. A closing keyword written inside a code span, where GitHub does not read
    it, gives the branch no entry at all, and
    `gh pr view <n> --json closingIssuesReferences` remains the check on a body.
 
@@ -558,18 +558,19 @@ function source() {
 
    1. `band` is priority under the repository's ranking directive, and the
       repository says what each band means. A lower band lands first.
-   2. `ready` is how finished the plan is. "build" means a decompose loop ran it
+   2. `order` breaks a tie inside a band, and it exists only where something was
+      measured. A card with no order counts as 50, so an order of 0 or below
+      sorts ahead of it and anything above 50 sorts behind it.
+   3. `ready` is how finished the plan is. "build" means a decompose loop ran it
       against the code and exited. "decide" means the same, with one question
       left for the owner. "plan" means the body has never been executed against
       anything.
-   3. `order` breaks a tie inside a band, and it exists only where something was
-      measured.
    4. The issue number breaks whatever is left, because it is stable.
 
    Most of the tracker carries no position, which is the design rather than an
-   omission: the ranking covers the top and everything it omits falls through to
-   readiness and then the issue number. A position invented to fill the page
-   would be a number nobody measured. */
+   omission: the ranking covers the top, and a card it gives no order sorts at
+   50 inside its band. A position invented to fill the page would be a number
+   nobody measured. */
 
 const READY_RANK = { build: 0, decide: 1, plan: 2 };
 

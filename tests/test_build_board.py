@@ -245,9 +245,15 @@ def fixture_docs() -> dict[str, dict]:
 
 
 def assert_no_board_data(ids: dict) -> None:
-    """Nothing but the banner is drawn, so nothing renders as if it were data."""
+    """Nothing but the banner is drawn, so nothing renders as if it were data.
+
+    The repository's note is checked here rather than in ``CONTENT``, because
+    a live board must show everything in ``CONTENT`` and a board with no note
+    keeps the note hidden.
+    """
     for element in CONTENT:
         assert ids.get(element, {}).get("hidden"), f"{element} is not hidden"
+    assert ids.get("repnote", {}).get("hidden"), "the note is not hidden"
     for element in ("strip", "flow", "board", "foot"):
         assert text(ids, element) == "", f"{element} drew {text(ids, element)!r}"
     assert not ids["source"]["hidden"], "the banner is hidden"
@@ -2088,6 +2094,190 @@ def test_a_tie_with_one_card_in_flight_points_at_that_card_alone(tmp_path: Path)
     note = _note(draw(tmp_path, docs, page=_show_all_page(tmp_path)))
     assert "#90501 and #90504 each free 2 others, and nothing frees more." in note
     assert "#90501 is in the In flight section above rather than in a column here." in note
+
+
+# ---- The lines a caller adds ----
+
+# What the page draws when the board carries none of the three lines, written
+# here rather than read from the page, so a change to the page's own text fails.
+OWN_SUBTITLE = "what is in flight, and what to take next"
+OWN_FOOTER = (
+    "Built from GitHub by an Action on each change and on a schedule, and fetched again "
+    "every 2 minutes, so every figure on it is current as of the stamp above rather than live."
+)
+DESIGN = "https://github.com/octo-org/octo-repo/blob/main/docs/design.md"
+
+
+def lined_board(**state: object) -> dict:
+    """The fixture board with a subtitle, a note and a head, and ``state`` fields on top."""
+    lines = {
+        "subtitle": "the order of work on the lake",
+        "note": [
+            {"text": "What each card is for lives in "},
+            {"text": "the design doc", "href": DESIGN},
+            {"text": "."},
+        ],
+        "main": "0a1b2c3",
+    }
+    return fixture_board(**{**lines, **state})
+
+
+def test_a_board_with_none_of_the_lines_draws_the_pages_own(tmp_path: Path) -> None:
+    """Protects every caller that sets no subtitle, note or head.
+
+    Its board carries none of the three keys, and the page draws what it drew
+    before they existed.
+    """
+    ids = draw(tmp_path, fixture_docs())
+    assert ids["sub"]["html"] == OWN_SUBTITLE
+    assert ids["repnote"]["hidden"]
+    assert ids["repnote"]["html"] == ""
+    assert text(ids, "foot").startswith(OWN_FOOTER)
+
+
+def test_the_lines_draw_where_the_caller_asked(tmp_path: Path) -> None:
+    """Protects the three inputs on the page: the subtitle, the note and the footer's head.
+
+    The note's link opens in a new tab, as the links of the repositories that
+    asked for it did, and the head is set in the mono face.
+    """
+    ids = draw(tmp_path, lined_board())
+    assert ids["sub"]["html"] == "the order of work on the lake"
+    assert not ids["repnote"]["hidden"]
+    assert ids["repnote"]["html"] == (
+        "What each card is for lives in "
+        f'<a href="{DESIGN}" target="_blank" rel="noopener">the design doc</a>.'
+    )
+    assert text(ids, "foot").startswith(
+        "Built from GitHub against the default branch at 0a1b2c3 by an Action on each change "
+        "and on a schedule, and fetched again every 2 minutes,"
+    )
+    assert '<span class="mono">0a1b2c3</span>' in ids["foot"]["html"]
+
+
+def test_the_subtitle_and_the_note_are_drawn_as_text(tmp_path: Path) -> None:
+    """Protects the page from markup a caller's input carries.
+
+    The subtitle and every piece of the note are escaped, the words of a link
+    included, and an address that is not https draws as text rather than as a
+    link, whatever the generator let through. That covers an http address and
+    one that only carries ``https://`` after another scheme.
+    """
+    ids = draw(
+        tmp_path,
+        lined_board(
+            subtitle="<script>alert(1)</script>",
+            note=[
+                {"text": "<script>alert(1)</script>"},
+                {"text": "click", "href": "javascript:alert(1)"},
+                {"text": "quoted", "href": 'https://a"onmouseover="alert(1)'},
+                {"text": "smuggled", "href": "javascript:alert(1)//https://a"},
+                {"text": "plain", "href": "http://example.com"},
+            ],
+        ),
+    )
+    assert ids["sub"]["html"] == "&lt;script&gt;alert(1)&lt;/script&gt;"
+    assert ids["repnote"]["html"] == (
+        "&lt;script&gt;alert(1)&lt;/script&gt;clickquotedsmuggledplain"
+    )
+    assert "<a" not in ids["repnote"]["html"]
+    ids = draw(tmp_path, lined_board(note=[{"text": "<b>the design</b>", "href": DESIGN}]))
+    assert ids["repnote"]["html"] == (
+        f'<a href="{DESIGN}" target="_blank" rel="noopener">&lt;b&gt;the design&lt;/b&gt;</a>'
+    )
+    query = "https://github.com/octo-org/octo-repo/issues?q=a&amp;b"
+    ids = draw(tmp_path, lined_board(note=[{"text": "search", "href": query}]))
+    drawn = ids["repnote"]["html"]
+    assert 'href="https://github.com/octo-org/octo-repo/issues?q=a&amp;amp;b"' in drawn
+
+
+@pytest.mark.parametrize(
+    "note",
+    ["a string", {"text": "a dict"}, [{"href": DESIGN}], [{"text": 1}], [None], []],
+    ids=["string", "dict", "no-text", "number-text", "null-piece", "empty"],
+)
+def test_a_note_the_page_cannot_read_is_hidden_and_the_board_still_draws(
+    tmp_path: Path, note: object
+) -> None:
+    """Protects the board from a note in a shape the page does not draw.
+
+    The note says nothing about the tracker, so a note the page cannot read is
+    left out rather than refusing the state section and the board with it.
+    """
+    ids = draw(tmp_path, lined_board(note=note))
+    assert ids["repnote"]["hidden"]
+    assert ids["source"]["hidden"]
+    assert cards(ids, "flow") == {90501}
+
+
+@pytest.mark.parametrize("head", ["0A1B2C3", "0a1b2c3d", "0a1b2c", "<b>0a1b2c3</b>", 1234567])
+def test_a_head_that_is_not_seven_hex_characters_is_not_named(tmp_path: Path, head: object) -> None:
+    """Protects the footer from naming something that is not a commit."""
+    ids = draw(tmp_path, lined_board(main=head))
+    assert text(ids, "foot").startswith(OWN_FOOTER)
+
+
+def test_a_later_board_without_the_lines_puts_the_pages_own_back(tmp_path: Path) -> None:
+    """Protects the page from keeping an earlier board's lines.
+
+    The page draws again on every changed board.json without reloading, so a
+    caller that drops an input has to see the page's own line come back.
+    """
+    later = fixture_board(updatedAt="2026-10-01T12:30:00Z")
+    ids, _ = run_fetch_page(tmp_path, [served(lined_board()), served(later)])
+    assert ids["sub"]["html"] == OWN_SUBTITLE
+    assert ids["repnote"]["hidden"]
+    assert text(ids, "foot").startswith(OWN_FOOTER)
+
+
+def test_the_stopped_banner_names_the_head_the_board_was_built_against(tmp_path: Path) -> None:
+    """Protects the age the banner gives for the last live data.
+
+    With the head on the board, the banner says which commit the data shown
+    was measured against, as the footer does. Without it, the banner says
+    what it said before.
+    """
+    down = {"status": 503, "body": "busy"}
+    ids, _ = run_fetch_page(tmp_path, [served(lined_board(updatedAt=_iso(5))), down])
+    assert (
+        'What is shown is the last live data, measured 5 min ago against <span class="mono">'
+        "0a1b2c3</span>. "
+    ) in ids["source"]["html"]
+    ids, _ = run_fetch_page(tmp_path, [served(fixture_board(updatedAt=_iso(5))), down])
+    assert "What is shown is the last live data, measured 5 min ago. " in text(ids, "source")
+    # A head the footer would not name is not named here either.
+    upper = lined_board(updatedAt=_iso(5), main="0A1B2C3")
+    ids, _ = run_fetch_page(tmp_path, [served(upper), down])
+    assert "What is shown is the last live data, measured 5 min ago. " in text(ids, "source")
+
+
+def test_a_first_draw_that_throws_leaves_no_note(tmp_path: Path) -> None:
+    """Protects the "no board data" banner from a note left beside it.
+
+    ``strip`` draws the note before the build order, so a first board that
+    breaks the build order has already drawn it when the page rolls back to
+    no data.
+    """
+    broken = lined_board()
+    for item in broken["tracker"]["items"]:
+        item["after"] = 7
+    ids, _ = run_fetch_page(tmp_path, [served(broken)])
+    assert text(ids, "source").startswith(
+        "Live updates stopped (a live section could not be drawn)."
+    )
+    assert_no_board_data(ids)
+    assert ids["sub"]["html"] == OWN_SUBTITLE
+
+
+def test_a_page_with_no_board_draws_its_own_subtitle(tmp_path: Path) -> None:
+    """Protects the subtitle before any board arrives.
+
+    The markup's span is empty, so the page's own line exists in one place,
+    ``SUBTITLE``, and the page has to draw it while no board is drawn.
+    """
+    ids = run_without_fetch(tmp_path)
+    assert ids["sub"]["html"] == OWN_SUBTITLE
+    assert '<span class="sub" id="sub"></span>' in PAGE.read_text(encoding="utf-8")
 
 
 # ---- The fetch path, for the board on GitHub Pages ----

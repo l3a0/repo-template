@@ -666,9 +666,14 @@ function stamped() {
      written, that a session ends without telling anyone, and a comment renders
      nowhere. This is the surface that says what the page cannot know, so the
      sentence belongs here. */
-  const open = PRS.filter(p => p.state === "open");
+  /* Under one milestone the In flight section draws that milestone alone, so
+     the warning reads only its pull requests and sessions. */
+  const byN = new Map(TRACKER.map(c => [c.n, c]));
+  const shown = n => inMs(byN.get(n));
+  const open = PRS.filter(p => p.state === "open" && shown(p.issue));
+  const working = WORKING.filter(w => shown(w.n));
   const decay = [];
-  if (WORKING.length) decay.push("a session that has ended since then still reads as running");
+  if (working.length) decay.push("a session that has ended since then still reads as running");
   if (open.length) decay.push("a check that has gone green or red since then still reads here as it read then");
   if (open.some(p => !p.reviewed)) decay.push("a review posted since then still reads as owed");
   /* The board is no longer measured by hand, so the footer says how it is
@@ -1545,10 +1550,11 @@ function buildOrder() {
   /* Why no card below carries a position. Under one milestone whose ranked
      cards all sit in another, nothing ranked is out of reach, so the sentence
      says nothing in the milestone is ranked. Under one whose ranked cards are
-     all deferred beside a ranked card elsewhere, it says that of the milestone
-     alone. Every other case keeps the sentence the page drew before, All
-     included, since `inMs` holds for every card there and neither test can
-     pass. */
+     all deferred or in flight beside a ranked card elsewhere, it says that of
+     the milestone alone. A deferred card is read through `rankMark`, so the
+     rule that drops its position lives once. Every other case keeps the
+     sentence the page drew before, All included, since `inMs` holds for every
+     card there and neither test can pass. */
   const unkeyed = () => {
     const anybody = "nothing left in the ranking is a card anybody can take";
     const onTracker = NEXT_SORTED.map(it => by.get(it.issue)).filter(Boolean);
@@ -1567,7 +1573,7 @@ function buildOrder() {
       return `every ranked card${msWhere()} is in the In flight section above`;
     }
     if (!here.length && onTracker.length) return `nothing${msWhere()} is ranked`;
-    if (here.length < onTracker.length && here.every(c => c.kind === "deferred"))
+    if (here.length < onTracker.length && here.every(c => !rankMark(c) || flight.has(c.n)))
       return `nothing${msWhere()} left in the ranking is a card anybody can take`;
     return anybody;
   };
@@ -1668,7 +1674,16 @@ function buildOrder() {
      the same pointer rather than getting a second sentence saying so. */
   const hiddenNamed = [...new Set([...unblocks, ...several].map(x => x.n))]
     .filter(n => !drawn.has(n)).sort((a, b) => a - b).map(n => ({ n }));
-  const freesHidden = unblocks.some(x => [...reach(x.n, feeds)].some(v => !drawn.has(v)));
+  /* A freed card can be hidden two ways. The short view hides one Show all
+     can reveal, and the milestone filter hides one it cannot, so the sentence
+     names them apart, as the chain bar does. */
+  const freedHidden = unblocks.flatMap(x => [...reach(x.n, feeds)].filter(v => !drawn.has(v)));
+  const freesHidden = freedHidden.some(v => inMs(by.get(v)));
+  const freesAway = freedHidden.some(v => !inMs(by.get(v)));
+  const counting = [
+    ...(freesHidden ? ["the hidden issues"] : []),
+    ...(freesAway ? ["cards in other milestones"] : [])
+  ];
   /* The plan markers and the pull requests moved to the In flight section, which
      is the single authority for both. This note keeps only what the depth graph
      itself knows, so the two cannot say different things about one card. */
@@ -1709,12 +1724,18 @@ function buildOrder() {
       : several.length
         ? `${andlist(several.map(x => "#" + x.n))} each wait on more than one open issue. `
         : ``) +
+    /* Under one milestone the sentence ranks that milestone's cards alone, so
+       it says so, and a card there can wait on a card elsewhere while nothing
+       waits on any card there. */
     (most
-      ? (freesHidden ? (depthHidden ? "Counting the hidden issues too, " : "Counting the hidden issues, ") : "") +
+      ? (counting.length
+          ? `Counting ${andlist(counting)}${freesHidden && depthHidden ? " too" : ""}, ` : "") +
         (unblocks.length === 1
-          ? `<b>#${unblocks[0].n} is the single card whose landing frees the most</b>, at ${plu(most, "other")}. `
-          : `<b>${andlist(unblocks.map(x => "#" + x.n))} each free ${plu(most, "other")}</b>, and nothing frees more. `)
-      : `No card here is waiting on another, so nothing is freed by landing anything. `) +
+          ? `<b>#${unblocks[0].n} is the single card${msWhere()} whose landing frees the most</b>, at ${plu(most, "other")}. `
+          : `<b>${andlist(unblocks.map(x => "#" + x.n))} each free ${plu(most, "other")}</b>, and nothing${msWhere()} frees more. `)
+      : MS === MS_ALL
+        ? `No card here is waiting on another, so nothing is freed by landing anything. `
+        : `Nothing waits on a card${msWhere()}, so landing one frees nothing. `) +
     (flownTop.length
       ? `${andlist(flownTop.map(x => "#" + x.n))} ${flownTop.length === 1 ? "is" : "are"} in the ` +
         `In flight section above rather than in a column here. `

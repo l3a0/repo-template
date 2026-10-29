@@ -2573,8 +2573,9 @@ def test_the_selector_lists_each_milestone_with_its_count(tmp_path: Path) -> Non
 
     All comes first and no milestone last, with the rest sorted by name. The
     empty milestone is a card with none, which the selector names "no
-    milestone". The count beside the selector reads the chosen milestone
-    against the whole board.
+    milestone". Names sort as a reader reads them rather than by character
+    code, so a lower-case name sits among the others. The count beside the
+    selector reads the chosen milestone against the whole board.
     """
     docs = _ms_docs(
         [
@@ -2583,19 +2584,21 @@ def test_the_selector_lists_each_milestone_with_its_count(tmp_path: Path) -> Non
             (3, "", "ready", ()),
             (4, "Alpha", "ready", ()),
             (5, "MVP 3", "ready", ()),
+            (6, "beta", "ready", ()),
         ]
     )
     ids = draw(tmp_path, docs)
     assert not ids["msbar"]["hidden"]
     assert _options(ids) == [
-        (MS_ALL, "All (5)"),
+        (MS_ALL, "All (6)"),
         ("Alpha", "Alpha (1)"),
+        ("beta", "beta (1)"),
         ("MVP 2", "MVP 2 (2)"),
         ("MVP 3", "MVP 3 (1)"),
         ("", "no milestone (1)"),
     ]
     assert ids["mssel"]["value"] == "MVP 2"
-    assert text(ids, "mscount") == "2 of 5 open"
+    assert text(ids, "mscount") == "2 of 6 open"
 
 
 @pytest.mark.parametrize(
@@ -2781,7 +2784,8 @@ def test_the_freeing_sentence_names_only_the_chosen_milestones_cards(tmp_path: P
     """Protects the board note from naming a card the filter hides as freeing the most.
 
     #3 in MVP 3 frees two cards and #1 in MVP 2 frees one. Under MVP 2 the
-    sentence names #1, and on All it names #3.
+    sentence names #1 as the card in MVP 2 that frees the most, since #3 frees
+    more, and on All it names #3 with no milestone.
     """
     tracker = [
         (1, "MVP 2", "ready", ()),
@@ -2792,50 +2796,238 @@ def test_the_freeing_sentence_names_only_the_chosen_milestones_cards(tmp_path: P
     ]
     page = _show_all_page(tmp_path)
     note = _note(draw(tmp_path, _ms_docs(tracker), page=page))
-    assert "#1 is the single card whose landing frees the most, at 1 other." in note
+    assert "#1 is the single card in MVP 2 whose landing frees the most, at 1 other." in note
+    assert "Counting" not in note
     note = _note(draw(tmp_path, _ms_docs(tracker, default=None), page=page))
     assert "#3 is the single card whose landing frees the most, at 2 others." in note
 
 
 @pytest.mark.parametrize(
-    ("kinds", "ranked", "default", "reason"),
+    ("show_all", "lead"),
     [
-        ({}, (3,), "MVP 2", "nothing in MVP 2 is ranked"),
+        (True, "Counting cards in other milestones, "),
+        (False, "Counting the hidden issues and cards in other milestones too, "),
+    ],
+    ids=["show all", "short view"],
+)
+def test_the_freeing_sentence_names_cards_the_milestone_filter_hides_apart(
+    tmp_path: Path, show_all: bool, lead: str
+) -> None:
+    """Protects the freeing count from sending a reader to Show all for cards it cannot show.
+
+    #1 and #2 in MVP 2 each free one card in MVP 3, and #6 frees #5 in
+    MVP 2, which the short view hides. Show all cannot reveal a card in
+    another milestone, so the sentence names those apart from the hidden
+    issues, and on a tie it says nothing in MVP 2 frees more.
+    """
+    tracker = [
+        (1, "MVP 2", "ready", ()),
+        (2, "MVP 2", "ready", ()),
+        (3, "MVP 3", "ready", (1,)),
+        (4, "MVP 3", "ready", (2,)),
+        (5, "MVP 2", "ready", (6,)),
+        (6, "MVP 2", "ready", ()),
+    ]
+    page = _show_all_page(tmp_path) if show_all else PAGE
+    note = _note(draw(tmp_path, _ms_docs(tracker, ranked=(1, 2, 6)), page=page))
+    assert f"{lead}#1, #2 and #6 each free 1 other, and nothing in MVP 2 frees more." in note
+
+
+def test_a_milestone_waiting_on_another_says_nothing_waits_on_it(tmp_path: Path) -> None:
+    """Protects the freeing clause from denying a wait the board draws.
+
+    #1 in MVP 2 waits on #3 in MVP 3, so the board draws it one step behind.
+    Nothing waits on a card in MVP 2, so the clause says that rather than that
+    no card is waiting on another. On All, #3 frees #1.
+    """
+    tracker = [(1, "MVP 2", "ready", (3,)), (2, "MVP 2", "ready", ()), (3, "MVP 3", "ready", ())]
+    page = _show_all_page(tmp_path)
+    ids = draw(tmp_path, _ms_docs(tracker), page=page)
+    assert "waits on #3" in text(ids, "board")
+    note = _note(ids)
+    assert "Nothing waits on a card in MVP 2, so landing one frees nothing." in note
+    assert "No card here is waiting on another" not in note
+    note = _note(draw(tmp_path, _ms_docs(tracker, default=None), page=page))
+    assert "#3 is the single card whose landing frees the most, at 1 other." in note
+
+
+def test_the_footer_warns_only_of_what_the_chosen_milestone_draws_in_flight(
+    tmp_path: Path,
+) -> None:
+    """Protects the footer from warning about an In flight section drawing nothing.
+
+    #3's open pull request and #4's session are in MVP 3. Under MVP 2 the In
+    flight section draws nothing, so the footer names no decay. On All it
+    names both.
+    """
+    tracker = [
+        (1, "MVP 2", "ready", ()),
+        (3, "MVP 3", "ready", ()),
+        (4, "MVP 3", "ready", ()),
+    ]
+    docs = _ms_docs(tracker, flying=(3,))
+    docs["working"]["items"] = [{"n": 4, "kind": "build"}]
+    foot = text(draw(tmp_path, docs), "foot")
+    assert foot.endswith("is current as of the stamp above rather than live.")
+    docs["state"]["milestoneDefault"] = None
+    foot = text(draw(tmp_path, docs), "foot")
+    assert "a session that has ended since then still reads as running" in foot
+    assert "a review posted since then still reads as owed" in foot
+
+
+@pytest.mark.parametrize(
+    ("others", "said"),
+    [
+        (
+            [(1, "MVP 2", "ready", (5,)), (5, "MVP 3", "ready", (3,)), (3, "MVP 4", "ready", ())],
+            "#3 (MVP 4) and #5 (MVP 3) are in another milestone, so the milestone filter "
+            "hides them",
+        ),
+        (
+            [(1, "MVP 2", "ready", (10, 9)), (9, "MVP 3", "ready", ()), (10, "MVP 3", "ready", ())],
+            "#9 (MVP 3) and #10 (MVP 3) are in another milestone, so the milestone filter "
+            "hides them",
+        ),
+        (
+            [(1, "MVP 2", "ready", (3,)), (3, "MVP 3", "ready", ())],
+            "#3 (MVP 3) is in another milestone, so the milestone filter hides it",
+        ),
+    ],
+    ids=["the walk reaches the higher first", "two digits", "one"],
+)
+def test_the_chain_bar_names_other_milestones_cards_in_number_order(
+    tmp_path: Path, others: list[tuple], said: str
+) -> None:
+    """Protects the order and the number of the cards the chain bar names.
+
+    The walk does not keep number order. #1 waits on #5, which waits on #3,
+    so it reaches #5 first, and a sort as text would put #10 before #9. One
+    card takes the singular.
+    """
+    docs = _ms_docs(others, ranked=(1,))
+    assert said in text(draw(tmp_path, docs, click=1), "chainbar")
+
+
+def test_a_milestone_name_is_escaped_wherever_the_page_draws_it(tmp_path: Path) -> None:
+    """Protects the page from markup in a milestone's title.
+
+    A milestone's title is anyone with triage access's text, and it lands in
+    each option's value, its label and the sentences naming the chosen
+    milestone.
+    """
+    odd = 'A&B "x" <i>'
+    docs = _ms_docs([(1, odd, "ready", ()), (2, "MVP 3", "ready", ())], default=odd)
+    ids = draw(tmp_path, docs)
+    assert '<option value="A&amp;B &quot;x&quot; &lt;i&gt;">' in ids["mssel"]["html"]
+    assert ">A&amp;B &quot;x&quot; &lt;i&gt; (1)</option>" in ids["mssel"]["html"]
+    assert ids["mssel"]["value"] == odd
+    for element in ("more", "flownote"):
+        assert "&lt;i&gt;" in ids[element]["html"], element
+        assert "<i>" not in ids[element]["html"], element
+
+
+def test_options_come_back_when_a_board_names_a_default_again(tmp_path: Path) -> None:
+    """Protects the selector from staying empty after a board without a default.
+
+    The second board clears the options, so the third has to rebuild them
+    rather than find them unchanged from the first.
+    """
+    rows = [(1, "MVP 2", "ready", ()), (2, "MVP 3", "ready", ())]
+    first = _ms_docs(rows)
+    second = _ms_docs(rows, default=NO_DEFAULT)
+    second["state"]["updatedAt"] = "2026-10-01T12:30:00Z"
+    third = _ms_docs(rows)
+    third["state"]["updatedAt"] = "2026-10-01T13:00:00Z"
+    ids, _ = run_fetch_page(tmp_path, [served(first), served(second), served(third)])
+    assert not ids["msbar"]["hidden"]
+    assert _options(ids) == [(MS_ALL, "All (2)"), ("MVP 2", "MVP 2 (1)"), ("MVP 3", "MVP 3 (1)")]
+
+
+def test_a_redraw_with_the_same_milestones_leaves_the_options_alone(tmp_path: Path) -> None:
+    """Protects a select the reader has open from a live redraw.
+
+    Writing the options again closes an open select in a browser. A newer
+    board with the same milestones redraws the page, and the options are
+    written once in all. The copy of the page counts the writes to the
+    select's options in an element of its own.
+    """
+    page = tmp_path / "count.html"
+    shim = (
+        "(function () {\n"
+        '  var el = document.getElementById("mssel"), held = "";\n'
+        '  var n = document.getElementById("mssel-writes"); n.innerHTML = "0";\n'
+        '  Object.defineProperty(el, "innerHTML", { get: function () { return held; },\n'
+        "    set: function (v) { held = v; n.innerHTML = String(+n.innerHTML + 1); } });\n"
+        "})();"
+    )
+    page.write_text(
+        PAGE.read_text(encoding="utf-8").replace("<script>", "<script>\n" + shim, 1),
+        encoding="utf-8",
+    )
+    rows = [(1, "MVP 2", "ready", ()), (2, "MVP 3", "ready", ())]
+    first, second = _ms_docs(rows), _ms_docs(rows)
+    second["state"]["issues"]["open"] = 3
+    second["state"]["updatedAt"] = "2026-10-01T12:30:00Z"
+    ids, _ = run_fetch_page(tmp_path, [served(first), served(second)], page=page)
+    assert text(ids, "strip").startswith("3 open issues")
+    assert ids["mssel-writes"]["html"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("kinds", "ranked", "flying", "default", "reason"),
+    [
+        ({}, (3,), (), "MVP 2", "nothing in MVP 2 is ranked"),
         (
             {1: "deferred"},
             (1, 3),
+            (),
             "MVP 2",
             "nothing in MVP 2 left in the ranking is a card anybody can take",
         ),
-        ({}, (), "MVP 2", "nothing left in the ranking is a card anybody can take"),
-        ({1: "deferred"}, (1,), "MVP 2", "nothing left in the ranking is a card anybody can take"),
-        ({1: "deferred"}, (1,), None, "nothing left in the ranking is a card anybody can take"),
+        (
+            {},
+            (1, 3),
+            (1,),
+            "MVP 2",
+            "nothing in MVP 2 left in the ranking is a card anybody can take",
+        ),
+        ({}, (), (), "MVP 2", "nothing left in the ranking is a card anybody can take"),
+        (
+            {1: "deferred"},
+            (1,),
+            (),
+            "MVP 2",
+            "nothing left in the ranking is a card anybody can take",
+        ),
+        ({1: "deferred"}, (1,), (), None, "nothing left in the ranking is a card anybody can take"),
     ],
     ids=[
         "ranked elsewhere",
         "deferred here, ranked elsewhere",
+        "in flight here, ranked elsewhere",
         "nothing ranked",
         "deferred here only",
         "deferred on All",
     ],
 )
 def test_the_order_note_says_why_no_card_in_the_milestone_carries_a_position(
-    tmp_path: Path, kinds: dict, ranked: tuple, default: object, reason: str
+    tmp_path: Path, kinds: dict, ranked: tuple, flying: tuple, default: object, reason: str
 ) -> None:
     """Protects the order note's reason from going false under a filter.
 
     With the only ranked card in MVP 3, free to take there, the old sentence
     said nothing in the ranking could be taken. Under MVP 2 it says nothing in
     MVP 2 is ranked, and nothing in MVP 2 can be taken when MVP 2's ranked
-    cards are all deferred beside a ranked card elsewhere. Every other case
-    keeps the sentence it had.
+    cards are all deferred or in flight beside a ranked card elsewhere. Every
+    other case keeps the sentence it had.
     """
     tracker = [
         (1, "MVP 2", kinds.get(1, "ready"), ()),
         (2, "MVP 2", "ready", ()),
         (3, "MVP 3", "ready", ()),
     ]
-    note = text(draw(tmp_path, _ms_docs(tracker, ranked=ranked, default=default)), "ordernote")
+    docs = _ms_docs(tracker, ranked=ranked, flying=flying, default=default)
+    note = text(draw(tmp_path, docs), "ordernote")
     assert note.endswith(
         f"Priority is not a key today, because {reason}. Pick a card to trace its chain."
     )

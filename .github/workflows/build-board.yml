@@ -77,8 +77,8 @@ on:
         description: >-
           "true" reads a "Board order:" or "Board after:" line only in the
           body of an issue the owner opened, and lists a stranger's as
-          refused in the job summary. Empty reads them from anyone's issue.
-          Any other value fails the run.
+          refused in the job summary. Empty reads them from anyone's issue,
+          unless ranking is "order". Any other value fails the run.
         type: string
         default: ""
       milestone-default:

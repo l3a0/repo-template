@@ -3291,23 +3291,37 @@ def test_a_board_ranked_by_order_draws_its_ranked_cards_as_before(tmp_path: Path
         assert ordered[element]["html"] == plain[element]["html"], element
 
 
-def _toggled_page(tmp_path: Path) -> Path:
-    """A copy of the page that presses the line's toggle once the board is drawn.
+SHOW_ALL_KEY = "board-all:octo-org/octo-repo"
 
-    The driver answers held fetches after every timer, so a function pushed
-    onto ``__HELD`` runs on the drawn page. The storage shim keeps its writes
+
+def _toggled_page(tmp_path: Path, stored: dict[str, str], *, hits: bool = True) -> Path:
+    """A copy of the page that presses the line's handler once the board is drawn.
+
+    Storage starts as ``stored``. ``hits`` says whether the pressed target is
+    the toggle button, which the handler asks through ``matches``. The driver
+    answers held fetches after every timer, so a function pushed onto
+    ``__HELD`` runs on the drawn page, and the storage shim keeps its writes
     in ``__STORED``, which the driver reports.
     """
-    page = _stored_page(tmp_path, {})
+    page = _stored_page(tmp_path, stored)
+    answer = "true" if hits else "false"
     press = (
         "__HELD.push(function () { store.more.onclick("
-        "{ target: { matches: function () { return true; } } }); });\n"
+        f"{{ target: {{ matches: function () {{ return {answer}; }} }} }}); }});\n"
     )
     page.write_text(
         page.read_text(encoding="utf-8").replace("</script>", press + "</script>", 1),
         encoding="utf-8",
     )
     return page
+
+
+def _toggle_docs(ranking: str | None) -> dict:
+    """Three cards in MVP 2 and one in MVP 3, with #1 ranked, under ``ranking``."""
+    docs = _ms_docs(UNRANKED_CARDS, ranked=(1,))
+    if ranking:
+        docs["state"]["ranking"] = ranking
+    return docs
 
 
 @pytest.mark.parametrize("ranking", [None, "order"], ids=["band rule", "order"])
@@ -3320,12 +3334,68 @@ def test_the_show_all_toggle_draws_every_card_and_stores_the_choice(
     so, and stores the choice under the repository's key. Both rules share the
     one handler.
     """
-    docs = _ms_docs(UNRANKED_CARDS, ranked=(1,))
-    if ranking:
-        docs["state"]["ranking"] = ranking
-    result = run_page(tmp_path, [served(docs)], page=_toggled_page(tmp_path))
+    page = _toggled_page(tmp_path, {})
+    result = run_page(tmp_path, [served(_toggle_docs(ranking))], page=page)
     assert cards(result["ids"], "board") == {1, 2, 3}
     assert text(result["ids"], "more") == (
         "Showing all 3 open issues in MVP 2 not in flight. Show only the ranked cards"
     )
-    assert result["stored"] == {"board-all:octo-org/octo-repo": "1"}
+    assert result["stored"] == {SHOW_ALL_KEY: "1"}
+
+
+@pytest.mark.parametrize("ranking", [None, "order"], ids=["band rule", "order"])
+def test_pressing_the_toggle_on_show_all_returns_to_the_ranked_cards(
+    tmp_path: Path, ranking: str | None
+) -> None:
+    """Protects the toggle from only ever turning Show all on.
+
+    A reader who stored Show all and presses again gets the ranked cards back,
+    and the stored choice goes back to off.
+    """
+    page = _toggled_page(tmp_path, {SHOW_ALL_KEY: "1"})
+    result = run_page(tmp_path, [served(_toggle_docs(ranking))], page=page)
+    assert cards(result["ids"], "board") == {1, 3}
+    assert result["stored"] == {SHOW_ALL_KEY: "0"}
+
+
+@pytest.mark.parametrize("ranking", [None, "order"], ids=["band rule", "order"])
+def test_a_press_beside_the_toggle_changes_nothing(tmp_path: Path, ranking: str | None) -> None:
+    """Protects the line from flipping the view on a press that missed the button."""
+    page = _toggled_page(tmp_path, {}, hits=False)
+    result = run_page(tmp_path, [served(_toggle_docs(ranking))], page=page)
+    assert cards(result["ids"], "board") == {1, 3}
+    assert result["stored"] == {}
+
+
+def test_with_every_ranked_card_in_flight_two_parents_are_counted_in_the_plural(
+    tmp_path: Path,
+) -> None:
+    """Protects the in-flight line's parent count past one."""
+    docs = _order_docs(
+        [
+            (1, "MVP 2", "ready", ()),
+            (2, "MVP 2", "ready", ()),
+            (4, "MVP 2", "parent", ()),
+            (5, "MVP 2", "parent", ()),
+        ],
+        ranked=(2,),
+        flying=(2,),
+    )
+    assert text(draw(tmp_path, docs), "more") == (
+        "Every ranked card in MVP 2 is in flight, so only 2 parents are showing here. 1 other "
+        "open issue in MVP 2 is not in the priority order. Show all 3"
+    )
+
+
+def test_a_ranked_deferred_card_beside_one_in_flight_keeps_the_in_flight_reason(
+    tmp_path: Path,
+) -> None:
+    """Protects the note from calling a ranking with a free card in it untakeable.
+
+    #1 is deferred and #2 is ranked and in flight, so not every ranked card in
+    MVP 2 is one nobody should take.
+    """
+    docs = _order_docs(
+        [(1, "MVP 2", "deferred", ()), (2, "MVP 2", "ready", ())], ranked=(1, 2), flying=(2,)
+    )
+    assert text(draw(tmp_path, docs), "ordernote").endswith(IN_FLIGHT)

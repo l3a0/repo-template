@@ -754,7 +754,8 @@ let CHAIN_ESC = null;
    asks for the rest. With every open issue drawn, the first column ran past
    fifty cards and the ten that `NEXT` ranks were scattered through it. The
    choice is remembered per browser and nowhere else, and the default is the
-   short view. */
+   short view. On a board ranked by order lines, every card shows while
+   nothing in view is ranked, which `UNRANKED` says, whatever the choice. */
 let SHOW_ALL = false;
 /* Read once the first board names its repository. Every board an owner
    publishes shares one origin, such as owner.github.io, and so one storage, so
@@ -1561,10 +1562,14 @@ function buildOrder() {
     const onTracker = NEXT_SORTED.map(it => by.get(it.issue)).filter(Boolean);
     const here = onTracker.filter(inMs);
     /* On a board ranked by order lines alone, the reasons l3a0/marketlake's
-       page gives at commit cc9d3432. There the board can be ranked by nothing
-       at all, and a card in flight can be ranked and still free, so the fixed
-       sentence below was false in two cases it never met under the band rule.
-       Only a deferred card is one the ranking itself says nobody should take. */
+       page gives at commit cc9d3432. They fix two cases where the sentence
+       below is false: a board ranked by nothing at all, and a ranked card in
+       flight that is still free. Both are reachable under the band rule too,
+       and the template's own board meets the first, which
+       l3a0/repo-template#52 tracks. The band branch keeps the old sentence
+       because the backward-compatibility test forbids changing a current
+       caller's page. Only a deferred card is one the ranking itself says
+       nobody should take. */
     if (STATE.ranking === "order") {
       if (!NEXT.length) return "nothing is ranked";
       if (!here.length) return onTracker.length ? `nothing${msWhere()} is ranked` : anybody;

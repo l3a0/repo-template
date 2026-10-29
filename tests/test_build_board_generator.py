@@ -2690,19 +2690,73 @@ def test_the_same_tracker_under_order_ranks_by_its_lines_alone() -> None:
 RANKING_PAGE = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "ranking-page.json"
 
 
-def test_the_page_draws_a_board_with_no_ranking_as_it_did_before(tmp_path: Path) -> None:
+def in_flight_tracker() -> FakeGitHub:
+    """A band-rule tracker whose one ranked card is in flight.
+
+    #1 is ranked and has an open pull request, so the build order holds
+    nothing ranked while the ranking does. Beside it sit unranked cards, one
+    behind another, a parent and a deferred card with a band.
+    """
+    return FakeGitHub(
+        [
+            issue(1, labels=("band:1",), body="Board order: 1\n"),
+            issue(2),
+            issue(3, blocked_by=((2, "OPEN"),)),
+            issue(4, sub_issues=(2, 1)),
+            issue(5, labels=("deferred", "band:2")),
+        ],
+        [pull(20, closes=(1,))],
+    )
+
+
+def unranked_tracker() -> FakeGitHub:
+    """A band-rule tracker that ranks nothing.
+
+    #1 carries an order line and no band, so it ranks nowhere. The rest are an
+    unranked card, one behind it, a parent and a deferred card.
+    """
+    return FakeGitHub(
+        [
+            issue(1, body="Board order: 1\n"),
+            issue(2),
+            issue(3, blocked_by=((2, "OPEN"),)),
+            issue(4, sub_issues=(2, 1)),
+            issue(5, labels=("deferred",)),
+        ],
+        [],
+    )
+
+
+# Each case's tracker and the card it picks, which draws the chain bar.
+PAGE_CASES = {
+    "ranking_tracker": (ranking_tracker, 1),
+    "ranked_card_in_flight": (in_flight_tracker, 2),
+    "nothing_ranked": (unranked_tracker, 2),
+}
+
+
+@pytest.mark.parametrize("case", list(PAGE_CASES))
+def test_the_page_draws_a_board_with_no_ranking_as_it_did_before(tmp_path: Path, case: str) -> None:
     """Protects every current caller's page from a change it did not ask for.
 
-    ``RANKING_PAGE`` holds what the page at l3a0/repo-template commit cf2959a3
-    drew from ``RANKING_GOLDEN`` with #1 picked: the build order, the line
-    above it, both notes, the In flight section and the chain bar. The page
-    here, drawing what the generator writes with no ``ranking`` input, has to
-    draw the same. Neither element carries the board's age, so the golden
-    does not move with the clock.
+    ``RANKING_PAGE`` holds, for each case, what the page at
+    l3a0/repo-template commit cf2959a3 drew from the ``board.json`` that the
+    generator at that commit wrote for the case's tracker, with its card
+    picked. It covers eight elements: the build order, the line above it, the
+    board note, the order note, the In flight section, its note, the chain
+    under it and the chain bar. The page here, drawing what the generator
+    writes with no ``ranking`` input, has to draw the same. None of the eight
+    carries the board's age, so the golden does not move with the clock.
+
+    The second and third cases reach the branches ``ranking: order`` adds. One
+    ranks only a card in flight and one ranks nothing, which is where the
+    unranked view, the line above the board and the order note's reasons
+    differ from the band rule's.
     """
-    board, _ = build(ranking_tracker(), DATA_LABEL)
-    ids = draw_page(tmp_path, board, click=1)
-    golden = json.loads(RANKING_PAGE.read_text(encoding="utf-8"))
+    tracker, picked = PAGE_CASES[case]
+    board, _ = build(tracker(), DATA_LABEL)
+    ids = draw_page(tmp_path, board, click=picked)
+    golden = json.loads(RANKING_PAGE.read_text(encoding="utf-8"))[case]
     assert {element: ids[element]["html"] for element in golden} == golden
 
 
@@ -2739,6 +2793,114 @@ def test_the_page_draws_every_card_the_generator_writes_when_nothing_is_ranked(
     board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ids = draw_page(tmp_path, board)
     assert cards(ids, "board") == {1, 3}
+
+
+def test_under_order_an_order_of_zero_sorts_first(tmp_path: Path) -> None:
+    """Protects the card at ``Board order: 0`` on a board ranked by order alone.
+
+    Under ``ranking: order`` the order is the whole ranking, so a fallback
+    that read 0 as missing put that card last. Ported from
+    ``test_an_order_of_zero_sorts_first`` in l3a0/marketlake's
+    ``tests/component/test_board_page.py`` at commit ``cc9d3432``.
+    """
+    gh = FakeGitHub(
+        [
+            issue(10, body="Board order: 1\n"),
+            issue(11, body="Board order: 30\n"),
+            issue(12, body="Board order: 0\n"),
+        ],
+        [],
+    )
+    board, _ = ranked("order", gh.issues)
+    assert [(x["issue"], x["order"]) for x in board["next"]["items"]] == [
+        (10, 1),
+        (11, 30),
+        (12, 0),
+    ]
+    chips, _ = _rank_chips(tmp_path, board)
+    assert chips == {12: 1, 10: 2, 11: 3}
+
+
+def test_under_order_a_first_column_with_no_free_card_lists_none(tmp_path: Path) -> None:
+    """Protects the board note when every card drawn is a parent.
+
+    Ported from l3a0/marketlake's ``test_a_first_column_with_no_free_card_lists_none``
+    at commit ``cc9d3432``. Both cards are parents with an open sub-issue, so
+    nothing ranks, every card is drawn, and none is free to take.
+    """
+    issues = [
+        issue(755, milestone="MVP 2", sub_issues=(3, 1)),
+        issue(865, milestone="MVP 2", sub_issues=(2, 0)),
+    ]
+    board, _ = bb.build(
+        FakeGitHub(issues, []), REPO, 30, NOW, milestone_default="MVP <n>", ranking="order"
+    )
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids = draw_page(tmp_path, board)
+    assert cards(ids, "board") == {755, 865}
+    assert text(ids, "more") == (
+        "Nothing in MVP 2 is ranked yet, so all 2 open issues in MVP 2 not in flight are showing."
+    )
+    assert text(ids, "boardnote").startswith(
+        "0 cards are free for a session to take today , out of 2 in the first column. "
+        "2 cards there are not free, because a card can be a parent whose children carry "
+        "the work"
+    )
+
+
+def test_under_order_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
+    """Protects the join between the two halves under ``ranking: order``.
+
+    Ported from l3a0/marketlake's ``test_the_page_draws_what_the_generator_writes``
+    at commit ``cc9d3432``. Each card lands somewhere different.
+
+    1. #20 carries ``working:build`` and has no branch, so it is under Building.
+    2. #21 carries ``working:decompose``, so it is under Being planned.
+    3. #22 has an owner verdict and nothing blocking it, so it is under
+       Planned, no builder.
+    4. #23 is ranked at order 1 with an after line naming #24, so it stays in
+       the build order with its chip.
+    5. #24 is ranked behind it at order 2.5.
+    """
+    issues = [
+        issue(20, labels=("working:build",)),
+        issue(21, labels=("working:decompose",)),
+        issue(
+            22,
+            comments=(("OWNER", "## Plan audit, pass 3\n\nBoard verdict: build after 3 passes"),),
+        ),
+        issue(23, body="Board order: 1\nBoard after: #24"),
+        issue(24, body="Board order: 2.5"),
+    ]
+    board, _ = ranked("order", issues)
+    assert [w["n"] for w in board["working"]["items"]] == [20, 21]
+    assert [p["n"] for p in board["planned"]["items"]] == [22]
+    assert board["next"]["items"] == [
+        {"issue": 23, "band": 0, "ready": "plan", "order": 1},
+        {"issue": 24, "band": 0, "ready": "plan", "order": 2.5},
+    ]
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids = draw_page(tmp_path, board)
+    assert cards(ids, "flow") == {20, 21, 22}
+    flow = text(ids, "flow")
+    for heading in ("Building", "Being planned", "Planned, no builder"):
+        assert heading in flow
+    assert "plan complete, 3 passes" in flow
+    assert "undefined" not in json.dumps(ids)
+    assert cards(ids, "board") == {23, 24}
+    chips, _ = _rank_chips(tmp_path, board)
+    assert chips == {23: 1, 24: 2}
+    assert "it should land after #24" in text(ids, "board")
+
+
+def test_a_verdict_on_a_deferred_parent_is_dropped_as_a_parents() -> None:
+    """Protects which phrase a card that is both a parent and deferred gets.
+
+    The parent rule is checked first, so the drop names the parent.
+    """
+    one = issue(1, labels=("deferred",), sub_issues=(2, 1), comments=(("OWNER", VERDICT_LINE),))
+    _, report = ranked("order", [one])
+    assert report["dropped"] == [(1, "Board verdict on a parent")]
 
 
 # A 65,000-character line of each shape. Anyone can write an issue body, and the

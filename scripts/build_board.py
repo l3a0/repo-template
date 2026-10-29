@@ -91,7 +91,8 @@ Four of its rules exist because the repository is public.
    triage access, so a stranger's line moves only the stranger's own card.
    ``--ranking=order`` turns it on whatever the input says, because there the
    order line alone ranks a card, and a stranger's issue could put itself
-   first.
+   first. Under ``order`` an order line on a parent counts only once its
+   sub-issues close, and a sub-issue's author can close it.
 3. A number read from a marker line or a ``Part of`` reference carries at
    most ``MAX_DIGITS`` digits. Anyone can write a ``Board after:`` line, and a
    longer number there would otherwise stop every run until someone edited
@@ -650,7 +651,8 @@ def card_kinds(
     the order ``kind_labels`` gives. More than one entry is a conflict the run
     reports. Under ``--ranking=order`` the caller passes only the open
     sub-issues, so an issue whose children have all closed is a plain card
-    there, as on l3a0/marketlake's board.
+    there, as on l3a0/marketlake's board. l3a0/repo-template#66 tracks the two
+    parent rules.
     """
     kinds = ["parent"] if sub_issues else []
     return kinds + [kind for label, kind in kinds_read if label in labels]
@@ -1081,7 +1083,7 @@ def rank_entry(
     verdict: tuple[str, int] | None,
     conflicts: list[str],
     *,
-    ranking: str = "",
+    by_order: bool = False,
 ) -> dict | None:
     """The card's place in the priority order, or None when it has none.
 
@@ -1092,11 +1094,12 @@ def rank_entry(
     first one counts, and more than one is a conflict even when they are equal,
     because an edit to the second copy would move nothing.
 
-    By default a card ranks only with a ``band:N`` label. With ``ranking`` set
-    to ``order`` an order line alone ranks it, no ``band:N`` label is read, and
-    every entry carries band 0, as l3a0/marketlake's generator writes.
+    By default a card ranks only with a ``band:N`` label. With ``by_order``,
+    which ``--ranking=order`` sets, an order line alone ranks it, no ``band:N``
+    label is read, and every entry carries band 0, as l3a0/marketlake's
+    generator writes.
     """
-    if ranking == "order":
+    if by_order:
         if not orders:
             return None
         band = 0
@@ -1296,7 +1299,7 @@ def build(
         if verdict:
             planned.append({"n": n, "passes": verdict[1], "ready": verdict[0]})
 
-        entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts, ranking=ranking)
+        entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts, by_order=ordered)
         if entry:
             ranked.append(entry)
         elif orders:

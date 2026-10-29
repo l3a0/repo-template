@@ -115,7 +115,8 @@ var __MARK = "<!--first draw-->";
   __board.innerHTML = __board.innerHTML.replace(__MARK, "");
   out.title = typeof document.title === "string" ? document.title : null;
   Object.keys(store).forEach(function (id) {
-    out.ids[id] = { html: store[id].innerHTML, hidden: store[id].hidden === true };
+    out.ids[id] = { html: store[id].innerHTML, hidden: store[id].hidden === true,
+                    classes: store[id].classList.names.slice() };
   });
   var line = "BOARD_RESULT " + JSON.stringify(out);
   if (typeof console !== "undefined" && console.log) { console.log(line); } else { print(line); }
@@ -362,6 +363,7 @@ def test_a_board_with_no_data_card_draws_three_columns(tmp_path: Path) -> None:
     """
     ids = draw(tmp_path, fixture_docs(), page=_show_all_page(tmp_path))
     assert ids["board"]["html"].count('<div class="col k') == 3
+    assert "data" not in ids["board"]["classes"]
     assert "Waiting on data" not in ids["board"]["html"]
     assert "waiting on data" not in text(ids, "key")
     assert "fourth column" not in text(ids, "boardnote")
@@ -373,10 +375,14 @@ def test_a_data_card_draws_in_a_fourth_column(tmp_path: Path) -> None:
     Fixture issue 90504 becomes a ``data`` card waiting on 90502, which would
     put it one step behind. A purchase is not a step along the chain, so it
     draws in the fourth column, under "Waiting on data", with its legend entry
-    and the board note's sentence about the column.
+    and the board note's sentence about the column. The grid takes four columns
+    only through the board's ``data`` class, and the label's chip takes its
+    colour from ``LABEL_HUE``.
     """
     ids = draw(tmp_path, _data_docs(needs=[90502]), page=_show_all_page(tmp_path))
     assert ids["board"]["html"].count('<div class="col k') == 4
+    assert "data" in ids["board"]["classes"]
+    assert '<b style="color:#B60205">blocked-on-data</b>' in _column(ids, 3)
     fourth = _column(ids, 3)
     assert "Waiting on data" in fourth
     assert "not a backlog, a purchase" in fourth
@@ -407,6 +413,7 @@ def test_the_fourth_column_follows_the_tracker_rather_than_the_view(
         page = _show_all_page(tmp_path)
     ids = draw(tmp_path, docs, page=page)
     assert ids["board"]["html"].count('<div class="col k') == 4
+    assert "data" in ids["board"]["classes"]
     assert 'data-n="90504"' not in ids["board"]["html"]
     assert '<span class="c">0</span>' in _column(ids, 3)
     assert "fourth column" not in text(ids, "boardnote")
@@ -1396,17 +1403,18 @@ def test_an_unlinked_card_with_nothing_holding_it_can_be_taken_on_its_own(
     assert "#90504 is linked to nothing else here, so it can be taken on its own." in said
 
 
+@pytest.mark.parametrize("kind", ["unlisted", "data"])
 def test_an_unlinked_card_of_no_listed_kind_says_only_what_its_links_show(
-    tmp_path: Path,
+    tmp_path: Path, kind: str
 ) -> None:
     """Protects the bar from claiming freedom for a kind the free list never reads.
 
-    A kind no row of the board's reasons names, such as one a later generator
-    adds before the page learns it, is not ``ready``, so the free list turns it
-    down, and no reason applies either. The bar says what the links show and
-    stops.
+    A card blocked on data, or of a kind no row of the board's reasons names,
+    such as one a later generator adds before the page learns it, is not
+    ``ready``, so the free list turns it down, and no reason applies either.
+    The bar says what the links show and stops.
     """
-    docs = _with_fields(fixture_docs(), 90504, kind="unlisted")
+    docs = _with_fields(fixture_docs(), 90504, kind=kind)
     said = _picked(tmp_path, docs, 90504)
     assert "#90504 is linked to nothing else here." in said
     assert FREE_CLAIM not in said

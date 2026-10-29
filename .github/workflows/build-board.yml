@@ -115,8 +115,8 @@ jobs:
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
           --workflow caller/.github/workflows/board.yml
-          --title "$TITLE"
-          --data-label "$DATA_LABEL"
+          --title="$TITLE"
+          --data-label="$DATA_LABEL"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

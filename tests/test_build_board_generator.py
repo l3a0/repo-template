@@ -70,12 +70,14 @@ NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
-# this commit, the 0.5.1 release. A change here to a marker, a label or a
-# string these tests compare with the skill fails them until the plugin
+# this commit, the head of l3a0/claude-plugins pull request 34, which releases
+# 0.5.1. The pin moves to that pull request's merge commit once it merges. A
+# change here to a marker, a label or a string these tests compare with the
+# skill fails them until the plugin
 # releases a skill that matches and this pin moves to it. Any other format
 # change rests on the plugin's own rule that a generator's format change ships
 # with a plugin release in the same step.
-PLUGIN_COMMIT = "436ab75294f79c79658ae883797726b3f0263760"
+PLUGIN_COMMIT = "dae089001f3c86c7190fd23d0eb59b5eaea02e0d"
 PLUGIN_FILES = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/update-build-board/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.
@@ -549,7 +551,11 @@ def test_the_command_line_passes_the_data_label_through(
 
     The workflow passes the input as ``--data-label`` whether or not the caller
     set it, so an empty value has to read as no data label, and a refused one
-    has to fail the run rather than publish.
+    has to fail the run rather than publish. A misspelt label fails no read, so
+    the job summary counts the open issues carrying it, and a refusal puts its
+    reason in the summary, where the run's page shows it. The workflow writes
+    each flag joined to its value by ``=``, so a label starting with ``-`` is
+    still read as the value.
     """
     fake = FakeGitHub([issue(1, labels=(DATA_LABEL,))], [])
     fake.requests, fake.retries, fake.cost = 1, 0, 1
@@ -562,15 +568,29 @@ def test_the_command_line_passes_the_data_label_through(
     def kind() -> str:
         return json.loads((out / "board.json").read_text())["tracker"]["items"][0]["kind"]
 
-    assert bb.main([*argv, "--data-label", DATA_LABEL]) == 0
+    summary = tmp_path / "summary.md"
+    assert bb.main([*argv, f"--data-label={DATA_LABEL}"]) == 0
     assert kind() == "data"
-    assert bb.main([*argv, "--data-label", ""]) == 0
+    assert f"| Data label | `{DATA_LABEL}` on 1 open issues |" in summary.read_text()
+    summary.unlink()
+    assert bb.main([*argv, "--data-label="]) == 0
     assert kind() == "ready"
+    assert "| Data label | none named |" in summary.read_text()
+    summary.unlink()
+    assert bb.main([*argv, "--data-label=blocked-on-dat"]) == 0
+    assert kind() == "ready"
+    assert "| Data label | `blocked-on-dat` on 0 open issues |" in summary.read_text()
+    assert bb.main([*argv, "--data-label=-raw-data"]) == 0
+    assert "| Data label | `-raw-data` on 0 open issues |" in summary.read_text()
     assert bb.main(argv) == 0
     assert kind() == "ready"
     (out / "board.json").unlink()
-    assert bb.main([*argv, "--data-label", "deferred"]) == 1
+    summary.unlink()
+    assert bb.main([*argv, "--data-label=deferred"]) == 1
     assert not (out / "board.json").exists()
+    assert "build_board: the data label 'deferred' is a label the board already reads" in (
+        summary.read_text()
+    )
 
 
 # ---- The judgement fields, from labels, links and lines ----
@@ -1828,10 +1848,10 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     used = set(re.findall(r"\$\{\{\s*([^}]*?)\s*\}\}", path.read_text(encoding="utf-8")))
     assert used == allowed
     assert "TITLE: ${{ inputs.title }}" in _called()
-    assert '--title "$TITLE"' in _called()
+    assert '--title="$TITLE"' in _called()
     data = re.findall(r"^(.*)\$\{\{\s*inputs\.data-label\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in data] == [("DATA_LABEL:", "")]
-    assert '--data-label "$DATA_LABEL"' in _called()
+    assert '--data-label="$DATA_LABEL"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 

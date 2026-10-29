@@ -157,6 +157,10 @@ gives.
       data-label: blocked-on-data
 ```
 
+The run's job summary names the data label and counts the open issues
+carrying it, so a misspelt label shows up as a count of zero. To move the pin
+back before that commit, remove the `data-label` line in the same change.
+
 To take a later fix, move the SHA in the caller. The skills and the generator
 share the label names and line formats, so a skill newer or older than the
 pinned generator tells a session to set something the board does not read.

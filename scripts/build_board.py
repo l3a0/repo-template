@@ -778,11 +778,13 @@ def build(
     planned = []
     ranked = []
     conflicts: list[str] = []
+    data_carried = 0
     referenced: set[int] = set()
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
         names = [lb["name"] for lb in _all_nodes(gql, issue["id"], "labels", issue["labels"])]
         card = tracker_card(gql, issue, names, open_issues, repo, conflicts, kinds_read)
+        data_carried += bool(data_label) and data_label in names
         tracker.append(card)
 
         held = [WORKING[x] for x in names if x in WORKING]
@@ -842,6 +844,8 @@ def build(
         "open_prs_left_out": sorted(left_out),
         "unknown_check_states": sorted(unknown),
         "label_conflicts": conflicts,
+        "data_label": data_label,
+        "data_carried": data_carried,
     }
     return board, report
 
@@ -895,6 +899,15 @@ def cmd_build(args: argparse.Namespace) -> None:
             "| Check states mapped to neither way | "
             f"{', '.join(report['unknown_check_states']) or 'none'} |",
             f"| Labels or lines that disagree | {'; '.join(report['label_conflicts']) or 'none'} |",
+            # A misspelt data label matches nothing and fails no read, so the
+            # count is what shows the caller's input reached the issues.
+            "| Data label | "
+            + (
+                f"`{report['data_label']}` on {report['data_carried']} open issues"
+                if report["data_label"]
+                else "none named"
+            )
+            + " |",
         ]
     )
 
@@ -991,6 +1004,11 @@ def main(argv: list[str] | None = None) -> int:
         args.func(args)
     except BoardError as e:
         print(f"build_board: {e}", file=sys.stderr)
+        # A run that stops on its caller's own input stops the same way on
+        # every run until someone edits the caller, so the reason goes where
+        # the run's page shows it rather than only into the step log.
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            _summary(["## Board run failed", "", f"build_board: {e}"])
         return 1
     return 0
 

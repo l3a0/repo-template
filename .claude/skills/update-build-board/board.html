@@ -288,7 +288,8 @@ let ISS = "", PRU = "";
    l3a0/repo-template rebuilds it from GitHub on every issue, comment and pull
    request change and on a schedule, by running scripts/build_board.py. No
    session writes it. A session sets the labels, links and marker lines the
-   script reads, and the update-build-board skill says which.
+   script reads, and the update-build-board skill in the l3a0 plugin says
+   which.
 
    The file holds six sections, state, prs, working, planned, next and tracker.
    Each is { schema: 1, items: [...] }, except state, which is
@@ -412,7 +413,8 @@ function source() {
 
      A page that is not live has no board on screen unless it drew one and then
      stopped, because nothing else puts data on it. The page once carried a copy
-     of the board, and later a copy spliced in for the skill's harness, and the
+     of the board, and later a copy spliced in for the update-build-board
+     skill's harness, and the
      lines here said which copy was showing and how old it was. The harness now
      serves a board.json through a fake fetch instead, so every other line says
      there is no board data and that the page carries no copy. */
@@ -483,7 +485,8 @@ function source() {
    An empty array reads as no information rather than as nobody working. Only a
    running session can add an entry, and only whoever added one can take it out,
    so the entries are the one part of this page that sessions maintain by hand,
-   as `working:` labels. The skill's hand-over moment is the one that takes a
+   as `working:` labels. The update-build-board skill's
+   hand-over moment is the one that takes a
    build session's label off. An entry shapes three columns: the two session columns,
    and "Waiting on my review", where it holds a branch its session has not handed
    over.
@@ -1040,7 +1043,8 @@ function buildOrder() {
          started. Without them a card that waits on an issue reads to a screen
          reader as a card waiting on nothing, and a deferred card reads as
          ordinary work. All three are here: the blocker, the measured ordering,
-         and the kind word. The skill's harness strips attributes before
+         and the kind word. The update-build-board skill's harness
+         strips attributes before
          printing, so it cannot see this surface at all and a rule added here is
          checked by reading the template. */
       const says = [];

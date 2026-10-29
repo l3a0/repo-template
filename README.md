@@ -15,8 +15,9 @@ from whichever copy it was cloned off.
 
 - **[CLAUDE.md](CLAUDE.md)** is the agent instruction file. Scope authority,
   how to rank work, plan audits, writing style, markdown hygiene, secrets,
-  committing, and pull request review. It has template slots for the premise
-  and for repo-specific policy, marked as HTML comments.
+  committing, pull request review and the build board. It has template slots,
+  marked as HTML comments, for what only the new repo can say, such as its
+  premise and what each band on its board means.
 - **[.github/workflows/ci.yml](.github/workflows/ci.yml)** runs two jobs. `test`
   runs ruff, a format check, and pytest under uv. `docs` runs markdownlint.
   The ruleset requires both by name.
@@ -74,8 +75,8 @@ Then do the six things nothing can guess.
 5. Decide on both modules in `docs/optional-policies.md`, move what applies
    into the **Repo-specific policy** heading in `CLAUDE.md`, and delete the
    file.
-6. Pin the build board and delete the template's copy of it, as the next
-   section says.
+6. Pin the build board, delete the template's copy of it, and install the
+   `l3a0` plugin, as the next section says.
 
 Then check the work is finished. Every remaining hit is a slot nobody filled:
 
@@ -100,18 +101,24 @@ The pieces are these.
   [scripts/build_board.py](scripts/build_board.py) and publishes it on Pages
   beside the page,
   [.claude/skills/update-build-board/board.html](.claude/skills/update-build-board/board.html).
-  It checks both out from this repo at the commit the caller pinned.
+  It checks both out from this repo at the commit the caller pinned. The page,
+  its test stub and its icon stay in that folder although no skill lives there
+  any more. The reusable workflow publishes the page and the icon from that
+  path, and the plugin's harness fetches the page and the stub from it.
 - **[.github/workflows/board.yml](.github/workflows/board.yml)** is the caller.
   It holds the triggers, the permissions and the concurrency group, and calls
   the reusable workflow. This repo calls it at `main`, so its own board runs
   the shared path first.
-- **The two skills**, `update-build-board` and `sync-prune-next` under
-  `.claude/skills/`, tell a session what to set on GitHub and how to read the
-  board.
+- **The two skills**, `update-build-board` and `sync-prune-next`, tell a
+  session what to set on GitHub and how to read the board. They live in the
+  [`l3a0` Claude Code plugin](https://github.com/l3a0/claude-plugins) from
+  0.5.0 on, not in this repo. `CLAUDE.md`'s `## Keep the build board current`
+  gives the commands that install it.
 
-A seeded repo keeps the caller and the two skills, and runs everything else
-from here at the commit it pins. So after seeding, pin the caller to a full
-commit SHA of this repo's `main`, and delete the template's copy of the board.
+A seeded repo keeps only the caller, and runs everything else from here at the
+commit it pins. So after seeding, pin the caller to a full commit SHA of this
+repo's `main`, delete the template's copy of the board, and install the plugin
+at 0.5.0 or later.
 
 ```bash
 sha="$(gh api repos/l3a0/repo-template/commits/main --jq .sha)"
@@ -136,10 +143,16 @@ caller passing an input the called workflow does not declare fails.
       icon: .github/board/favicon.ico
 ```
 
-To take a later fix, move the SHA in the caller and copy the two skills from
-the same commit in the same pull request. The skills and the generator share
-the label names and line formats, so a skill newer or older than the pinned
-generator tells a session to set something the board does not read.
+To take a later fix, move the SHA in the caller. The skills and the generator
+share the label names and line formats, so a skill newer or older than the
+pinned generator tells a session to set something the board does not read.
+The plugin's `update-build-board` skill therefore names, under
+`## Generator compatibility`, the generator commits its formats were checked
+against. When a regex, a label list or a query field in
+`scripts/build_board.py` changed between the old pin and the new one, move the
+pin only once a plugin release names the new commit there. A seeded repo keeps
+no test between its pin and the plugin, so this comparison is a step to take by
+hand. The template's own suite reads the skill at a pinned plugin commit.
 
 ## Running the checks locally
 

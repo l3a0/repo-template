@@ -1,6 +1,7 @@
 """The build board's page, run rather than read.
 
-The board's page is checked in under ``.claude/skills/update-build-board``, and
+The board's page is checked in under ``.claude/skills/update-build-board``,
+which holds no skill since the skill moved into the ``l3a0`` plugin, and
 a GitHub Action publishes it on GitHub Pages beside ``board.json``, which the
 same Action builds from GitHub. The page fetches that file on a timer. It
 carries no copy of the board, so when it has no live data it must say so and
@@ -9,7 +10,7 @@ the failure this file exists to catch.
 
 A parse check would not catch it. A page that draws stale cards parses, and a
 banner sentence that renders perfectly can still say something false. So each
-test executes the page's script under a JavaScript engine, with the skill's
+test executes the page's script under a JavaScript engine, with
 ``dom-stub.js`` standing in for the browser and a fake fetch serving
 ``board.json``, and reads what the page rendered. The driver serves one
 response per poll and fires the page's timer between them.
@@ -65,7 +66,7 @@ def _engine() -> list[str]:
 
 
 def _page_script(page: Path) -> str:
-    """The page's one inline script, as the skill's harness extracts it."""
+    """The page's one inline script, as the l3a0 plugin's harness extracts it."""
     text = page.read_text(encoding="utf-8")
     start = text.find("<script>")
     assert start >= 0, f"{page} has no inline script"

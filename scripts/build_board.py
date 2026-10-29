@@ -36,7 +36,8 @@ It writes the six sections the page reads.
 6. ``next``, one item per issue carrying a ``band:N`` label, ordered within its
    band by a ``Board order:`` line in the body.
 
-The ``update-build-board`` skill states each format and when a session sets it.
+The ``update-build-board`` skill in the ``l3a0`` Claude Code plugin states each
+format and when a session sets it.
 
 The page refuses a whole section when one item lacks a field it reads, so
 every item carries every such field. A missing milestone is an empty string
@@ -103,8 +104,8 @@ SCHEMA = 1
 # code before matching.
 PART_OF = re.compile(r"\bPart of #(\d+)\b")
 
-# A review comment opens with a line reading `## Review`, which the
-# update-build-board skill states as the convention. "## Reviewer" is not one.
+# A review comment opens with a line reading `## Review`, which the l3a0
+# plugin's update-build-board skill states as the convention. "## Reviewer" is not one.
 REVIEW = re.compile(r"## Review\b")
 
 # The lines and labels a session sets for the judgement the page draws. Each

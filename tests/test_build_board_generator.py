@@ -1708,8 +1708,9 @@ def test_the_triggers_are_the_ones_that_can_deploy() -> None:
     ``pull_request`` and ``pull_request_review`` run on a merge ref, which the
     github-pages environment refuses. ``pull_request_target`` needs ``closed``
     and ``edited`` listed, or a merged ``Part of`` pull request and a corrected
-    closing link wait for the cron run. It runs on a pull request's base
-    branch, so it admits only pull requests into ``main``. The reusable
+    closing link wait for the cron run. It admits only pull requests into
+    ``main``, because GitHub registers a closing link only on a pull request
+    into the default branch. The reusable
     workflow takes ``workflow_call`` and nothing else, so it never runs on its
     own.
     """

@@ -1759,7 +1759,10 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
     assert cards(ids, "board") == {14}
 
 
-def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(tmp_path: Path) -> None:
+@pytest.mark.parametrize("listed", ["as written", "reversed"])
+def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(
+    tmp_path: Path, listed: str
+) -> None:
     """Protects a card at ``Board order: 0`` from sorting as if it had none.
 
     The generator writes ``order: 0`` for that line, and the page gives a card
@@ -1768,6 +1771,11 @@ def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(tmp_path: Path
     and at 0, also fail a default of 0 or of 999, so the test covers the
     documented default of 50 as well. The rank chip and the column both read
     the same sorted list, so both are checked.
+
+    The page also draws the list reversed. Which pairs a sort compares, and
+    which card of a pair comes first, follows the order it is given. A fallback
+    written wrongly on one side of the comparison sorted the generator's order
+    correctly under JavaScriptCore and the reversed one as 2, 3, 1.
     """
     gh = FakeGitHub(
         [
@@ -1783,6 +1791,8 @@ def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(tmp_path: Path
         (2, None),
         (3, 0),
     ]
+    if listed == "reversed":
+        board["next"]["items"].reverse()
     board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ids, _ = run_fetch_page(tmp_path, [served(board)])
     raw = ids["board"]["html"]

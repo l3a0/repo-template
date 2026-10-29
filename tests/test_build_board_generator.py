@@ -153,9 +153,9 @@ def issue(
 ) -> dict:
     """One open issue as GitHub returns it.
 
-    A label carries a ``color`` field only when ``colors`` names it, so a
-    fixture built without ``colors`` fails any generator that reads the field
-    where no input asked for it.
+    A label carries a ``color`` field only when ``colors`` names it. GitHub
+    always returns one, so a fixture without ``colors`` is a label whose colour
+    the generator never needs to read.
     """
     colors = colors or {}
     return {
@@ -623,13 +623,100 @@ STATE_KEYS = [
 ]
 
 
+GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "labels.json"
+
+
+def labels_github() -> FakeGitHub:
+    """A repository whose board exercises every field a label input could move.
+
+    Labels arrive out of name order and carry GitHub's colours, in either case.
+    The issues also carry a band, a working label, a data-looking label, a
+    verdict, an order line, after lines and "blocked by" links, and the pull
+    requests close, reference and review them.
+    """
+    return FakeGitHub(
+        [
+            issue(
+                1,
+                labels=("test", "deferred", "band:1", "enhancement"),
+                colors={"test": "5319E7", "deferred": "ededed", "band:1": "c2e0c6"},
+                body="Board order: 2\nBoard after: #3\n",
+                comments=(("OWNER", "Board verdict: build after 2 passes"),),
+            ),
+            issue(
+                2,
+                milestone=None,
+                labels=("working:build", "question", "Bug", "accessibility", "band:2"),
+                colors={"question": "d876e3", "Bug": "D73A4A", "accessibility": "a2eeef\n"},
+                blocked_by=((1, "OPEN"), (9, "CLOSED")),
+            ),
+            issue(
+                3,
+                labels=("replication", "blocked-on-data"),
+                colors={"replication": "0e8a16"},
+                mentioned_by=(22,),
+            ),
+            issue(4, labels=(), sub_issues=2, body="Board after: #1 #2\n"),
+            issue(5, labels=("decision", "github_actions"), colors={"github_actions": "000000"}),
+        ],
+        [
+            pull(20, closes=(1,), comments=(("OWNER", "## Review\n"),)),
+            pull(21, body="Part of #2", contexts=(check("test", "FAILURE"),)),
+            pull(22, state="MERGED", body="Part of #3"),
+        ],
+    )
+
+
+def _main_writes(module: object, out: Path) -> bytes:
+    """The bytes ``module.main`` writes to ``board.json`` for ``labels_github()``.
+
+    The run reads GitHub through ``labels_github()`` and stamps the board at
+    ``NOW``, so two generators' files can be compared byte for byte. Neither
+    label flag is passed. The module's attributes are put back afterwards.
+    """
+    fake = labels_github()
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001, ANN206
+            return NOW
+
+    saved = module.GhGraphql, module.datetime
+    module.GhGraphql, module.datetime = (lambda: fake), Frozen
+    try:
+        argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+        assert module.main(argv) == 0
+    finally:
+        module.GhGraphql, module.datetime = saved
+    return (out / "board.json").read_bytes()
+
+
+def test_with_neither_label_input_the_board_is_the_bytes_cf2959a3_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects every caller that sets neither ``label-colors`` nor ``sort-labels``.
+
+    ``tests/fixtures/build_board_generator/labels.json`` is the file that
+    ``scripts/build_board.py`` at l3a0/repo-template ``cf2959a3``, the commit
+    before the label inputs, wrote for ``labels_github()``. The generator here,
+    run the same way with neither flag, has to write the same bytes. Comparing
+    the file rather than a parsed copy catches a key added anywhere, a changed
+    key order, and a change to how the file is serialised. To write the file
+    again, run ``_main_writes`` on ``cf2959a3``'s generator, never on this one.
+    """
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert _main_writes(bb, tmp_path / "site") == GOLDEN.read_bytes()
+
+
 def test_with_neither_label_input_the_board_is_the_one_it_was() -> None:
     """Protects every caller that sets neither ``label-colors`` nor ``sort-labels``.
 
     The labels keep the order GitHub returns, and ``state`` carries exactly the
-    keys it carried before, so no ``labelColors``. The fixtures' labels carry no
-    ``color`` field, so a generator reading it on this path would fail here.
-    Passing both inputs empty writes the same board as passing neither.
+    keys it carried before, so no ``labelColors``. Passing both inputs empty
+    writes the same board as passing neither. The byte comparison with
+    ``cf2959a3``'s output is the test above.
     """
     gh = lambda: FakeGitHub(  # noqa: E731
         [issue(1, labels=("test", "deferred", "band:1", "enhancement"))], []
@@ -673,7 +760,15 @@ def test_label_colors_writes_each_card_labels_colour_lower_cased() -> None:
         [
             issue(
                 1,
-                labels=("opentofu", "band:1", "working:build", "broken", "short", "long"),
+                labels=(
+                    "opentofu",
+                    "band:1",
+                    "working:build",
+                    "broken",
+                    "short",
+                    "long",
+                    "newline",
+                ),
                 colors={
                     "opentofu": "F9DB4E",
                     "band:1": "ededed",
@@ -681,6 +776,7 @@ def test_label_colors_writes_each_card_labels_colour_lower_cased() -> None:
                     "broken": "zzzzzz",
                     "short": "fff",
                     "long": "a2eeef0",
+                    "newline": "a2eeef\n",
                 },
             ),
             issue(2, labels=("enhancement",), colors={"enhancement": "a2eeef"}),
@@ -691,7 +787,18 @@ def test_label_colors_writes_each_card_labels_colour_lower_cased() -> None:
     assert board["state"]["labelColors"] == {"enhancement": "a2eeef", "opentofu": "f9db4e"}
     assert list(board["state"]["labelColors"]) == ["enhancement", "opentofu"]
     assert list(board["state"]) == [*STATE_KEYS, "labelColors"]
-    assert card(board, 1)["labels"] == ["opentofu", "broken", "short", "long"]
+    assert card(board, 1)["labels"] == ["opentofu", "broken", "short", "long", "newline"]
+
+
+def test_the_page_and_the_generator_accept_the_same_colours() -> None:
+    """Protects the colour check from drifting between its two halves.
+
+    The generator keeps a colour only when it matches ``HEX_COLOUR`` whole, and
+    the page checks it again before writing it into a style attribute. A
+    pattern that changed on one side alone would drop colours the other keeps.
+    """
+    found = re.findall(r"^const HEX_COLOUR = /(.*)/;$", PAGE.read_text(encoding="utf-8"), re.M)
+    assert found == [f"^{bb.HEX_COLOUR.pattern}$"]
 
 
 def test_a_label_read_on_a_later_page_carries_its_colour() -> None:

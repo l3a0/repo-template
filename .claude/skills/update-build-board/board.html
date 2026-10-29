@@ -306,7 +306,8 @@ let ISS = "", PRU = "";
    The file holds six sections, state, prs, working, planned, next and tracker.
    Each is { schema: 1, items: [...] }, except state, which is
    { schema: 1, repo, title, updatedAt, issues: { open }, source,
-   longestGapMinutes, staleAfterMinutes }.
+   longestGapMinutes, staleAfterMinutes }, plus labelColors when the caller
+   sets the reusable workflow's `label-colors` input.
 
    FALLBACK carries no board data. A copy of the six sections in the page goes
    stale silently, because nothing refreshes it once the page is checked in.

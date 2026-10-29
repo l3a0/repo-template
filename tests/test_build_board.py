@@ -457,10 +457,11 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
         ("test", {"test": "fff"}, "#5319e7"),
         ("test", {"test": 5319}, "#5319e7"),
         ("test", {"other": "a2eeef"}, "#5319e7"),
+        ("test", None, "#5319e7"),
         ("0", ["a2eeef"], "var(--faint)"),
         ("0", "a2eeef", "var(--faint)"),
     ],
-    ids=["style", "upper-case", "three-digits", "number", "no-entry", "list", "string"],
+    ids=["style", "upper-case", "three-digits", "number", "no-entry", "null", "list", "string"],
 )
 def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
     tmp_path: Path, label: str, colours: object, before: str
@@ -470,7 +471,8 @@ def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
     The page writes the colour into a style attribute, so it checks each value
     itself rather than trusting the generator. A value that is not six
     lower-case hex digits, a label the map has no entry for, or a map that is
-    not an object draws the ``LABEL_HUE`` chip, and the board is not refused.
+    null or not an object draws the ``LABEL_HUE`` chip, and the board is not
+    refused.
     A list or a string has an own key ``0``, so the label ``0`` tells a map
     that is not an object from one that is.
     """

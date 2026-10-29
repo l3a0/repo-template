@@ -24,7 +24,9 @@ It writes the six sections the page reads.
 
 1. ``state``, with the repository, the board's title, the open issue count, the
    time GitHub was read, the longest gap between two scheduled runs, and the
-   age after which the page calls the board stale.
+   age after which the page calls the board stale. Under ``--label-colors``
+   it also carries ``labelColors``, the colour GitHub stores for each label a
+   card draws.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
    from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
    native "blocked by" links, and ``after`` from a ``Board after:`` line in the
@@ -221,8 +223,10 @@ def switch(name: str, value: str) -> bool:
 
 
 # A label's colour as GitHub stores it, once lower-cased. The page writes it
-# into a style attribute, so anything else is left out of the board.
-HEX_COLOUR = re.compile(r"^[0-9a-f]{6}$")
+# into a style attribute, so anything else is left out of the board. It is
+# matched whole with ``fullmatch``, because ``$`` also matches before a
+# trailing newline. The page checks the same pattern.
+HEX_COLOUR = re.compile(r"[0-9a-f]{6}")
 
 
 # GitHub reports a check as an uppercase enum, and the page knows four
@@ -825,7 +829,7 @@ def build(
         if colours_wanted:
             for lb in nodes:
                 colour = str(lb.get("color") or "").lower()
-                if lb["name"] in card["labels"] and HEX_COLOUR.match(colour):
+                if lb["name"] in card["labels"] and HEX_COLOUR.fullmatch(colour):
                     colours[lb["name"]] = colour
 
         held = [WORKING[x] for x in names if x in WORKING]
@@ -922,8 +926,8 @@ def cmd_build(args: argparse.Namespace) -> None:
         now,
         args.title,
         args.data_label,
-        args.label_colors,
-        args.sort_labels,
+        label_colors=args.label_colors,
+        sort_labels=args.sort_labels,
     )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

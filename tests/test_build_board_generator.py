@@ -1257,6 +1257,19 @@ def test_the_issues_query_reads_each_issues_author() -> None:
     assert "authorAssociation" in node.group(1).split()
 
 
+def test_the_issues_query_reads_both_sub_issue_counts() -> None:
+    """Protects the parent rule from a field the live read never asked for.
+
+    ``tracker_card`` reads ``total`` and ``completed`` from every issue's
+    ``subIssuesSummary``. ``FakeGitHub`` answers from fixtures whatever a
+    query selects, so a query that dropped either field would pass every
+    other test here and stop the live run on a missing key.
+    """
+    summary = re.search(r"subIssuesSummary\{\{?([^}]*)\}", bb.ISSUES_QUERY)
+    assert summary, "the issues query reads no subIssuesSummary"
+    assert sorted(summary.group(1).split()) == ["completed", "total"]
+
+
 @pytest.mark.parametrize(
     ("near_miss", "kind"),
     [

@@ -3097,3 +3097,43 @@ def test_a_board_ranked_by_order_draws_its_ranked_cards_as_before(tmp_path: Path
     ordered = draw(tmp_path, docs)
     for element in plain:
         assert ordered[element]["html"] == plain[element]["html"], element
+
+
+def _toggled_page(tmp_path: Path) -> Path:
+    """A copy of the page that presses the line's toggle once the board is drawn.
+
+    The driver answers held fetches after every timer, so a function pushed
+    onto ``__HELD`` runs on the drawn page. The storage shim keeps its writes
+    in ``__STORED``, which the driver reports.
+    """
+    page = _stored_page(tmp_path, {})
+    press = (
+        "__HELD.push(function () { store.more.onclick("
+        "{ target: { matches: function () { return true; } } }); });\n"
+    )
+    page.write_text(
+        page.read_text(encoding="utf-8").replace("</script>", press + "</script>", 1),
+        encoding="utf-8",
+    )
+    return page
+
+
+@pytest.mark.parametrize("ranking", [None, "order"], ids=["band rule", "order"])
+def test_the_show_all_toggle_draws_every_card_and_stores_the_choice(
+    tmp_path: Path, ranking: str | None
+) -> None:
+    """Protects the button above the board, which no other test presses.
+
+    Pressing Show all draws every card in the milestone not in flight, says
+    so, and stores the choice under the repository's key. Both rules share the
+    one handler.
+    """
+    docs = _ms_docs(UNRANKED_CARDS, ranked=(1,))
+    if ranking:
+        docs["state"]["ranking"] = ranking
+    result = run_page(tmp_path, [served(docs)], page=_toggled_page(tmp_path))
+    assert cards(result["ids"], "board") == {1, 2, 3}
+    assert text(result["ids"], "more") == (
+        "Showing all 3 open issues in MVP 2 not in flight. Show only the ranked cards"
+    )
+    assert result["stored"] == {"board-all:octo-org/octo-repo": "1"}

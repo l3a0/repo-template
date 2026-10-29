@@ -67,6 +67,10 @@
           background: var(--panel); border-radius: 4px; color: var(--muted); }
   .chip b { color: var(--ink); font-weight: 600; }
   .chip.live { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  /* A repository's own paragraph under the strip, which its caller sets as the
+     reusable workflow's `note` input. */
+  .repnote { margin: 0 0 4px; font-size: 0.8125rem; color: var(--faint); max-width: 76ch; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
   .sec { margin-top: 38px; }
   .sec > header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px;
@@ -246,10 +250,11 @@
 <div class="wrap">
   <div class="mast">
     <h1 id="title">Build board</h1>
-    <span class="sub">what is in flight, and what to take next</span>
+    <span class="sub" id="sub"></span>
   </div>
   <div class="strip" id="strip"></div>
   <div class="caveat warn" id="source" hidden></div>
+  <p class="repnote" id="repnote" hidden></p>
 
   <section class="sec" id="flightsec">
     <header>
@@ -306,8 +311,10 @@ let ISS = "", PRU = "";
    The file holds six sections, state, prs, working, planned, next and tracker.
    Each is { schema: 1, items: [...] }, except state, which is
    { schema: 1, repo, title, updatedAt, issues: { open }, source,
-   longestGapMinutes, staleAfterMinutes }, plus labelColors when the caller
-   sets the reusable workflow's `label-colors` input.
+   longestGapMinutes, staleAfterMinutes }, plus subtitle, note and main when
+   the caller sets the reusable workflow's subtitle, note and
+   default-branch-head inputs, and labelColors when it sets the
+   `label-colors` input.
 
    FALLBACK carries no board data. A copy of the six sections in the page goes
    stale silently, because nothing refreshes it once the page is checked in.
@@ -374,7 +381,7 @@ function adopt(src) {
   PRU = `https://github.com/${STATE.repo}/pull/`;
   NEXT_SORTED = NEXT.slice().sort((a, b) =>
     a.band - b.band ||
-    (a.order || 50) - (b.order || 50) ||
+    (a.order ?? 50) - (b.order ?? 50) ||
     READY_RANK[a.ready] - READY_RANK[b.ready] ||
     a.issue - b.issue);
 }
@@ -431,7 +438,8 @@ function source() {
      lines here said which copy was showing and how old it was. The harness now
      serves a board.json through a fake fetch instead, so every other line says
      there is no board data and that the page carries no copy. */
-  const age = () => `measured ${esc(ago(STATE.updatedAt))}`;
+  const age = () => `measured ${esc(ago(STATE.updatedAt))}` +
+    (headOf(STATE) ? ` against <span class="mono">${esc(headOf(STATE))}</span>` : ``);
   const none = `<b>Showing no board data.</b> `;
   const lines = {
     loading: none + `The live board has not arrived yet, and the page carries no copy of its own.`,
@@ -454,7 +462,10 @@ function source() {
 /* The strip carries two things: the open issue count and the stamp. A figure
    about the repository itself, such as a test count or the commit `main`
    stands at, says nothing about what to take next, which is the question this
-   page answers, and measuring one goes stale the moment anything merges. */
+   page answers, and measuring one goes stale the moment anything merges. The
+   strip still leaves that commit out. The footer and the "Live updates
+   stopped" banner name it only for a caller that sets default-branch-head, as
+   a record of what the board was built against. */
 
 /* One entry per open branch, plus a merged or closed one while its issue stays
    open, because the card still says what became of it. The generator keeps
@@ -483,10 +494,10 @@ function source() {
    built from the tracker. That happened once, and the fix was to file the
    issue rather than to give the page a second source of truth.
 
-   `linked` is GitHub's own closingIssuesReferences. The Action writes an
-   entry only for an issue GitHub links or a `Part of` reference names, so
-   `linked` is false exactly when `partOf` is true, and the page does not read
-   it. A closing keyword written inside a code span, where GitHub does not read
+   `linked` is GitHub's own closingIssuesReferences to an issue in this
+   repository. The Action writes an entry only for an issue GitHub links or a
+   `Part of` reference names, so `linked` is false exactly when `partOf` is
+   true, and the page does not read it. A closing keyword written inside a code span, where GitHub does not read
    it, gives the branch no entry at all, and
    `gh pr view <n> --json closingIssuesReferences` remains the check on a body.
 
@@ -546,18 +557,19 @@ function source() {
 
    1. `band` is priority under the repository's ranking directive, and the
       repository says what each band means. A lower band lands first.
-   2. `ready` is how finished the plan is. "build" means a decompose loop ran it
+   2. `order` breaks a tie inside a band, and it exists only where something was
+      measured. A card with no order counts as 50, so an order of 0 or below
+      sorts ahead of it and anything above 50 sorts behind it.
+   3. `ready` is how finished the plan is. "build" means a decompose loop ran it
       against the code and exited. "decide" means the same, with one question
       left for the owner. "plan" means the body has never been executed against
       anything.
-   3. `order` breaks a tie inside a band, and it exists only where something was
-      measured.
    4. The issue number breaks whatever is left, because it is stable.
 
    Most of the tracker carries no position, which is the design rather than an
-   omission: the ranking covers the top and everything it omits falls through to
-   readiness and then the issue number. A position invented to fill the page
-   would be a number nobody measured. */
+   omission: the ranking covers the top, and a card it gives no order sorts at
+   50 inside its band. A position invented to fill the page would be a number
+   nobody measured. */
 
 const READY_RANK = { build: 0, decide: 1, plan: 2 };
 
@@ -618,13 +630,42 @@ function ago(iso) {
   return Math.floor(h / 24) + "d ago";
 }
 
+/* The lines a caller can set through the reusable workflow's inputs. Each is
+   drawn on every draw, from the board when it carries the line and from the
+   page otherwise, so a later board without one puts the page's own back.
+   SUBTITLE is the only copy of the page's own subtitle. The markup's span is
+   empty, and render() fills it while no board is drawn. */
+const SUBTITLE = "what is in flight, and what to take next";
+/* A note is a list of pieces the generator parsed from the caller's text, each
+   { text } or { text, href }. The page escapes each piece and draws an address
+   as a link only when it is https, which the generator also checked, so
+   neither half alone decides what lands in an href. A note in any other shape
+   is left out rather than refusing the state section, because the note says
+   nothing about the tracker. */
+const NOTE_HREF = /^https:\/\/[^\s"<>]+$/;
+function noteHtml(note) {
+  if (!Array.isArray(note) || !note.every(p => p && isStr(p.text))) return "";
+  return note.map(p => isStr(p.href) && NOTE_HREF.test(p.href)
+    ? `<a href="${esc(p.href)}" target="_blank" rel="noopener">${esc(p.text)}</a>`
+    : esc(p.text)).join("");
+}
+/* The first seven characters of the default branch's head, which the
+   generator writes only for a caller that sets default-branch-head, or "". */
+const headOf = s => s && isStr(s.main) && /^[0-9a-f]{7}$/.test(s.main) ? s.main : "";
+
 function strip() {
   const s = STATE;
-  /* The title is the one line of the heading that comes from the board, and an
-     older board with none keeps the page's own. */
+  /* The title, the subtitle and the note are the lines of the heading that come
+     from the board. An older board with none keeps the page's own title and
+     subtitle and draws no note. */
   const title = isStr(s.title) && s.title ? s.title : "Build board";
   document.getElementById("title").innerHTML = esc(title);
   document.title = title;
+  document.getElementById("sub").innerHTML =
+    esc(isStr(s.subtitle) && s.subtitle ? s.subtitle : SUBTITLE);
+  const note = document.getElementById("repnote");
+  note.innerHTML = noteHtml(s.note);
+  note.hidden = !note.innerHTML;
   document.getElementById("strip").innerHTML = [
     `<span class="chip"><b>${s.issues.open}</b> open issues</span>`,
     `<span class="chip live" id="stamp">measured ${esc(ago(s.updatedAt))}</span>`
@@ -658,8 +699,10 @@ function stamped() {
   /* The board is no longer measured by hand, so the footer says how it is
      built. Its figures still date from the stamp rather than from the moment of
      reading, so the decay clause still holds. */
-  const how = `Built from GitHub by an Action on each change and on a schedule, and fetched ` +
-    `again every ${FETCH_EVERY / 60000} minutes`;
+  const head = headOf(STATE)
+    ? ` against the default branch at <span class="mono">${esc(headOf(STATE))}</span>` : ``;
+  const how = `Built from GitHub${head} by an Action on each change and on a schedule, and ` +
+    `fetched again every ${FETCH_EVERY / 60000} minutes`;
   document.getElementById("foot").innerHTML =
     `<p>${how}, so every figure on it is current as of the stamp above rather than live.` +
     (decay.length ? ` The In flight section decays fastest: ${andlist(decay)}.` : ``) +
@@ -1882,18 +1925,26 @@ function inFlight(ctx) {
     : `Nothing is in flight. Every card belongs to the board below.` + hiddenNote;
 }
 
-/* With no board data only the banner is drawn, and both card sections and the
-   footer are hidden, since each states facts about the tracker. The platform's
+/* With no board data only the banner is drawn, and both card sections, the
+   footer and the repository's note are hidden. The first three state facts
+   about the tracker. The note sits beside the banner, where a first draw that
+   throws after strip() would otherwise leave it next to a banner saying no
+   board data is shown. The platform's
    page wrapper makes `hidden` win over a section's own display rule. The strip
    sits outside those sections, so it is emptied: a first live draw that throws
    after strip() has run rolls back to no data, and the strip would otherwise
-   keep that draw's count beside a banner saying no board data is shown. */
+   keep that draw's count beside a banner saying no board data is shown. The
+   subtitle goes back to the page's own for the same reason. */
 function render() {
-  ["flightsec", "ordersec", "foot"].forEach(id => {
+  ["flightsec", "ordersec", "foot", "repnote"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.hidden = NONE;
   });
-  if (NONE) { document.getElementById("strip").innerHTML = ""; source(); return; }
+  if (NONE) {
+    document.getElementById("strip").innerHTML = "";
+    document.getElementById("sub").innerHTML = esc(SUBTITLE);
+    source(); return;
+  }
   readShowAll(); strip(); source(); buildOrder(); more(); stamped();
 }
 adopt(FALLBACK);

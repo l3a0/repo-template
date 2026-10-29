@@ -67,6 +67,8 @@ REPO = "octo-org/octo-repo"
 # input. The one repository that marks such issues uses this name.
 DATA_LABEL = "blocked-on-data"
 NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
+# The commit the fake repository's default branch stands at.
+HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
@@ -143,7 +145,7 @@ def issue(
     title: str | None = None,
     milestone: str | None = "Slice 1",
     labels: tuple[str, ...] = ("enhancement",),
-    closed_by: tuple[int, ...] = (),
+    closed_by: tuple[int | tuple[int, str], ...] = (),
     mentioned_by: tuple[int, ...] = (),
     body: str = "",
     blocked_by: tuple[tuple, ...] = (),
@@ -170,11 +172,17 @@ def issue(
         "blockedBy": conn([blocker(*b) for b in blocked_by]),
         "subIssues": {"totalCount": sub_issues},
         "issueComments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
-        "closedByPullRequestsReferences": conn([{"number": p} for p in closed_by]),
+        "closedByPullRequestsReferences": conn([ref(p) for p in closed_by]),
         "timelineItems": conn(
             [{"source": {"number": p, "repository": {"nameWithOwner": REPO}}} for p in mentioned_by]
         ),
     }
+
+
+def ref(entry: int | tuple[int, str]) -> dict:
+    """One closing link, to a number here or to a ``(number, repository)`` pair."""
+    n, repo = entry if isinstance(entry, tuple) else (entry, REPO)
+    return {"number": n, "repository": {"nameWithOwner": repo}}
 
 
 def blocker(n: int, state: str, repo: str = REPO) -> dict:
@@ -195,7 +203,7 @@ def pull(
     *,
     state: str = "OPEN",
     body: str = "",
-    closes: tuple[int, ...] = (),
+    closes: tuple[int | tuple[int, str], ...] = (),
     comments: tuple[tuple[str, str], ...] = (),
     contexts: tuple[dict, ...] = (check("test", "SUCCESS"),),
     fork: bool = False,
@@ -206,7 +214,7 @@ def pull(
         "state": state,
         "body": body,
         "isCrossRepository": fork,
-        "closingIssuesReferences": conn([{"number": i} for i in closes]),
+        "closingIssuesReferences": conn([ref(i) for i in closes]),
         "comments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
         "commits": {
             "nodes": [
@@ -222,13 +230,22 @@ class FakeGitHub:
     Open issues and open pull requests are served in pages of the size the
     real queries ask for. A pull request asked for by number comes from
     ``prs``, whatever its state. ``nested`` serves the further pages of a
-    nested list, keyed by the node's id and the list's name.
+    nested list, keyed by the node's id and the list's name. ``head`` is the
+    commit the default branch stands at, and None answers as a repository
+    with no default branch.
     """
 
-    def __init__(self, issues: list[dict], prs: list[dict], nested: dict | None = None):
+    def __init__(
+        self,
+        issues: list[dict],
+        prs: list[dict],
+        nested: dict | None = None,
+        head: str | None = HEAD,
+    ):
         self.issues = issues
         self.prs = {p["number"]: p for p in prs}
         self.nested = nested or {}
+        self.head = head
         self.calls: list[str] = []
 
     def _page(self, nodes: list[dict], size: int, after: str | None) -> dict:
@@ -255,6 +272,9 @@ class FakeGitHub:
             open_prs = [p for p in self.prs.values() if p["state"] == "OPEN"]
             page = self._page(open_prs, 50, variables.get("after"))
             return {"rateLimit": {"cost": 1}, "repository": {"pullRequests": page}}
+        if "defaultBranchRef" in query:
+            ref = {"target": {"oid": self.head}} if self.head else None
+            return {"rateLimit": {"cost": 1}, "repository": {"defaultBranchRef": ref}}
         found = {
             f"p{n}": self.prs.get(int(n)) for n in re.findall(r"pullRequest\(number:(\d+)", query)
         }
@@ -557,6 +577,316 @@ def test_the_command_line_passes_the_title_through(
     assert json.loads((out / "board.json").read_text())["state"]["title"] == "octo-repo build board"
 
 
+# The three lines a caller can add, and the state keys they write. A board
+# built with none of them carries exactly the keys it carried before they
+# existed.
+BEFORE_KEYS = {
+    "schema",
+    "repo",
+    "title",
+    "updatedAt",
+    "issues",
+    "source",
+    "longestGapMinutes",
+    "staleAfterMinutes",
+}
+
+
+def _with(gh: FakeGitHub, **lines: str) -> tuple[dict, dict]:
+    """The board built with the caller's subtitle, note or head input."""
+    return bb.build(gh, REPO, 30, NOW, **lines)
+
+
+def test_a_caller_setting_no_line_gets_the_board_it_got_before() -> None:
+    """Protects every current caller from the three new inputs.
+
+    The template's own board, and the two repositories pinned to an older
+    commit, set none of ``subtitle``, ``note`` or ``default-branch-head``. Their
+    ``state`` carries exactly the keys it carried before, written identically
+    whether the inputs are left out or passed empty, and the run sends exactly
+    the requests it sent before, with no request for the default branch.
+    """
+    issues = [issue(1, mentioned_by=(7,)), issue(2)]
+    prs = [pull(5, closes=(1,)), pull(7, state="MERGED", body="Part of #1")]
+    left_out = FakeGitHub(issues, prs)
+    board, _ = build(left_out)
+    passed_empty = FakeGitHub(issues, prs)
+    empty, _ = _with(passed_empty, subtitle="", note="", default_branch_head="")
+    assert set(board["state"]) == BEFORE_KEYS
+    assert json.dumps(empty) == json.dumps(board)
+    assert passed_empty.calls == left_out.calls
+    # One page of open issues, one page of open pull requests, and one batch
+    # for the merged pull request 7 that issue 1 names.
+    assert len(left_out.calls) == 3
+    assert not any("defaultBranchRef" in q for q in left_out.calls)
+
+
+# The board.json the generator at l3a0/repo-template commit cf2959a3, the last
+# before these inputs, wrote for `every_case()` at `NOW` under `GOLDEN_CRON`.
+# It was written once by running that commit's scripts/build_board.py, taken
+# with `git show cf2959a3:scripts/build_board.py`, through its own `main()`.
+# The file is never rewritten from the code under test, because a golden
+# written by the head would compare the head with itself.
+LINES_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "lines.json"
+GOLDEN_CRON = 'on:\n  schedule:\n    - cron: "8,38 * * * *"\n'
+
+
+class FixedNow(datetime):
+    """``datetime`` whose ``now`` is ``NOW``, so a run's stamp is fixed."""
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return NOW
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [],
+        [
+            "--subtitle=",
+            "--note=",
+            "--default-branch-head=",
+            "--label-colors=",
+            "--sort-labels=",
+        ],
+    ],
+    ids=["left-out", "passed-empty"],
+)
+def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lines: list[str]
+) -> None:
+    """Protects every current caller's board.json, byte for byte.
+
+    The generator at cf2959a3 wrote ``LINES_GOLDEN`` from the same tracker
+    before the three inputs existed. The head, with none of them set, has to
+    write the same bytes to the file it publishes. The workflow passes every
+    flag whether or not the caller set it, the two label inputs included, so
+    passing them all empty counts too.
+    """
+    fake = every_case()
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setattr(bb, "datetime", FixedNow)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    workflow = tmp_path / "board.yml"
+    workflow.write_text(GOLDEN_CRON, encoding="utf-8")
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(workflow), "--out", str(out)]
+    assert bb.main([*argv, *lines]) == 0
+    assert (out / "board.json").read_bytes() == LINES_GOLDEN.read_bytes()
+
+
+def test_the_subtitle_reaches_the_state() -> None:
+    """Protects the reusable workflow's ``subtitle`` input on its way to the page."""
+    state = _with(FakeGitHub([issue(1)], []), subtitle="the order of work on the lake")[0]["state"]
+    assert state["subtitle"] == "the order of work on the lake"
+    assert set(state) == BEFORE_KEYS | {"subtitle"}
+
+
+LINK_A = "https://github.com/octo-org/octo-repo/blob/main/docs/design.md"
+LINK_B = "https://github.com/octo-org/octo-repo/blob/main/docs/build-plan.md"
+
+
+@pytest.mark.parametrize(
+    ("note", "pieces"),
+    [
+        ("Plain words only.", [{"text": "Plain words only."}]),
+        (
+            f"Read [the design doc]({LINK_A}) first.",
+            [
+                {"text": "Read "},
+                {"text": "the design doc", "href": LINK_A},
+                {"text": " first."},
+            ],
+        ),
+        (
+            f"[The design]({LINK_A}) and [the plan]({LINK_B})",
+            [
+                {"text": "The design", "href": LINK_A},
+                {"text": " and "},
+                {"text": "the plan", "href": LINK_B},
+            ],
+        ),
+        (
+            f"  The order\n follows   the rule:\n\tcapture first, in\n[the plan]({LINK_B}).\n",
+            [
+                {"text": "The order follows the rule: capture first, in "},
+                {"text": "the plan", "href": LINK_B},
+                {"text": "."},
+            ],
+        ),
+        ("[brackets] and (parentheses) alone", [{"text": "[brackets] and (parentheses) alone"}]),
+        (f"[a] [b]({LINK_A})", [{"text": "[a] "}, {"text": "b", "href": LINK_A}]),
+    ],
+    ids=["text", "one-link", "two-links", "line-breaks", "no-link", "bracket-then-link"],
+)
+def test_a_note_is_parsed_into_text_and_link_pieces(note: str, pieces: list[dict]) -> None:
+    """Protects the note's one form of markup, parsed once here so the page only escapes.
+
+    A folded YAML block keeps its line breaks in some forms, so every run of
+    whitespace reads as one space.
+    """
+    state = _with(FakeGitHub([issue(1)], []), note=note)[0]["state"]
+    assert state["note"] == pieces
+    assert set(state) == BEFORE_KEYS | {"note"}
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "javascript:alert(1)",
+        "http://github.com/octo-org/octo-repo",
+        "docs/design.md",
+        'https://github.com/a"onmouseover="alert(1)',
+        "https://github.com/a b",
+        "https://",
+        "https://github.com/a<b",
+        "",
+    ],
+    ids=["javascript", "http", "relative", "quote", "space", "no-host", "angle", "empty"],
+)
+def test_a_note_linking_anywhere_but_https_stops_the_run(href: str) -> None:
+    """Protects every reader's browser from a link the caller did not mean to draw.
+
+    The run stops before reading GitHub, as a refused data label does, so the
+    last good board stays up and the job summary says why.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="not an https:// address"):
+        _with(gh, note=f"See [this]({href}).")
+    assert gh.calls == []
+
+
+def test_the_default_branch_head_costs_one_request_and_writes_seven_characters() -> None:
+    """Protects the footer's commit, and every run that does not ask for it.
+
+    The head is read through a request of its own, so a caller that sets the
+    input pays exactly one more request than one that does not.
+    """
+    without = FakeGitHub([issue(1)], [])
+    build(without)
+    gh = FakeGitHub([issue(1)], [])
+    state = _with(gh, default_branch_head="true")[0]["state"]
+    assert state["main"] == "0a1b2c3"
+    assert set(state) == BEFORE_KEYS | {"main"}
+    assert len(gh.calls) == len(without.calls) + 1
+    assert sum("defaultBranchRef" in q for q in gh.calls) == 1
+
+
+@pytest.mark.parametrize("value", ["yes", "True", "false", "1", " true"])
+def test_a_default_branch_head_other_than_true_stops_the_run(value: str) -> None:
+    """Protects a caller from a value that reads as on and is not.
+
+    The input takes an empty value or ``true``. Anything else stops the run
+    before it reads GitHub, rather than quietly drawing no commit.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    message = f"the default-branch-head input {value!r} is neither empty nor true"
+    with pytest.raises(bb.BoardError, match=f"^{re.escape(message)}$"):
+        _with(gh, default_branch_head=value)
+    assert gh.calls == []
+
+
+@pytest.mark.parametrize(
+    "head",
+    [None, "not-a-commit-at-all", HEAD.upper()],
+    ids=["missing", "not-hex", "upper-case"],
+)
+def test_a_missing_default_branch_head_stops_the_run(head: str | None) -> None:
+    """Protects the footer from naming a commit the run never read.
+
+    A repository GitHub answers with no default branch would leave the footer
+    saying it was built against nothing, so the run stops and the last good
+    board stays up. An answer that is not a lower-case hex commit stops it
+    too, because the page names only seven lower-case hex characters.
+    """
+    gh = FakeGitHub([issue(1)], [], head=head)
+    with pytest.raises(bb.BoardError, match="no default branch head"):
+        _with(gh, default_branch_head="true")
+    assert [q for q in gh.calls if "defaultBranchRef" in q] == [bb.HEAD_QUERY]
+
+
+def test_a_repository_github_does_not_return_stops_the_run() -> None:
+    """Protects the run from a null repository, which would otherwise raise AttributeError."""
+    with pytest.raises(bb.BoardError, match="no default branch head"):
+        bb.head_commit(lambda query, variables: {"repository": None}, "octo-org", "octo-repo")
+
+
+def test_a_refused_note_stops_the_run_before_the_head_is_read() -> None:
+    """Protects a caller asking for the head from a request a refused note wastes.
+
+    Every input is checked before anything is read from GitHub, so a note
+    that is refused sends no request, even the head's.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="not an https:// address"):
+        _with(gh, note="See [x](http://example.com).", default_branch_head="true")
+    assert gh.calls == []
+
+
+def test_the_command_line_passes_the_three_lines_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the ``subtitle``, ``note`` and ``default-branch-head`` inputs on their way.
+
+    The workflow passes each flag joined to its value by ``=`` whether or not
+    the caller set it, so an empty value writes no key, and a refused note
+    fails the run with its reason in the job summary.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def state() -> dict:
+        return json.loads((out / "board.json").read_text())["state"]
+
+    lines = [
+        "--subtitle=-the order of work",
+        f"--note=See [the design]({LINK_A}).",
+        "--default-branch-head=true",
+    ]
+    assert bb.main([*argv, *lines]) == 0
+    assert state()["subtitle"] == "-the order of work"
+    assert state()["note"] == [
+        {"text": "See "},
+        {"text": "the design", "href": LINK_A},
+        {"text": "."},
+    ]
+    assert state()["main"] == "0a1b2c3"
+    assert bb.main([*argv, "--subtitle=", "--note=", "--default-branch-head="]) == 0
+    assert set(state()) == BEFORE_KEYS
+    (out / "board.json").unlink()
+    assert bb.main([*argv, "--note=[x](http://example.com)"]) == 1
+    assert not (out / "board.json").exists()
+    assert "build_board: the note links to 'http://example.com'" in summary.read_text()
+
+
+def test_the_command_line_with_none_of_the_three_flags_reads_no_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects a caller pinned before the inputs, whose workflow passes no flag.
+
+    Each flag defaults to empty, so a run given none of them sends no request
+    for the default branch and writes the keys it wrote before.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    assert bb.main(["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]) == 0
+    assert set(json.loads((out / "board.json").read_text())["state"]) == BEFORE_KEYS
+    assert not any("defaultBranchRef" in q for q in fake.calls)
+
+
 def test_the_command_line_passes_the_data_label_through(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -623,7 +953,7 @@ STATE_KEYS = [
 ]
 
 
-GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "labels.json"
+LABELS_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "labels.json"
 
 
 def labels_github() -> FakeGitHub:
@@ -709,7 +1039,7 @@ def test_with_neither_label_input_the_board_is_the_bytes_cf2959a3_wrote(
     """
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    assert _main_writes(bb, tmp_path / "site") == GOLDEN.read_bytes()
+    assert _main_writes(bb, tmp_path / "site") == LABELS_GOLDEN.read_bytes()
 
 
 def test_with_neither_label_input_the_board_is_the_one_it_was() -> None:
@@ -1345,6 +1675,218 @@ def test_a_cross_reference_from_another_repository_reads_nothing_here() -> None:
     assert not any("pullRequest(number:999" in q for q in gh.calls)
 
 
+@pytest.mark.parametrize("here", [False, True])
+def test_an_issue_closed_from_another_repository_reads_nothing_here(here: bool) -> None:
+    """Protects the run from another repository's closing pull request.
+
+    Issue 40 here is closed by pull request 34 in ``other/repo``, which a
+    closing keyword such as "closes octo-org/octo-repo#40" there registers.
+    Read by number in this repository, the reference stops the run when there
+    is no pull request 34 here, and reads an unrelated one when there is.
+    """
+    prs = [pull(34, state="MERGED", body="Bumps ruff.")] if here else []
+    gh = FakeGitHub([issue(40, closed_by=((34, "other/repo"),))], prs)
+    board, report = build(gh)
+    assert prs_of(board) == []
+    assert report["other_prs_read"] == 0
+    assert not any("pullRequest(number:" in q for q in gh.calls)
+
+
+@pytest.mark.parametrize("here", [REPO, "octo-org/second-repo"])
+def test_a_closing_link_to_another_repositorys_issue_draws_nothing_here(here: str) -> None:
+    """Protects a card from a branch that closes another repository's issue.
+
+    Pull request 10 closes ``other/repo#1``, and issue 1 here is open. Read as
+    this repository's issue 1, the link would draw the branch on that card as
+    a closing link. Pull request 11 closes ``other/repo#3`` and issue 2 here,
+    so it draws on 2 alone. Pull request 12 closes ``other/repo#5`` and is part
+    of issue 5 here, so it draws on 5 as a ``Part of`` branch, not a closing one.
+    The board is built for two repositories, so "here" is whichever repository
+    the run was given rather than one name the generator could carry.
+    """
+    gh = FakeGitHub(
+        [issue(1), issue(2), issue(3), issue(5)],
+        [
+            pull(10, closes=((1, "other/repo"),)),
+            pull(11, closes=((3, "other/repo"), (2, here))),
+            pull(12, closes=((5, "other/repo"),), body="Part of #5"),
+        ],
+    )
+    board, report = bb.build(gh, here, 30, NOW)
+    assert [(p["pr"], p["issue"], p["linked"], p.get("partOf")) for p in prs_of(board)] == [
+        (11, 2, True, None),
+        (12, 5, False, True),
+    ]
+    assert report["open_prs_left_out"] == [10]
+
+
+def test_a_same_named_repository_under_another_owner_is_not_this_one() -> None:
+    """Protects the board from a fork or namesake of this repository.
+
+    ``elsewhere/octo-repo`` shares this repository's name under another owner.
+    Its issue 1 closed by pull request 10 here, its issue 1 blocking issue 2
+    here, and its pull request 34 closing issue 40 here all name that other
+    repository, so none of them reads as this one's.
+    """
+    other = "elsewhere/octo-repo"
+    gh = FakeGitHub(
+        [issue(1), issue(2, blocked_by=((1, "OPEN", other),)), issue(40, closed_by=((34, other),))],
+        [pull(10, closes=((1, other),))],
+    )
+    board, report = build(gh)
+    assert prs_of(board) == []
+    assert report["open_prs_left_out"] == [10]
+    assert card(board, 2)["needs"] == []
+    assert not any("pullRequest(number:34" in q for q in gh.calls)
+
+
+def entry_selection(query: str, field: str) -> str:
+    """What a query selects from each entry of the list ``field`` names."""
+    start = query.index("nodes{", query.index(f"{field}(")) + len("nodes{")
+    depth, end = 1, start
+    while depth:
+        depth += {"{": 1, "}": -1}.get(query[end], 0)
+        end += 1
+    return " ".join(query[start : end - 1].split())
+
+
+def test_a_reference_to_another_repository_past_the_first_page_is_dropped() -> None:
+    """Protects the filter on the pages after the first hundred links.
+
+    It covers each of the four lists the board keeps only this repository's
+    entries of: closed-by links, closing links, cross-references and "blocked
+    by" links. The fake answers every query from its fixtures whatever the
+    query selects, so the test also reads what each query asks for, on the
+    first page and on the pages after it. A query that stopped selecting the
+    repository would leave every entry from it reading as another
+    repository's, and the live board would lose them while every fixture here
+    still carried one. Whitespace is left out of the comparison, because the
+    first-page query breaks its cross-reference selection across lines.
+    """
+    first = issue(5)
+    first["closedByPullRequestsReferences"] = conn([], more=True, cursor="b1")
+    first["timelineItems"] = conn([], more=True, cursor="t1")
+    first["blockedBy"] = conn([], more=True, cursor="x1")
+    opened = pull(7)
+    opened["closingIssuesReferences"] = conn([], more=True, cursor="k1")
+    nested = {
+        ("I5", "closedByPullRequestsReferences", "b1"): conn([ref((34, "other/repo")), ref(6)]),
+        ("I5", "timelineItems", "t1"): conn(
+            [{"source": {"number": 35, "repository": {"nameWithOwner": "other/repo"}}}]
+        ),
+        ("I5", "blockedBy", "x1"): conn([blocker(9, "OPEN", "other/repo"), blocker(8, "OPEN")]),
+        ("P7", "closingIssuesReferences", "k1"): conn([ref((5, "other/repo")), ref(8)]),
+    }
+    gh = FakeGitHub(
+        [first, issue(8), issue(9)], [pull(6, state="MERGED", closes=(5,)), opened], nested
+    )
+    board, report = build(gh)
+    assert [(p["pr"], p["issue"]) for p in prs_of(board)] == [(6, 5), (7, 8)]
+    assert report["other_prs_read"] == 1
+    assert card(board, 5)["needs"] == [8]
+    assert not any(re.search(r"pullRequest\(number:3[45]\b", q) for q in gh.calls)
+    issues_query = [q for q in gh.calls if "issues(states:OPEN" in q]
+    wanted = {
+        "closedByPullRequestsReferences": ("number repository{nameWithOwner}", issues_query),
+        "timelineItems": (
+            "... on CrossReferencedEvent{source{"
+            "... on PullRequest{number repository{nameWithOwner}}}}",
+            issues_query,
+        ),
+        "blockedBy": ("number state repository{nameWithOwner}", issues_query),
+        "closingIssuesReferences": (
+            "number repository{nameWithOwner}",
+            [q for q in gh.calls if "pullRequests(states:OPEN" in q or "pullRequest(number:" in q],
+        ),
+    }
+    for field, (selection, first_pages) in wanted.items():
+        paged = [q for q in gh.calls if "node(id:$id)" in q and f"{field}: " in q]
+        assert first_pages and paged, field
+        selected = {"".join(entry_selection(q, field).split()) for q in first_pages + paged}
+        assert selected == {"".join(selection.split())}, field
+
+
+def test_a_null_reference_is_dropped_rather_than_read() -> None:
+    """Protects the run from an entry GitHub sent as null.
+
+    GitHub's schema lets an entry of either list, of an issue's "blocked by"
+    links or of its cross-references be null, which it sends for an entry the
+    token cannot read. A cross-reference can also carry a null source. Every
+    issue and pull request here is readable, so a null one belongs to another
+    repository, and reading its number would stop the run. An entry that names
+    no repository is read the same way, since nothing says it is this one's.
+    Pull request 34 does not exist here, and issue 5 is open, so reading either
+    unnamed entry as this repository's would fail the run or add an item.
+    """
+    first = issue(5)
+    first["closedByPullRequestsReferences"] = conn([None, {"number": 34}, ref(6)])
+    first["blockedBy"] = conn([None, blocker(8, "OPEN")])
+    first["timelineItems"] = conn([None, {"source": None}])
+    opened = pull(7)
+    opened["closingIssuesReferences"] = conn([None, {"number": 5, "repository": None}, ref(8)])
+    gh = FakeGitHub([first, issue(8)], [pull(6, state="MERGED", closes=(5,)), opened])
+    board, report = build(gh)
+    assert [(p["pr"], p["issue"]) for p in prs_of(board)] == [(6, 5), (7, 8)]
+    assert card(board, 5)["needs"] == [8]
+    assert report["other_prs_read"] == 1
+
+
+def references_fake() -> FakeGitHub:
+    """Closing links, closed-by links, cross-references and blockers, all in this repository.
+
+    Issue 1 is closed by open pull request 10 on the first page of its
+    closed-by links and by merged pull request 16 on the second. Merged pull
+    request 11 closes issue 2. Issue 3 is cross-referenced by merged pull
+    request 12, which is part of it. Issue 4 is blocked by issue 1, open, and
+    issue 3, closed. Issue 5 is blocked by issue 2 and cross-referenced by
+    closed pull request 13, which is part of it. Open pull request 14 closes
+    issues 4 and 5 and carries the owner's review, and open pull request 15
+    names no issue.
+    """
+    first = issue(1, closed_by=(10,))
+    first["closedByPullRequestsReferences"] = conn([ref(10)], more=True, cursor="c1")
+    issues = [
+        first,
+        issue(2, closed_by=(11,), labels=("band:1",)),
+        issue(3, mentioned_by=(12,)),
+        issue(4, blocked_by=((1, "OPEN"), (3, "CLOSED"))),
+        issue(5, blocked_by=((2, "OPEN"),), mentioned_by=(13,)),
+    ]
+    prs = [
+        pull(10, closes=(1,)),
+        pull(11, state="MERGED", closes=(2,)),
+        pull(12, state="MERGED", body="Part of #3"),
+        pull(13, state="CLOSED", body="Part of #5"),
+        pull(14, closes=(4, 5), comments=(("OWNER", "## Review\n"),)),
+        pull(15, body="Bumps ruff."),
+        pull(16, state="MERGED", closes=(1,)),
+    ]
+    nested = {("I1", "closedByPullRequestsReferences", "c1"): conn([ref(16)])}
+    return FakeGitHub(issues, prs, nested)
+
+
+def board_bytes(board: dict) -> str:
+    """The board as ``cmd_build`` writes it, with the time it was read masked."""
+    board["state"]["updatedAt"] = "MASKED"
+    return json.dumps(board, ensure_ascii=False, separators=(",", ":"))
+
+
+REFERENCES_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "references.json"
+
+
+def test_references_within_this_repository_write_the_board_they_wrote_before() -> None:
+    """Protects every caller from a board that moves when no reference leaves the repository.
+
+    ``REFERENCES_GOLDEN`` is the ``board.json`` that the generator at
+    l3a0/repo-template commit cf2959a3, before the repository filter, wrote
+    for ``references_fake``. Every reference there names this repository, so
+    the filter has nothing to drop, and this run has to write the same bytes.
+    """
+    board, _ = build(references_fake())
+    written = board_bytes(board)
+    assert written == REFERENCES_GOLDEN.read_text(encoding="utf-8").removesuffix("\n")
+
+
 def test_a_closed_part_of_pull_request_reads_as_closed() -> None:
     """Protects a card from reading as landed when its branch was abandoned.
 
@@ -1527,6 +2069,23 @@ def test_one_run_makes_a_request_per_page_and_no_more() -> None:
     assert len(gh.calls) == 6
     assert len(board["tracker"]["items"]) == 150
     assert len(prs_of(board)) == 115
+
+
+def test_every_top_level_query_asks_what_it_cost() -> None:
+    """Protects the job summary's GraphQL points row.
+
+    ``GhGraphql`` sums the ``rateLimit{cost}`` each answer carries, so a
+    top-level query that does not ask for it spends points the summary never
+    counts. That covers the three query constants and the batch that reads
+    pull requests by number, which the run builds as it goes.
+    """
+    for query in (bb.ISSUES_QUERY, bb.OPEN_PRS_QUERY, bb.HEAD_QUERY):
+        assert "rateLimit{cost}" in query
+    gh = FakeGitHub([issue(1, mentioned_by=(7,))], [pull(7, state="MERGED", body="Part of #1")])
+    _with(gh, default_branch_head="true")
+    top = [q for q in gh.calls if "node(id:$id)" not in q]
+    assert len(top) == 4
+    assert all("rateLimit{cost}" in q for q in top)
 
 
 def test_a_nested_list_longer_than_a_page_is_read_to_its_end() -> None:
@@ -2055,15 +2614,9 @@ def test_a_schedule_it_cannot_read_stops_the_run(tmp_path: Path, lines: str) -> 
 # ---- The page, on what the generator wrote ----
 
 
-def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
-    """Protects the join between the two halves.
-
-    A field the generator leaves out, or writes in a shape the page refuses,
-    blanks the board, and neither half's own tests would notice. So the page
-    runs on the generator's output, built from a tracker holding every case
-    above at once.
-    """
-    gh = FakeGitHub(
+def every_case() -> FakeGitHub:
+    """A tracker holding every case above at once."""
+    return FakeGitHub(
         [
             issue(10, mentioned_by=(20,)),
             issue(11, milestone=None, labels=()),
@@ -2087,7 +2640,17 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
             pull(23, closes=(13,), contexts=(check("test", "TIMED_OUT"),)),
         ],
     )
-    board, _ = build(gh)
+
+
+def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
+    """Protects the join between the two halves.
+
+    A field the generator leaves out, or writes in a shape the page refuses,
+    blanks the board, and neither half's own tests would notice. So the page
+    runs on the generator's output, built from a tracker holding every case
+    above at once.
+    """
+    board, _ = build(every_case())
     board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ids, _ = run_fetch_page(tmp_path, [served(board)])
     assert text(ids, "strip").startswith("7 open issues")
@@ -2099,6 +2662,121 @@ def test_the_page_draws_what_the_generator_writes(tmp_path: Path) -> None:
     assert "review in progress" in text(ids, "flow")
     assert "plan complete, 3 passes" in text(ids, "flow")
     assert cards(ids, "board") == {14}
+
+
+def test_the_page_draws_the_three_lines_the_generator_writes(tmp_path: Path) -> None:
+    """Protects the join for the subtitle, the note and the default branch's head.
+
+    The generator writes the note as pieces and the head as seven characters,
+    and the page draws each only in the shape it checks for, so a change to
+    either half's shape would leave the line off the page with no test failing.
+    """
+    board, _ = bb.build(
+        every_case(),
+        REPO,
+        30,
+        NOW,
+        subtitle="the order of work on the lake",
+        note=f"Read [the design doc]({LINK_A}) first.",
+        default_branch_head="true",
+    )
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    assert ids["sub"]["html"] == "the order of work on the lake"
+    assert not ids["repnote"]["hidden"]
+    assert ids["repnote"]["html"] == (
+        f'Read <a href="{LINK_A}" target="_blank" rel="noopener">the design doc</a> first.'
+    )
+    assert text(ids, "foot").startswith("Built from GitHub against the default branch at 0a1b2c3 ")
+    assert '<span class="mono">0a1b2c3</span>' in ids["foot"]["html"]
+
+
+@pytest.mark.parametrize("listed", ["as written", "reversed"])
+def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(
+    tmp_path: Path, listed: str
+) -> None:
+    """Protects a card at ``Board order: 0`` from sorting as if it had none.
+
+    The generator writes ``order: 0`` for that line, and the page gives a card
+    with no order 50. A fallback that treats 0 as missing puts the card at 0
+    behind the one with no order. Four cards in one band, at 51, with no order,
+    at 0 and at 49, also fix the default at exactly 50. The cards at 49 and 51
+    sit one either side of it, so a default of 49 or 51 ties the card with no
+    order to a neighbour, and the issue-number tiebreak then puts that pair the
+    wrong way round. The rank chip and the column both read the same sorted
+    list, so both are checked.
+
+    The page also draws the list reversed. Which pairs a sort compares, and
+    which card of a pair comes first, follows the order it is given, and the
+    two engines the page runs under sort differently. On three cards at 60,
+    none and 0, a fallback written wrongly on one side of the comparison sorted
+    the generator's order correctly under JavaScriptCore and only the reversed
+    one wrongly.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("band:1",), body="Board order: 51\n"),
+            issue(2, labels=("band:1",)),
+            issue(3, labels=("band:1",), body="Board order: 0\n"),
+            issue(4, labels=("band:1",), body="Board order: 49\n"),
+        ],
+        [],
+    )
+    board, _ = build(gh)
+    assert [(it["issue"], it.get("order")) for it in board["next"]["items"]] == [
+        (1, 51),
+        (2, None),
+        (3, 0),
+        (4, 49),
+    ]
+    if listed == "reversed":
+        board["next"]["items"].reverse()
+    chips, raw = _rank_chips(tmp_path, board)
+    assert chips == {3: 1, 4: 2, 2: 3, 1: 4}
+    column = raw.split('<div class="col k0')[1].split('<div class="col k')[0]
+    assert [int(n) for n in re.findall(r'data-n="(\d+)"', column)] == [3, 4, 2, 1]
+
+
+def test_the_build_order_sorts_by_band_then_order_then_readiness_then_number(
+    tmp_path: Path,
+) -> None:
+    """Protects the comparator's four terms and the order it applies them in.
+
+    Each pair of cards here differs on one term and ties on every term before
+    it, so dropping, reversing or moving any term changes the chips.
+
+    1. #1 in band 2 with no order sorts after #2 in band 1 at order 60, so band
+       comes before order and a lower band lands first.
+    2. #3, #4 and #5 share order 10, ahead of #6 and #7 at the default of 50
+       and #2 at 60, so order comes before readiness.
+    3. #5 carries a decision, so it is ready to decide rather than to plan, and
+       sorts ahead of #3 and #4 at the same order.
+    4. #3 sorts ahead of #4, and #6 ahead of #7, on the issue number alone.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("band:2",)),
+            issue(2, labels=("band:1", "decision"), body="Board order: 60\n"),
+            issue(3, labels=("band:1",), body="Board order: 10\n"),
+            issue(4, labels=("band:1",), body="Board order: 10\n"),
+            issue(5, labels=("band:1", "decision"), body="Board order: 10\n"),
+            issue(6, labels=("band:1",)),
+            issue(7, labels=("band:1",)),
+        ],
+        [],
+    )
+    board, _ = build(gh)
+    chips, _ = _rank_chips(tmp_path, board)
+    assert sorted(chips, key=chips.get) == [5, 3, 4, 6, 7, 2, 1]
+
+
+def _rank_chips(tmp_path: Path, board: dict) -> tuple[dict[int, int], str]:
+    """Each ranked card's priority chip as the page draws it, and the build order's HTML."""
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    raw = ids["board"]["html"]
+    chip = r'data-n="(\d+)".*?<span class="rk" title="priority order">(\d+)</span>'
+    return {int(n): int(rank) for n, rank in re.findall(chip, raw, re.S)}, raw
 
 
 def test_a_board_with_no_open_issues_draws_nothing(tmp_path: Path) -> None:
@@ -2163,6 +2841,9 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.title",
                 "inputs.icon",
                 "inputs.data-label",
+                "inputs.subtitle",
+                "inputs.note",
+                "inputs.default-branch-head",
                 "inputs.label-colors",
                 "inputs.sort-labels",
                 "job.workflow_repository",
@@ -2182,11 +2863,10 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     field expanded into a step as critical, which the ruleset refuses to merge.
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
-    of which a stranger writes. ``inputs.title``, ``inputs.icon``,
-    ``inputs.data-label``, ``inputs.label-colors`` and ``inputs.sort-labels``
-    are written by the caller's own file. Each reaches the shell only through
-    an environment variable, and the icon also names a file for the caller's
-    checkout, which is an action's input rather than shell.
+    of which a stranger writes. Every ``inputs.`` field is written by the
+    caller's own file. Each reaches the shell only through an environment
+    variable, and the icon also names a file for the caller's checkout, which
+    is an action's input rather than shell.
     """
     used = set(re.findall(r"\$\{\{\s*([^}]*?)\s*\}\}", path.read_text(encoding="utf-8")))
     assert used == allowed
@@ -2195,13 +2875,16 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     data = re.findall(r"^(.*)\$\{\{\s*inputs\.data-label\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in data] == [("DATA_LABEL:", "")]
     assert '--data-label="$DATA_LABEL"' in _called()
-    for key, env, flag in (
-        ("label-colors", "LABEL_COLORS", "--label-colors"),
-        ("sort-labels", "SORT_LABELS", "--sort-labels"),
+    for key, var in (
+        ("subtitle", "SUBTITLE"),
+        ("note", "NOTE"),
+        ("default-branch-head", "DEFAULT_BRANCH_HEAD"),
+        ("label-colors", "LABEL_COLORS"),
+        ("sort-labels", "SORT_LABELS"),
     ):
         uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
-        assert [(before.strip(), after) for before, after in uses] == [(f"{env}:", "")]
-        assert f'{flag}="${env}"' in _called()
+        assert [(before.strip(), after) for before, after in uses] == [(f"{var}:", "")]
+        assert f'--{key}="${var}"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
@@ -2238,16 +2921,25 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     only what it needs. A required input, or a default naming a file or a
     label, would fail or change every such run. An empty title gives
     ``<name> build board``, an empty icon serves the template's, and an empty
-    data label reads no ``data`` kind, and an empty ``label-colors`` or
-    ``sort-labels`` leaves the chips as they were. The README and the l3a0
-    plugin's update-build-board skill name the inputs by the keys declared
-    here. The README quotes ``"true"``, because a bare ``true`` in YAML is a
-    boolean and the inputs are strings.
+    data label reads no ``data`` kind, and an empty subtitle, note,
+    default-branch-head, label-colors or sort-labels leaves the board as it
+    was. The README and the l3a0 plugin's update-build-board skill name the
+    inputs by the keys declared here. The README quotes ``"true"``, because a
+    bare ``true`` in YAML is a boolean and the inputs are strings.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
     declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
-    assert list(declared) == ["title", "icon", "data-label", "label-colors", "sort-labels"]
+    assert list(declared) == [
+        "title",
+        "icon",
+        "data-label",
+        "subtitle",
+        "note",
+        "default-branch-head",
+        "label-colors",
+        "sort-labels",
+    ]
     for block in declared.values():
         assert "        type: string\n" in block
         assert '        default: ""' in block
@@ -2255,6 +2947,9 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
     assert f"    with:\n      data-label: {DATA_LABEL}\n" in readme
+    assert "    with:\n      subtitle: " in readme
+    assert "\n      note: >-\n" in readme
+    assert '\n      default-branch-head: "true"\n' in readme
     assert '    with:\n      label-colors: "true"\n' in readme
     assert '    with:\n      sort-labels: "true"\n' in readme
     page = _plugin("page.md")

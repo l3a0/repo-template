@@ -18,22 +18,28 @@ repository, and comments citing that repository's issues were restated as the
 rules they record. The pull request that closes l3a0/repo-template#40 brought
 the kind back behind ``--data-label``, which names the label a repository
 marks such issues with, so a repository that never names one reads no ``data``
-kind at all.
+kind at all. The pull request that closes l3a0/repo-template#44 added
+``--subtitle``, ``--note`` and ``--default-branch-head``, for the lines a
+repository's own page carried under its title and in its footer.
 
 It writes the six sections the page reads.
 
 1. ``state``, with the repository, the board's title, the open issue count, the
    time GitHub was read, the longest gap between two scheduled runs, and the
-   age after which the page calls the board stale. Under ``--label-colors``
+   age after which the page calls the board stale. Three more fields appear
+   only when the caller sets the matching input: ``subtitle`` from
+   ``--subtitle``, ``note`` from ``--note``, and ``main``, the default
+   branch's head, from ``--default-branch-head``. Under ``--label-colors``
    it also carries ``labelColors``, the colour GitHub stores for each label a
    card draws.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
    from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
    native "blocked by" links, and ``after`` from a ``Board after:`` line in the
    body.
-3. ``prs``, one item per pull request and issue it names, with its state, its
-   checks at the current head, whether GitHub registered the closing link, and
-   whether the owner posted a review.
+3. ``prs``, one item per pull request and each issue in this repository it
+   names, with its state, its checks at the current head, whether GitHub
+   registered a closing link to that issue, and whether the owner posted a
+   review.
 4. ``working``, one item per issue carrying a ``working:build`` or
    ``working:decompose`` label, which a session sets while it holds the card.
 5. ``planned``, one item per issue with an owner comment carrying a
@@ -210,6 +216,45 @@ def kind_labels(data_label: str) -> tuple[tuple[str, str], ...]:
     return ((data_label, "data"), *KIND_LABELS)
 
 
+# A link in a caller's note, written `[words](address)`, which is the note's
+# only markup. The address is read up to the first closing parenthesis, so one
+# holding a space or a quote is still read as a link and refused, rather than
+# left as text that looks like a link.
+NOTE_LINK = re.compile(r"\[([^\[\]]+)\]\(([^)]*)\)")
+# The only address a note may link to. The page checks the same pattern again
+# before drawing a link, so neither half alone decides what lands in an href.
+NOTE_HREF = re.compile(r'https://[^\s"<>]+')
+
+
+def note_segments(note: str) -> list[dict] | None:
+    """A caller's note as the pieces the page draws, or None for no note.
+
+    The note is one paragraph, so every run of whitespace becomes one space and
+    a folded YAML block reads as written. Each piece is ``{"text": ...}``, or
+    ``{"text": ..., "href": ...}`` for a link. The parse runs here rather than
+    in the page, so the page only escapes text and never runs a pattern over
+    text it has already escaped. A link to anything but an ``https://`` address
+    is refused, because the page would draw it as a link in every reader's
+    browser.
+    """
+    note = " ".join(note.split())
+    if not note:
+        return None
+    pieces: list[dict] = []
+    start = 0
+    for link in NOTE_LINK.finditer(note):
+        words, href = link.groups()
+        if not NOTE_HREF.fullmatch(href):
+            raise BoardError(f"the note links to {href!r}, which is not an https:// address")
+        if link.start() > start:
+            pieces.append({"text": note[start : link.start()]})
+        pieces.append({"text": words, "href": href})
+        start = link.end()
+    if start < len(note):
+        pieces.append({"text": note[start:]})
+    return pieces
+
+
 def switch(name: str, value: str) -> bool:
     """An on-or-off input, which is empty for off and ``true`` for on.
 
@@ -256,7 +301,7 @@ PAGE_INFO = "pageInfo{hasNextPage endCursor}"
 PR_FIELDS = f"""
 fragment pr on PullRequest {{
   id number state body isCrossRepository
-  closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number}}}}
+  closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
   comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
   commits(last:1){{nodes{{commit{{statusCheckRollup{{id
     contexts(first:100){{{PAGE_INFO} nodes{{__typename
@@ -279,7 +324,7 @@ query($owner:String!, $name:String!, $after:String) {{
         subIssues{{totalCount}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
         closedByPullRequestsReferences(first:100, includeClosedPrs:true){{
-          {PAGE_INFO} nodes{{number}}}}
+          {PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
         timelineItems(itemTypes:[CROSS_REFERENCED_EVENT], first:100){{{PAGE_INFO} nodes{{
           ... on CrossReferencedEvent{{source{{
             ... on PullRequest{{number repository{{nameWithOwner}}}}}}}}}}}}
@@ -302,6 +347,16 @@ query($owner:String!, $name:String!, $after:String) {{
 {PR_FIELDS}
 """
 
+# The commit the default branch stands at, read only for a caller that sets
+# `default-branch-head`. It is a request of its own rather than a field of
+# ISSUES_QUERY, so every other caller sends the query it sent before.
+HEAD_QUERY = """
+query($owner:String!, $name:String!) {
+  rateLimit{cost}
+  repository(owner:$owner, name:$name) { defaultBranchRef{target{oid}} }
+}
+"""
+
 # Pull requests fetched by number, for the merged and closed ones an open issue
 # still names. Fifty a query keeps one response small.
 BATCH = 50
@@ -320,7 +375,7 @@ NESTED = {
         "Issue",
         "closedByPullRequestsReferences",
         "includeClosedPrs:true",
-        "number",
+        "number repository{nameWithOwner}",
     ),
     "timelineItems": (
         "Issue",
@@ -328,7 +383,12 @@ NESTED = {
         "itemTypes:[CROSS_REFERENCED_EVENT]",
         "... on CrossReferencedEvent{source{... on PullRequest{number repository{nameWithOwner}}}}",
     ),
-    "closingIssuesReferences": ("PullRequest", "closingIssuesReferences", "", "number"),
+    "closingIssuesReferences": (
+        "PullRequest",
+        "closingIssuesReferences",
+        "",
+        "number repository{nameWithOwner}",
+    ),
     "comments": ("PullRequest", "comments", "", "authorAssociation body"),
     "contexts": (
         "StatusCheckRollup",
@@ -474,6 +534,21 @@ def _top_pages(gql: Gql, query: str, owner: str, name: str, field: str) -> list[
     raise BoardError(f"read {len(nodes)} {field} against a total of {total} on {LIST_READS} reads")
 
 
+def head_commit(gql: Gql, owner: str, name: str) -> str:
+    """The first seven characters of the commit the default branch stands at.
+
+    A repository with no default branch, or one GitHub answers without its
+    head, stops the run, because a footer naming no commit would read as a
+    board built against nothing.
+    """
+    data = gql(HEAD_QUERY, {"owner": owner, "name": name})
+    ref = (data.get("repository") or {}).get("defaultBranchRef") or {}
+    oid = (ref.get("target") or {}).get("oid")
+    if not isinstance(oid, str) or not re.fullmatch(r"[0-9a-f]{7,}", oid):
+        raise BoardError(f"{owner}/{name} has no default branch head to name: {oid!r}")
+    return oid[:7]
+
+
 def card_kinds(
     labels: list[str], sub_issues: int, kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS
 ) -> list[str]:
@@ -525,21 +600,42 @@ def _rollup(gql: Gql, pr: dict, unknown: set[str]) -> list[list[str]]:
     return out
 
 
+def in_repo(node: dict | None, repo: str) -> bool:
+    """Whether an issue or pull request GitHub listed belongs to ``repo``.
+
+    A closing link, a cross-reference or a "blocked by" link can name an issue
+    or pull request in another repository, whose number means nothing here.
+    Read as this repository's, it would fetch an unrelated pull request of the
+    same number, stop the run when there is none, or draw a branch on the
+    wrong card.
+
+    A null entry, or one with no repository, reads as another repository's.
+    That does not break the rule that the run fails closed. ``GhGraphql``
+    stops the run on any response carrying GraphQL errors, so a null here is
+    one GitHub sent with no error, an entry the token cannot read. The build
+    job's token reads every issue and pull request in the caller's repository,
+    so such an entry is never this repository's, and dropping it loses
+    nothing from the board.
+    """
+    return bool(node) and (node.get("repository") or {}).get("nameWithOwner") == repo
+
+
 def pr_items(
     gql: Gql,
     pr: dict,
     open_issues: set[int],
+    repo: str,
     unknown: set[str],
     working: frozenset[int] = frozenset(),
 ) -> list[dict]:
     """One item per open issue the pull request names, or none at all.
 
-    A pull request names an issue through GitHub's closing link or through a
-    ``Part of`` reference anywhere in its body outside a code span or a fenced
-    code block. One that names no open issue gets no item, because a branch
-    with no card has nowhere to be drawn and a null issue would make the page
-    refuse the whole section. One that closes two issues gets two items,
-    because the page keys pull requests by issue.
+    A pull request names an issue through a closing link to an issue in this
+    repository, or through a ``Part of`` reference anywhere in its body outside
+    a code span or a fenced code block. One that names no open issue gets no
+    item, because a branch with no card has nowhere to be drawn and a null
+    issue would make the page refuse the whole section. One that closes two
+    issues gets two items, because the page keys pull requests by issue.
 
     A pull request opened from a fork gets no item either. Anyone can open one
     on a public repository, and its ``Part of`` reference or closing keyword
@@ -562,6 +658,7 @@ def pr_items(
     closing = {
         n["number"]
         for n in _all_nodes(gql, pr["id"], "closingIssuesReferences", pr["closingIssuesReferences"])
+        if in_repo(n, repo)
     }
     part_of = {int(m) for m in PART_OF.findall(outside_code(pr.get("body") or ""))}
     named = sorted((closing | part_of) & open_issues)
@@ -606,10 +703,11 @@ def _referenced_prs(gql: Gql, issue: dict, repo: str) -> set[int]:
             "closedByPullRequestsReferences",
             issue["closedByPullRequestsReferences"],
         )
+        if in_repo(n, repo)
     }
     for event in _all_nodes(gql, issue["id"], "timelineItems", issue["timelineItems"]):
-        source = (event or {}).get("source") or {}
-        if "number" in source and source.get("repository", {}).get("nameWithOwner") == repo:
+        source = (event or {}).get("source")
+        if in_repo(source, repo) and "number" in source:
             numbers.add(source["number"])
     return numbers
 
@@ -665,11 +763,7 @@ def tracker_card(
         "label": issue["title"],
         "kind": (kinds or ["ready"])[0],
         "needs": sorted(
-            {
-                b["number"]
-                for b in blockers
-                if b["state"] == "OPEN" and (b.get("repository") or {}).get("nameWithOwner") == repo
-            }
+            {b["number"] for b in blockers if in_repo(b, repo) and b["state"] == "OPEN"}
             & open_issues
         ),
         "labels": [x for x in names if not BAND.match(x) and x not in WORKING],
@@ -788,6 +882,9 @@ def build(
     now: datetime,
     title: str = "",
     data_label: str = "",
+    subtitle: str = "",
+    note: str = "",
+    default_branch_head: str = "",
     label_colors: str = "",
     sort_labels: str = "",
 ) -> tuple[dict, dict]:
@@ -799,15 +896,29 @@ def build(
     into the board too, because the page builds every issue and pull request
     link from it and names no repository of its own. ``data_label`` is the
     label that marks a card waiting on data, and an empty one reads no such
-    kind. ``label_colors`` and ``sort_labels`` are each empty or ``true``.
-    The first writes ``state.labelColors``, each card label's colour as GitHub
-    stores it, and the second sorts each card's labels by name. All three are
-    checked before anything is read from GitHub.
+    kind.
+
+    ``subtitle`` replaces the line under the page's title, ``note`` is a
+    paragraph of the repository's own that ``note_segments`` parses, and
+    ``default_branch_head`` set to ``true`` reads the default branch's head
+    for the footer, at the price of one more request. Each lands in ``state``
+    only when it is set, so a caller setting none gets the board it got
+    before.
+
+    ``default_branch_head``, ``label_colors`` and ``sort_labels`` are each
+    empty or ``true``, read by ``switch``. ``label_colors`` writes
+    ``state.labelColors``, each card label's colour as GitHub stores it, and
+    ``sort_labels`` sorts each card's labels by name. The data label, the note
+    and the three on-or-off inputs are checked before anything is read from
+    GitHub.
     """
     kinds_read = kind_labels(data_label)
+    pieces = note_segments(note)
+    head = switch("default-branch-head", default_branch_head)
     colours_wanted = switch("label-colors", label_colors)
     by_name = switch("sort-labels", sort_labels)
     owner, name = repo.split("/", 1)
+    main = head_commit(gql, owner, name) if head else None
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
     open_issues = {i["number"] for i in issues}
 
@@ -858,23 +969,30 @@ def build(
     left_out = []
     busy = frozenset(w["n"] for w in working)
     for pr in open_prs + others:
-        items = pr_items(gql, pr, open_issues, unknown, busy)
+        items = pr_items(gql, pr, open_issues, repo, unknown, busy)
         if not items and pr["state"] == "OPEN":
             left_out.append(pr["number"])
         prs += items
     prs.sort(key=lambda p: (p["issue"], p["pr"]))
 
+    state = {
+        "schema": SCHEMA,
+        "repo": repo,
+        "title": title or f"{name} build board",
+        "updatedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "issues": {"open": len(issues)},
+        "source": "github",
+        "longestGapMinutes": longest_gap,
+        "staleAfterMinutes": stale_after_minutes(longest_gap),
+    }
+    if subtitle:
+        state["subtitle"] = subtitle
+    if pieces:
+        state["note"] = pieces
+    if main:
+        state["main"] = main
     board = {
-        "state": {
-            "schema": SCHEMA,
-            "repo": repo,
-            "title": title or f"{name} build board",
-            "updatedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "issues": {"open": len(issues)},
-            "source": "github",
-            "longestGapMinutes": longest_gap,
-            "staleAfterMinutes": stale_after_minutes(longest_gap),
-        },
+        "state": state,
         "prs": {"schema": SCHEMA, "items": prs},
         "working": {"schema": SCHEMA, "items": working},
         "planned": {"schema": SCHEMA, "items": planned},
@@ -926,6 +1044,9 @@ def cmd_build(args: argparse.Namespace) -> None:
         now,
         args.title,
         args.data_label,
+        subtitle=args.subtitle,
+        note=args.note,
+        default_branch_head=args.default_branch_head,
         label_colors=args.label_colors,
         sort_labels=args.sort_labels,
     )
@@ -1046,6 +1167,17 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--title", default="", help="the page's heading, <name> build board if empty")
     b.add_argument(
         "--data-label", default="", help="the label marking a card waiting on data, none if empty"
+    )
+    b.add_argument(
+        "--subtitle", default="", help="the line under the heading, the page's own if empty"
+    )
+    b.add_argument(
+        "--note", default="", help="a paragraph whose only markup is [words](https://...)"
+    )
+    b.add_argument(
+        "--default-branch-head",
+        default="",
+        help="true to name the default branch's head in the footer, nothing if empty",
     )
     b.add_argument(
         "--label-colors", default="", help="true to colour label chips from GitHub, empty not to"

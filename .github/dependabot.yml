@@ -31,8 +31,10 @@ updates:
           - minor
           - patch
 
-  # Actions pinned in ci.yml. They move together and are low-risk, so one
-  # grouped pull request is enough.
+  # Actions named in ci.yml by tag and in build-board.yml by commit SHA, with
+  # the release in a trailing comment. A bump rewrites the SHA and the comment
+  # together. They move together and are low-risk, so one grouped pull request
+  # is enough.
   - package-ecosystem: github-actions
     directory: /
     schedule:

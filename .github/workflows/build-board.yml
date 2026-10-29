@@ -24,8 +24,9 @@ name: Build board
 # that pins this workflow to a commit therefore gets that commit's generator
 # and page as well, and its board changes only when it moves the pin.
 #
-# Two rules keep this workflow inside the ruleset, which refuses a merge while
-# CodeQL reports a high or critical alert, and keep strangers out of it.
+# Three rules keep strangers out of this workflow. The first two also keep it
+# inside the ruleset, which refuses a merge while CodeQL reports a high or
+# critical alert.
 #
 # 1. No step reads the event payload. Anyone can file an issue on a public
 #    repository, so an issue title expanded into a run step would run as
@@ -35,6 +36,11 @@ name: Build board
 #    the default branch, so nothing here checks out a pull request's code. The
 #    caller's own checkout takes the default ref, and the other takes this
 #    workflow's commit.
+# 3. Every action is named by a full commit SHA, with its release in a
+#    trailing comment. A tag can be moved to another commit, and the deploy
+#    job holds pages: write and id-token: write, so whoever moved a tag would
+#    choose what runs with them. A SHA cannot be moved. Dependabot's
+#    github-actions entry rewrites a SHA and its comment together.
 on:
   workflow_call:
     inputs:
@@ -71,7 +77,7 @@ jobs:
       # from its cron line to say when the board is stale, and the caller's
       # icon when it names one. actions/checkout drops an empty line from
       # this list, so an empty `icon` leaves the workflow file alone.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: caller
@@ -80,7 +86,7 @@ jobs:
             ${{ inputs.icon }}
           sparse-checkout-cone-mode: false
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: template
@@ -115,7 +121,7 @@ jobs:
             cp template/.claude/skills/update-build-board/favicon.ico _site/favicon.ico
           fi
 
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
 
@@ -136,9 +142,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: template

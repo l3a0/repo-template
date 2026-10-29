@@ -1,0 +1,86 @@
+name: Board
+
+# Starts the build board's rebuild, which the reusable workflow
+# .github/workflows/build-board.yml in l3a0/repo-template carries out. A
+# repository seeded from the template copies this file unchanged except for the
+# ref on the `uses:` line, which it pins to a full commit SHA of
+# l3a0/repo-template. The template itself calls `main`, so its own board runs
+# the shared path before any seeded repository pins it.
+#
+# Provenance: the triggers, permissions and concurrency group of
+# .github/workflows/board.yml in l3a0/quantitative-trading at commit 6da0ee3,
+# landed here by the pull request that closes l3a0/repo-template#24. The jobs
+# moved into the reusable workflow, and the job here grants the scopes both of
+# them need, because a called workflow can only narrow what its caller grants.
+#
+# A label, a body edit or a comment starts a run through `issues` and
+# `issue_comment`. A "blocked by" link and a sub-issue start none, because
+# GitHub Actions lists no trigger for either, so the session that sets one
+# dispatches this workflow on main through workflow_dispatch. The
+# update-build-board skill names the command and the moments that need it.
+#
+# Every trigger below except workflow_dispatch fires only once this file is on
+# main, and every one of them runs on the default branch, which is the only
+# branch the github-pages environment lets deploy. Since 2025-12-08 that holds
+# for pull_request_target too, whatever a pull request's base, as GitHub's
+# changelog of 2025-11-07 states. Its filter admits only pull requests into
+# main, because GitHub registers a closing link only on a pull request into
+# the default branch. One into another base still reaches the board, through
+# its Part of line, on the next run of any kind. pull_request and
+# pull_request_review run on a merge ref instead, and check_suite never fires
+# for a suite GitHub Actions created, so neither is here.
+#
+# The reusable workflow checks out no pull request's code and no step reads
+# the event payload, which its own header explains.
+on:
+  issues:
+  issue_comment:
+  # Its default types are opened, synchronize and reopened. A merged Part of
+  # pull request closes no issue, so without `closed` it would read as open
+  # until the cron run, and without `edited` so would a corrected closing link.
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed, edited]
+  # The only event that fires when ci.yml's checks settle. CodeQL's default
+  # setup has no workflow file here, so its result reaches the board on the
+  # next run of any kind.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  # Catches a change made with a workflow's own token, which starts no run,
+  # and a dispatch a session forgot. Nothing can rely on it, because GitHub
+  # delays or drops a scheduled run under load: one measurement of this
+  # schedule saw about 11% of its slots fire over 185 hours, with up to 603
+  # minutes between two runs. The generator reads this line, and the page
+  # calls the board stale once it is older than the longest gap between two
+  # runs plus SCHEDULE_DELAY_ALLOWANCE in scripts/build_board.py, so changing
+  # the line here moves the threshold too. Off the hour, because the top of
+  # the hour is when GitHub is busiest.
+  schedule:
+    - cron: "8,38 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+# Runs deploy one at a time, so an older snapshot never replaces a newer one.
+# GitHub keeps only the newest waiting run, which is the one worth deploying.
+# The group lives here beside the triggers, so every run of the caller shares
+# it whichever event started it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  board:
+    # The union of the scopes the reusable workflow's two jobs declare. Each
+    # of its jobs narrows this to what it uses.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: read
+      statuses: read
+      pages: write
+      id-token: write
+      actions: read
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@main

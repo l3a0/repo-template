@@ -32,13 +32,16 @@ from whichever copy it was cloned off.
   moved, which `CLAUDE.md` already requires, covers the same failure on the
   branches where the base actually matters.
 - **[.github/labels.json](.github/labels.json)** is the label set the triage
-  rule in CLAUDE.md expects to exist.
+  rule in CLAUDE.md and the build board expect to exist.
 - **[.github/dependabot.yml](.github/dependabot.yml)** groups minor and patch
   bumps, keeps majors separate, and keeps ruff on its own so a new lint rule
   never turns an unrelated pull request red.
 - **[scripts/setup-repo.sh](scripts/setup-repo.sh)** applies the ruleset, the
-  labels, and CodeQL default setup to a repository. It is idempotent and takes
-  `DRY_RUN=1`.
+  labels, CodeQL default setup, GitHub Pages and the `github-pages`
+  environment to a repository. It is idempotent and takes `DRY_RUN=1`.
+- **The build board** is a page on GitHub Pages saying what is in flight and
+  what to take next, rebuilt from GitHub by a reusable workflow that every
+  seeded repo calls. The section below explains it.
 - **[docs/design.md](docs/design.md)** and
   **[docs/build-plan.md](docs/build-plan.md)** are skeletons for the two docs
   CLAUDE.md refers to by name.
@@ -56,7 +59,7 @@ cd new-repo
 scripts/setup-repo.sh l3a0/new-repo
 ```
 
-Then do the five things nothing can guess.
+Then do the six things nothing can guess.
 
 1. Fill the premise slot at the top of `CLAUDE.md` and the premise section in
    `docs/design.md`. Every later ranking decision appeals to it, so it comes
@@ -70,12 +73,60 @@ Then do the five things nothing can guess.
 5. Decide on both modules in `docs/optional-policies.md`, move what applies
    into the **Repo-specific policy** heading in `CLAUDE.md`, and delete the
    file.
+6. Pin the build board and delete the template's copy of it, as the next
+   section says.
 
 Then check the work is finished. Every remaining hit is a slot nobody filled:
 
 ```bash
 git grep -nE 'PROJECT_NAME|OWNER/REPO|TEMPLATE:|TODO|src/project'
 ```
+
+## The build board
+
+The board answers what is in flight and what to take next, from labels,
+"blocked by" links and marker lines on GitHub, so no session writes it by
+hand. It came from
+[quantitative-trading](https://github.com/l3a0/quantitative-trading), which
+built it first. One copy lives here rather than one per repo, because the
+generator and the page run to about 2,900 lines that still change often, and
+copies of them drift.
+
+The pieces are these.
+
+- **[.github/workflows/build-board.yml](.github/workflows/build-board.yml)** is
+  the reusable workflow. It builds `board.json` with
+  [scripts/build_board.py](scripts/build_board.py) and publishes it on Pages
+  beside the page,
+  [.claude/skills/update-build-board/board.html](.claude/skills/update-build-board/board.html).
+  It checks both out from this repo at the commit the caller pinned.
+- **[.github/workflows/board.yml](.github/workflows/board.yml)** is the caller.
+  It holds the triggers, the permissions and the concurrency group, and calls
+  the reusable workflow. This repo calls it at `main`, so its own board runs
+  the shared path first.
+- **The two skills**, `update-build-board` and `sync-prune-next` under
+  `.claude/skills/`, tell a session what to set on GitHub and how to read the
+  board.
+
+A seeded repo keeps the caller and the two skills, and runs everything else
+from here at the commit it pins. So after seeding, pin the caller to a full
+commit SHA of this repo's `main`, and delete the template's copy of the board.
+
+```bash
+sha="$(gh api repos/l3a0/repo-template/commits/main --jq .sha)"
+sed -i.bak "s#build-board.yml@main#build-board.yml@$sha#" .github/workflows/board.yml && rm .github/workflows/board.yml.bak
+git rm -r .github/workflows/build-board.yml scripts/build_board.py \
+  .claude/skills/update-build-board/board.html \
+  .claude/skills/update-build-board/dom-stub.js \
+  .claude/skills/update-build-board/favicon.ico \
+  tests/test_build_board.py tests/test_build_board_generator.py \
+  tests/fixtures/build_board
+```
+
+To take a later fix, move the SHA in the caller and copy the two skills from
+the same commit in the same pull request. The skills and the generator share
+the label names and line formats, so a skill newer or older than the pinned
+generator tells a session to set something the board does not read.
 
 ## Running the checks locally
 

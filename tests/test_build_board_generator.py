@@ -673,13 +673,14 @@ def test_label_colors_writes_each_card_labels_colour_lower_cased() -> None:
         [
             issue(
                 1,
-                labels=("opentofu", "band:1", "working:build", "broken", "short"),
+                labels=("opentofu", "band:1", "working:build", "broken", "short", "long"),
                 colors={
                     "opentofu": "F9DB4E",
                     "band:1": "ededed",
                     "working:build": "0e8a16",
                     "broken": "zzzzzz",
                     "short": "fff",
+                    "long": "a2eeef0",
                 },
             ),
             issue(2, labels=("enhancement",), colors={"enhancement": "a2eeef"}),
@@ -690,7 +691,7 @@ def test_label_colors_writes_each_card_labels_colour_lower_cased() -> None:
     assert board["state"]["labelColors"] == {"enhancement": "a2eeef", "opentofu": "f9db4e"}
     assert list(board["state"]["labelColors"]) == ["enhancement", "opentofu"]
     assert list(board["state"]) == [*STATE_KEYS, "labelColors"]
-    assert card(board, 1)["labels"] == ["opentofu", "broken", "short"]
+    assert card(board, 1)["labels"] == ["opentofu", "broken", "short", "long"]
 
 
 def test_a_label_read_on_a_later_page_carries_its_colour() -> None:
@@ -755,7 +756,8 @@ def test_the_command_line_passes_the_label_inputs_through(
     """Protects the two label inputs on their way from the workflow to the board.
 
     The workflow passes each as a flag joined to its value by ``=``, whether or
-    not the caller set it, so an empty value has to read as off.
+    not the caller set it, so an empty value has to read as off. A run of the
+    script that leaves both flags out reads them as off too.
     """
     fake = FakeGitHub([issue(1, labels=("test", "deferred"), colors={"test": "5319E7"})], [])
     fake.requests, fake.retries, fake.cost = 1, 0, 1
@@ -772,6 +774,9 @@ def test_the_command_line_passes_the_label_inputs_through(
     assert written()["state"]["labelColors"] == {"test": "5319e7"}
     assert written()["tracker"]["items"][0]["labels"] == ["deferred", "test"]
     assert bb.main([*argv, "--label-colors=", "--sort-labels="]) == 0
+    assert "labelColors" not in written()["state"]
+    assert written()["tracker"]["items"][0]["labels"] == ["test", "deferred"]
+    assert bb.main(argv) == 0
     assert "labelColors" not in written()["state"]
     assert written()["tracker"]["items"][0]["labels"] == ["test", "deferred"]
 

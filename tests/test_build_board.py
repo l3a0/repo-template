@@ -414,15 +414,20 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
     GitHub's colour is a chip background, so the chip is filled with it and
     lettered in black or white, whichever has the higher contrast. The two
     meet at a relative luminance of 0.179, so ``757575``, at 0.178, letters in
-    white and ``767676``, at 0.181, in black. Pure red, green and blue tell
-    each channel's weight apart. Each colour is drawn exactly as the map holds
-    it, after a ``#``.
+    white and ``767676``, at 0.181, in black. ``006cff``, at 0.1795, letters in
+    black, so the threshold is 0.179 rather than 0.18. ``0075dc``, at 0.1789,
+    letters in white only because a channel at or below 0.04045 is scaled
+    linearly, as WCAG's formula says, rather than raised to the power 2.4.
+    Pure red, green and blue tell each channel's weight apart. Each colour is
+    drawn exactly as the map holds it, after a ``#``.
     """
     colours = {
         "enhancement": "a2eeef",
         "bug": "b60205",
         "grey-dark": "757575",
         "grey-light": "767676",
+        "just-above": "006cff",
+        "low-channel": "0075dc",
         "red": "ff0000",
         "green": "00ff00",
         "blue": "0000ff",
@@ -433,6 +438,8 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
         "bug": "#fff",
         "grey-dark": "#fff",
         "grey-light": "#000",
+        "just-above": "#000",
+        "low-channel": "#fff",
         "red": "#000",
         "green": "#000",
         "blue": "#fff",
@@ -443,20 +450,20 @@ def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    "colours",
+    ("label", "colours", "before"),
     [
-        {"test": "000;background:url(x)"},
-        {"test": "5319E7"},
-        {"test": "fff"},
-        {"test": 5319},
-        {"other": "a2eeef"},
-        ["a2eeef"],
-        "a2eeef",
+        ("test", {"test": "000;background:url(x)"}, "#5319e7"),
+        ("test", {"test": "5319E7"}, "#5319e7"),
+        ("test", {"test": "fff"}, "#5319e7"),
+        ("test", {"test": 5319}, "#5319e7"),
+        ("test", {"other": "a2eeef"}, "#5319e7"),
+        ("0", ["a2eeef"], "var(--faint)"),
+        ("0", "a2eeef", "var(--faint)"),
     ],
     ids=["style", "upper-case", "three-digits", "number", "no-entry", "list", "string"],
 )
 def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
-    tmp_path: Path, colours: object
+    tmp_path: Path, label: str, colours: object, before: str
 ) -> None:
     """Protects the style attribute from a value the document should not hold.
 
@@ -464,9 +471,11 @@ def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
     itself rather than trusting the generator. A value that is not six
     lower-case hex digits, a label the map has no entry for, or a map that is
     not an object draws the ``LABEL_HUE`` chip, and the board is not refused.
+    A list or a string has an own key ``0``, so the label ``0`` tells a map
+    that is not an object from one that is.
     """
-    drawn = _chips(tmp_path, ["test"], colours)
-    assert '<b style="color:#5319e7">test</b>' in drawn
+    drawn = _chips(tmp_path, [label], colours)
+    assert f'<b style="color:{before}">{label}</b>' in drawn
     assert '<b style="background:' not in drawn
 
 

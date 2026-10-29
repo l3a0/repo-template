@@ -20,7 +20,9 @@ name: Build board
 # the label that marks a card waiting on data, which the page then draws in a
 # fourth column. An `owner-body-lines` input, added by the pull request that
 # closes l3a0/repo-template#48, reads order and after lines only from issues
-# the owner opened.
+# the owner opened. A `milestone-default` input, added by the pull request that
+# closes l3a0/repo-template#45, draws a milestone selector on the page and
+# names the milestone it opens on.
 #
 # The generator and the page come from the commit this workflow was read at,
 # which `job.workflow_repository` and `job.workflow_sha` name. Inside a called
@@ -77,6 +79,14 @@ on:
           Any other value fails the run.
         type: string
         default: ""
+      milestone-default:
+        description: >-
+          The milestone the page opens on, where <n> stands for a number, such
+          as MVP <n> for the lowest-numbered open "MVP" milestone. Setting it
+          draws a milestone selector and cuts each milestone's title at its
+          first comma. Empty draws no selector and keeps whole titles.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -122,6 +132,7 @@ jobs:
           TITLE: ${{ inputs.title }}
           DATA_LABEL: ${{ inputs.data-label }}
           OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
+          MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
@@ -129,6 +140,7 @@ jobs:
           --title="$TITLE"
           --data-label="$DATA_LABEL"
           --owner-body-lines="$OWNER_BODY_LINES"
+          --milestone-default="$MILESTONE_DEFAULT"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

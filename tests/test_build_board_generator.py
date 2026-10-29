@@ -28,7 +28,10 @@ board's repository and title, the label file and the github-pages
 environment, and docstrings citing that repository's history were restated as
 the rules they protect. The pull request that closes l3a0/repo-template#40
 brought the ``blocked-on-data`` cases back, read through ``--data-label``, from
-the same file at l3a0/quantitative-trading commit ``4755ac62``.
+the same file at l3a0/quantitative-trading commit ``4755ac62``. The pull
+request that closes l3a0/repo-template#45 added the ``--milestone-default``
+cases, porting the default cases of ``tests/component/test_board_page.py`` in
+l3a0/marketlake at commit ``cc9d3432`` from the page to ``default_milestone``.
 """
 
 from __future__ import annotations
@@ -57,6 +60,7 @@ from tests.test_build_board import (
     served,
     text,
 )
+from tests.test_build_board import draw as draw_page
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "build_board.py"
@@ -260,8 +264,8 @@ class FakeGitHub:
         return {"rateLimit": {"cost": 1}, "repository": found}
 
 
-def build(gh: FakeGitHub, data_label: str = "") -> tuple[dict, dict]:
-    return bb.build(gh, REPO, 30, NOW, data_label=data_label)
+def build(gh: FakeGitHub, data_label: str = "", milestone_default: str = "") -> tuple[dict, dict]:
+    return bb.build(gh, REPO, 30, NOW, data_label=data_label, milestone_default=milestone_default)
 
 
 def prs_of(board: dict) -> list[dict]:
@@ -599,6 +603,255 @@ def test_the_command_line_passes_the_data_label_through(
     assert "build_board: the data label 'deferred' is a label the board already reads" in (
         summary.read_text()
     )
+
+
+# ---- The milestone default ----
+#
+# ``--milestone-default`` turns on the page's milestone selector. Only a named
+# one cuts each milestone's title at its first comma and writes
+# ``state.milestoneDefault``, so a caller naming none gets the board it had.
+
+
+@pytest.mark.parametrize(
+    ("names", "chosen"),
+    [
+        (["MVP 4", "MVP 4", ""], "MVP 4"),
+        (["MVP 10", "MVP 9", ""], "MVP 9"),
+        (["MVP 4", "MVP 3", ""], "MVP 3"),
+        (["MVP 12", "MVP 10", ""], "MVP 10"),
+        (["Post-MVP 1", "MVP 4", ""], "MVP 4"),
+        (["MVP 4b", "MVPs", ""], None),
+        (["MVP4", "mvp 2", ""], None),
+        (["MVP ", "MVP 0", ""], "MVP 0"),
+        (["", "", ""], None),
+    ],
+    ids=[
+        "one open MVP",
+        "a number, not text",
+        "the lowest open MVP",
+        "two digits",
+        "a prefix",
+        "no MVP name",
+        "near misses",
+        "zero",
+        "none",
+    ],
+)
+def test_the_default_is_the_lowest_numbered_match(names: list[str], chosen: str | None) -> None:
+    """Protects the milestone the page opens on, compared as a number.
+
+    These are marketlake's cases for its page's default, which matched
+    ``^MVP (\\d+)$``. MVP 10 comes after MVP 9, a name with anything around
+    the number is no match, and None opens the page on every milestone. A
+    card with no milestone has the empty name, which no pattern matches.
+    """
+    assert bb.default_milestone("MVP <n>", names) == chosen
+
+
+@pytest.mark.parametrize(
+    ("pattern", "names", "chosen"),
+    [
+        ("v1.<n>", ["v1x2", "v1.3"], "v1.3"),
+        ("v1.<n>", ["v1x2"], None),
+        ("Backlog", ["Backlog", "Backlog 2"], "Backlog"),
+        ("Backlog", ["Backlog 2"], None),
+        ("MVP <n>", ["MVP 4", "MVP 04"], "MVP 04"),
+        ("<n>", ["12", "3", "x"], "3"),
+        ("Slice <n> (beta)", ["Slice 2 (beta)", "Slice 1 (beta"], "Slice 2 (beta)"),
+    ],
+    ids=[
+        "a dot is a dot",
+        "a dot matches no other character",
+        "no number matches one name",
+        "no number matches only that name",
+        "a tie goes to the name that sorts first",
+        "a number alone",
+        "brackets are literal",
+    ],
+)
+def test_the_pattern_matches_its_literal_parts_exactly(
+    pattern: str, names: list[str], chosen: str | None
+) -> None:
+    """Protects a pattern from matching names its caller never wrote.
+
+    Every character but ``<n>`` stands for itself, so a dot or a bracket in a
+    milestone's name is escaped rather than read as a regular expression. A
+    tie between two spellings of one number goes to the name that sorts
+    first, so two runs over the same issues open on the same milestone.
+    """
+    assert bb.default_milestone(pattern, names) == chosen
+
+
+@pytest.mark.parametrize(
+    ("pattern", "reason"),
+    [
+        ("MVP <n>.<n>", "names <n> more than once"),
+        ("MVP <n>, serve", "has a comma"),
+    ],
+)
+def test_a_milestone_default_no_name_can_match_is_refused(pattern: str, reason: str) -> None:
+    """Protects a board from a pattern that would open it on every milestone in silence.
+
+    A pattern with two numbers has no single number to compare, and one with
+    a comma can match no short name, since every name is cut at its first
+    comma. The run stops before reading GitHub rather than publish that.
+    """
+    gh = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match=reason):
+        build(gh, milestone_default=pattern)
+    assert gh.calls == []
+
+
+def test_with_no_milestone_default_the_board_keeps_whole_titles_and_no_default() -> None:
+    """Protects every caller that names no milestone default from a change to its board.
+
+    Two current callers have milestone titles with a comma. With the input
+    empty, ``ms`` keeps the whole title, ``state`` carries no
+    ``milestoneDefault``, and two titles that would cut to one name report
+    nothing, so the board and its job summary are what they were.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, milestone="Round 1, gaps the first review found"),
+            issue(2, milestone="Round 1, the second pass"),
+            issue(3, milestone=None),
+        ],
+        [],
+    )
+    board, report = build(gh)
+    assert [c["ms"] for c in board["tracker"]["items"]] == [
+        "Round 1, gaps the first review found",
+        "Round 1, the second pass",
+        "",
+    ]
+    assert "milestoneDefault" not in board["state"]
+    assert report["label_conflicts"] == []
+
+
+def test_a_milestone_default_cuts_each_title_and_names_the_milestone() -> None:
+    """Protects the selector's names and the milestone the page opens on.
+
+    Each title is cut at its first comma and stripped, a card with no
+    milestone keeps the empty name, and the default is resolved against the
+    cut names, since "MVP 4, serve the bars" never matches ``MVP <n>`` whole.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, milestone="MVP 5, take orders"),
+            issue(2, milestone="MVP 4 , serve the bars"),
+            issue(3, milestone="Round 1, gaps the first review found"),
+            issue(4, milestone=None),
+            issue(5, milestone="Backlog"),
+        ],
+        [],
+    )
+    board, report = build(gh, milestone_default="MVP <n>")
+    assert [c["ms"] for c in board["tracker"]["items"]] == [
+        "MVP 5",
+        "MVP 4",
+        "Round 1",
+        "",
+        "Backlog",
+    ]
+    assert board["state"]["milestoneDefault"] == "MVP 4"
+    assert report["label_conflicts"] == []
+    board, _ = build(gh, milestone_default="Slice <n>")
+    assert board["state"]["milestoneDefault"] is None
+
+
+def test_two_titles_cutting_to_one_name_are_reported() -> None:
+    """Protects the selector from merging two milestones without saying so.
+
+    Two open milestones whose titles cut to one name would read as one entry
+    in the selector, so the run lists them where the job summary lists what
+    disagrees, three of them as a group.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, milestone="MVP 4, serve the bars"),
+            issue(2, milestone="MVP 4, take orders"),
+            issue(3, milestone="MVP 4, take orders"),
+            issue(4, milestone="Slice 1, a"),
+            issue(5, milestone="Slice 1, b"),
+            issue(6, milestone="Slice 1"),
+        ],
+        [],
+    )
+    _, report = build(gh, milestone_default="MVP <n>")
+    assert report["label_conflicts"] == [
+        'milestones "MVP 4, serve the bars" and "MVP 4, take orders" both cut to "MVP 4"',
+        'milestones "Slice 1", "Slice 1, a" and "Slice 1, b" all cut to "Slice 1"',
+    ]
+
+
+def test_the_command_line_passes_the_milestone_default_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the reusable workflow's ``milestone-default`` input on its way to the page.
+
+    The workflow passes the input whether or not the caller set it, so an
+    empty value writes no ``milestoneDefault`` and no summary row, which keeps
+    the summary's other rows where they were. A set one names what it matched,
+    and one that matches nothing says so, because a misspelt pattern fails no
+    read. The pattern goes in a code span, or GitHub's renderer would read
+    ``<n>`` as a tag. A refused one fails the run with its reason in the
+    summary.
+    """
+    fake = FakeGitHub([issue(1, milestone="MVP 4, serve the bars")], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def state() -> dict:
+        return json.loads((out / "board.json").read_text())["state"]
+
+    assert bb.main([*argv, "--milestone-default=MVP <n>"]) == 0
+    assert state()["milestoneDefault"] == "MVP 4"
+    assert summary.read_text().endswith(
+        "| Data label | none named |\n| Milestone default | `MVP <n>` opens on MVP 4 |\n"
+    )
+    summary.unlink()
+    assert bb.main([*argv, "--milestone-default=Slice <n>"]) == 0
+    assert state()["milestoneDefault"] is None
+    assert "| Milestone default | `Slice <n>` matches no open milestone |" in summary.read_text()
+    summary.unlink()
+    assert bb.main([*argv, "--milestone-default="]) == 0
+    assert "milestoneDefault" not in state()
+    assert summary.read_text().endswith("| Data label | none named |\n")
+    summary.unlink()
+    assert bb.main(argv) == 0
+    assert "milestoneDefault" not in state()
+    (out / "board.json").unlink()
+    summary.unlink()
+    assert bb.main([*argv, "--milestone-default=MVP <n>, x"]) == 1
+    assert not (out / "board.json").exists()
+    assert "build_board: the milestone default 'MVP <n>, x' has a comma" in summary.read_text()
+
+
+def test_the_page_opens_on_the_milestone_the_generator_names(tmp_path: Path) -> None:
+    """Protects the join between the generator's default and the page's selector.
+
+    The page lists the cut names, opens on the one the generator resolved, and
+    draws only that milestone's cards.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, milestone="MVP 4, serve the bars", labels=("band:1",)),
+            issue(2, milestone="MVP 5, take orders", labels=("band:1",)),
+            issue(3, milestone=None, labels=("band:1",)),
+        ],
+        [],
+    )
+    board, _ = build(gh, milestone_default="MVP <n>")
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids = draw_page(tmp_path, board)
+    assert ids["mssel"]["value"] == "MVP 4"
+    assert '<option value="MVP 5">MVP 5 (1)</option>' in ids["mssel"]["html"]
+    assert cards(ids, "board") == {1}
 
 
 # ---- The judgement fields, from labels, links and lines ----
@@ -3056,6 +3309,7 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.icon",
                 "inputs.data-label",
                 "inputs.owner-body-lines",
+                "inputs.milestone-default",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -3074,7 +3328,8 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
     of which a stranger writes. ``inputs.title``, ``inputs.icon``,
-    ``inputs.data-label`` and ``inputs.owner-body-lines`` are written by the
+    ``inputs.data-label``, ``inputs.owner-body-lines`` and
+    ``inputs.milestone-default`` are written by the
     caller's own file. Each reaches the shell only through an environment
     variable, and the icon also names a file for the caller's checkout, which
     is an action's input rather than shell.
@@ -3089,6 +3344,9 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     owner = re.findall(r"^(.*)\$\{\{\s*inputs\.owner-body-lines\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in owner] == [("OWNER_BODY_LINES:", "")]
     assert '--owner-body-lines="$OWNER_BODY_LINES"' in _called()
+    default = re.findall(r"^(.*)\$\{\{\s*inputs\.milestone-default\s*\}\}(.*)$", _called(), re.M)
+    assert [(before.strip(), after) for before, after in default] == [("MILESTONE_DEFAULT:", "")]
+    assert '--milestone-default="$MILESTONE_DEFAULT"' in _called()
     icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in icon] == [("", ""), ("ICON:", "")]
 
@@ -3126,14 +3384,21 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     label, would fail or change every such run. An empty title gives
     ``<name> build board``, an empty icon serves the template's, an empty
     data label reads no ``data`` kind, and an empty ``owner-body-lines`` reads
-    body lines from anyone's issue, as every run did before it. The README and
+    body lines from anyone's issue, as every run did before it. An empty milestone default draws no
+    selector. The README and
     the l3a0 plugin's update-build-board skill name the inputs by the keys
     declared here.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
     declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
-    assert list(declared) == ["title", "icon", "data-label", "owner-body-lines"]
+    assert list(declared) == [
+        "title",
+        "icon",
+        "data-label",
+        "owner-body-lines",
+        "milestone-default",
+    ]
     for block in declared.values():
         assert "        type: string\n" in block
         assert '        default: ""' in block
@@ -3142,6 +3407,7 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
     assert f"    with:\n      data-label: {DATA_LABEL}\n" in readme
     assert '    with:\n      owner-body-lines: "true"\n' in readme
+    assert "    with:\n      milestone-default: MVP <n>\n" in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
     assert f"`with: data-label: {DATA_LABEL}`" in _skill()

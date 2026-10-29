@@ -1634,6 +1634,7 @@ def test_the_schedule_stays_off_the_hour() -> None:
             {
                 "github.token",
                 "inputs.title",
+                "inputs.icon",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -1651,13 +1652,17 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
     field expanded into a step as critical, which the ruleset refuses to merge.
     Fields such as ``github.head_ref`` carry a stranger's text without naming
     the event, so each workflow may use only the expressions listed here, none
-    of which a stranger writes. ``inputs.title`` is written by the caller's own
-    file, and it reaches the shell through an environment variable.
+    of which a stranger writes. ``inputs.title`` and ``inputs.icon`` are
+    written by the caller's own file. Each reaches the shell only through an
+    environment variable, and the icon also names a file for the caller's
+    checkout, which is an action's input rather than shell.
     """
     used = set(re.findall(r"\$\{\{\s*([^}]*?)\s*\}\}", path.read_text(encoding="utf-8")))
     assert used == allowed
     assert "TITLE: ${{ inputs.title }}" in _called()
     assert '--title "$TITLE"' in _called()
+    icon = re.findall(r"^(.*)\$\{\{\s*inputs\.icon\s*\}\}", _called(), re.M)
+    assert [line.strip() for line in icon] == ["", "ICON:"]
 
 
 def test_the_called_workflow_checks_out_its_own_commit() -> None:
@@ -1697,7 +1702,11 @@ def test_nothing_checks_out_a_pull_requests_code() -> None:
     assert re.findall(r"^\s+ref:.*$", flow, re.M) == ["          ref: ${{ job.workflow_sha }}"] * 2
     assert flow.count("persist-credentials: false") == 3
     caller = flow.split("path: caller\n", 1)[1].split("\n      - ", 1)[0]
-    assert "sparse-checkout: .github/workflows/board.yml" in caller
+    assert (
+        "sparse-checkout: |\n"
+        "            .github/workflows/board.yml\n"
+        "            ${{ inputs.icon }}\n"
+    ) in caller
     assert "repository:" not in caller
     assert "actions/checkout" not in _workflow()
 
@@ -1885,26 +1894,67 @@ def test_the_page_published_is_the_checked_in_one() -> None:
     assert "--workflow caller/.github/workflows/board.yml" in flow
 
 
-def test_the_icon_is_published_where_the_page_links_it() -> None:
+def _add_the_page(tmp_path: Path, icon: str) -> subprocess.CompletedProcess[str]:
+    """Runs the step that adds the page, in a folder laid out as the runner's."""
+    step = _called().split("- name: Add the page", 1)[1].split("\n      - ", 1)[0]
+    script = step.split("run: |\n", 1)[1]
+    skill = tmp_path / "template" / ".claude" / "skills" / "update-build-board"
+    skill.mkdir(parents=True)
+    (skill / "board.html").write_text("page")
+    (skill / "favicon.ico").write_bytes(b"template icon")
+    (tmp_path / "caller" / ".github" / "board").mkdir(parents=True)
+    (tmp_path / "caller" / ".github" / "board" / "favicon.ico").write_bytes(b"caller icon")
+    (tmp_path / "_site").mkdir()
+    return subprocess.run(
+        ["bash", "-e", "-c", script],
+        cwd=tmp_path,
+        env={**os.environ, "ICON": icon},
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_the_icon_is_published_where_the_page_links_it(tmp_path: Path) -> None:
     """Protects the board's tab from a blank icon.
 
     The page links its icon by a relative address, so Pages serves it only
     when the step that adds the page puts the icon in the same folder under
     that name. A step that dropped the copy, or a page that renamed the link,
-    would leave a browser asking for a file that is not there. The copy runs
-    only after the page's copy succeeds, so joining the two with ``||`` would
-    skip it on every run that works.
+    would leave a browser asking for a file that is not there. The step runs
+    here as the runner runs it, under ``bash -e``, with the ``icon`` input
+    empty, so the template's icon is the one served.
     """
     href = re.search(r'<link rel="icon" href="([^"]+)"', PAGE.read_text(encoding="utf-8"))
     assert href, "the page links no icon"
-    href = href.group(1)
-    step = _called().split("- name: Add the page", 1)[1].split("\n      - ", 1)[0]
-    assert re.search(
-        r"_site/index\.html &&\s+"
-        + re.escape(f"cp template/.claude/skills/update-build-board/{href} _site/{href}"),
-        step,
-    )
-    assert (SKILL_DIR / href).is_file()
+    assert href.group(1) == "favicon.ico"
+    assert (SKILL_DIR / "favicon.ico").is_file()
+    run = _add_the_page(tmp_path, "")
+    assert run.returncode == 0, run.stderr
+    assert (tmp_path / "_site" / "index.html").read_text() == "page"
+    assert (tmp_path / "_site" / "favicon.ico").read_bytes() == b"template icon"
+
+
+def test_the_callers_icon_takes_the_templates_place(tmp_path: Path) -> None:
+    """Protects a repository's own tab icon, named by the ``icon`` input.
+
+    Every board is served from one origin per owner and several are open at
+    once, so a repository may give its board its own icon. The caller's file
+    replaces the template's, under the name the page links.
+    """
+    run = _add_the_page(tmp_path, ".github/board/favicon.ico")
+    assert run.returncode == 0, run.stderr
+    assert (tmp_path / "_site" / "favicon.ico").read_bytes() == b"caller icon"
+
+
+def test_a_missing_icon_fails_the_run(tmp_path: Path) -> None:
+    """Protects the board from deploying with no icon at all.
+
+    A path that names no file would otherwise publish a page linking an icon
+    Pages cannot serve, so the step fails and the last board stays up.
+    """
+    run = _add_the_page(tmp_path, ".github/board/missing.ico")
+    assert run.returncode != 0
+    assert not (tmp_path / "_site" / "favicon.ico").exists()
 
 
 # ---- The setup script ----

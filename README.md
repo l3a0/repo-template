@@ -124,6 +124,16 @@ git rm -r .github/workflows/build-board.yml scripts/build_board.py \
   tests/fixtures/build_board
 ```
 
+A seeded repository can give its board its own tab icon. Commit an `.ico`
+file, for example at `.github/board/favicon.ico`, and name it in the caller's
+job. Left out, the board shows the template's icon.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      icon: .github/board/favicon.ico
+```
+
 To take a later fix, move the SHA in the caller and copy the two skills from
 the same commit in the same pull request. The skills and the generator share
 the label names and line formats, so a skill newer or older than the pinned

@@ -1310,6 +1310,7 @@ def marker_tracker() -> FakeGitHub:
             issue(13, comments=passed, mentioned_by=(31,)),
             issue(14, comments=(("OWNER", VERDICT_LINE), ("OWNER", PASS))),
             issue(15, comments=passed, labels=("deferred", DATA_LABEL)),
+            issue(16, labels=("band:2",), body="Board order: 8\nBoard order: 1\n"),
         ],
         [pull(30, closes=(12,)), pull(31, state="MERGED", body="Part of #13")],
     )

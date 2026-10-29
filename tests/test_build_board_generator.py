@@ -1735,6 +1735,32 @@ def test_nothing_checks_out_a_pull_requests_code() -> None:
     assert "actions/checkout" not in _workflow()
 
 
+def test_every_action_the_called_workflow_runs_is_pinned_to_a_commit() -> None:
+    """Protects the deploy job's scopes from a tag moved to another commit.
+
+    The deploy job holds ``pages: write`` and ``id-token: write``, and a tag can
+    be moved, so an action named by tag runs whatever commit its owner points
+    the tag at next. A full commit SHA cannot be moved. Each pin carries its
+    release in a trailing comment, which Dependabot rewrites with the SHA.
+
+    Every line that is not a comment and names the key ``uses:`` must hold one
+    pin, so a step written in a form the pattern does not expect, such as a
+    flow mapping, fails rather than going unread. The test checks the form of
+    each pin. That each SHA is the commit its release names was checked
+    against the action's own tags when the pins were written.
+    """
+    lines = [
+        line
+        for line in _called().splitlines()
+        if re.search(r"\buses:", line) and not line.lstrip().startswith("#")
+    ]
+    assert lines
+    for line in lines:
+        assert re.fullmatch(
+            r"\s+(?:- )?uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", line
+        ), line
+
+
 def test_the_triggers_are_the_ones_that_can_deploy() -> None:
     """Protects the deploy, which only the default branch may make.
 

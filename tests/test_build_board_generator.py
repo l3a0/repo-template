@@ -1775,9 +1775,11 @@ def test_an_order_of_zero_sorts_first_and_no_order_sorts_at_fifty(
     list, so both are checked.
 
     The page also draws the list reversed. Which pairs a sort compares, and
-    which card of a pair comes first, follows the order it is given. A fallback
-    written wrongly on one side of the comparison sorted the generator's order
-    correctly under JavaScriptCore and the reversed one wrongly.
+    which card of a pair comes first, follows the order it is given, and the
+    two engines the page runs under sort differently. On three cards at 60,
+    none and 0, a fallback written wrongly on one side of the comparison sorted
+    the generator's order correctly under JavaScriptCore and only the reversed
+    one wrongly.
     """
     gh = FakeGitHub(
         [

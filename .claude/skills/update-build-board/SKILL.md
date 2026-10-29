@@ -61,8 +61,10 @@ The `cron` line catches a change made with a workflow's own token, which starts 
 To read the board, as step 3 of `sync-prune-next` does, build it from GitHub rather than fetching the published copy, because the build reads GitHub as it stands rather than as the last run saw it. Run this from the repository root, after the three lines above, with a scratch directory as the output, never the repository.
 
 ```bash
-template scripts/build_board.py > <scratch>/build_board.py && python3 <scratch>/build_board.py build --repo "$REPO" --workflow .github/workflows/board.yml --out <scratch>
+template scripts/build_board.py > <scratch>/build_board.py && uv run --no-project --python '>=3.12' <scratch>/build_board.py build --repo "$REPO" --workflow .github/workflows/board.yml --out <scratch>
 ```
+
+The generator needs Python 3.12 or later, and a bare `python3` can be an older one, such as the 3.9 macOS ships, which fails on import. `uv run --python '>=3.12'` finds or fetches a version that works.
 
 It prints what it read to the terminal and writes `<scratch>/board.json`. A run that fails says why and writes nothing, because the script stops on any read it cannot trust rather than writing a board that reads as correct.
 
@@ -139,7 +141,7 @@ The page's constants live in its code rather than in the data.
 | Constant | Holds |
 | --- | --- |
 | `FLOW` | the five in-flight stages and the test that assigns a card to one |
-| `LABEL_HUE` | one colour per label the template creates: `bug`, `documentation`, `enhancement`, `test`, `deferred`, `question` and `decision`. Any other label renders in the faint ink |
+| `LABEL_HUE` | one colour for each kind and work label the template creates: `bug`, `documentation`, `enhancement`, `test`, `deferred`, `question` and `decision`. Any other label renders in the faint ink |
 | `COLS` | the three build-order column headings and their subtitles, which are rendered prose |
 | `KINDWORD` | the phrase a card prints for its `kind`, such as "deferred on purpose". A new kind prints no phrase until a code change adds one |
 | `READY_RANK` | the order `build`, `decide` and `plan` sort in, read by the ranking sort |

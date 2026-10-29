@@ -32,7 +32,7 @@ from whichever copy it was cloned off.
   moved, which `CLAUDE.md` already requires, covers the same failure on the
   branches where the base actually matters.
 - **[.github/labels.json](.github/labels.json)** is the label set the triage
-  rule in CLAUDE.md expects to exist.
+  rule in CLAUDE.md and the build board expect to exist.
 - **[.github/dependabot.yml](.github/dependabot.yml)** groups minor and patch
   bumps, keeps majors separate, and keeps ruff on its own so a new lint rule
   never turns an unrelated pull request red.
@@ -59,7 +59,7 @@ cd new-repo
 scripts/setup-repo.sh l3a0/new-repo
 ```
 
-Then do the five things nothing can guess.
+Then do the six things nothing can guess.
 
 1. Fill the premise slot at the top of `CLAUDE.md` and the premise section in
    `docs/design.md`. Every later ranking decision appeals to it, so it comes

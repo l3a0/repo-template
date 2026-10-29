@@ -232,7 +232,7 @@ def test_a_pull_request_closing_two_issues_gets_an_item_for_each() -> None:
         # Line start, as most bodies write it.
         ("Part of #482. The rest of the issue stays open.\n", True),
         # Mid-paragraph, as sessions often write it.
-        ("This writes the post. Part of #482. The draft follows it.\n", True),
+        ("This adds the reader. Part of #482. The writer follows it.\n", True),
         # Inside a code span that crosses a line, so the phrase opens a line.
         ("The form reads `a body writes\nPart of #482 on a line`, as shown.\n", False),
         # Inside a fenced code block. The blank line in it ends a paragraph, so
@@ -355,11 +355,11 @@ def test_lowercase_prose_naming_an_issue_is_no_part_of_reference() -> None:
     """
     body = (
         "- The earlier change merged in PR #488, part of #458.\n"
-        "part of #458 was the earlier post.\n"
+        "part of #458 was the earlier change.\n"
         'It merged in #478 as "Part of #459".\n'
         "It also merged in #479 as `Part of #460`.\n"
         "\n"
-        "Part of #462. The draft is created from the merged file.\n"
+        "Part of #462. The rest is built from the merged file.\n"
     )
     gh = FakeGitHub([issue(458), issue(459), issue(460), issue(462)], [pull(491, body=body)])
     board, _ = build(gh)
@@ -1942,6 +1942,10 @@ case "$*" in
     exit 1 ;;
   "api repos/x/y/rulesets")
     echo '[]'; exit 0 ;;
+  "api repos/x/y/environments/github-pages --jq"*)
+    if [ -n "$ENV_POLICY" ]; then echo "$ENV_POLICY"; exit 0; fi
+    echo '{"message":"Not Found","status":"404"}'
+    exit 1 ;;
   "api repos/x/y/environments/github-pages/deployment-branch-policies --jq"*)
     if [ -n "$BRANCHES" ]; then printf '%s\\n' $BRANCHES; exit 0; fi
     echo '{"message":"Not Found","status":"404"}'
@@ -1966,6 +1970,7 @@ def _run_setup(tmp_path: Path, **env_vars: str) -> tuple[subprocess.CompletedPro
         "GH_LOG": str(log),
         "PAGES_TYPE": "",
         "BRANCHES": "",
+        "ENV_POLICY": "",
         **env_vars,
     }
     done = subprocess.run(
@@ -1974,36 +1979,46 @@ def _run_setup(tmp_path: Path, **env_vars: str) -> tuple[subprocess.CompletedPro
     return done, log.read_text()
 
 
+ENV_PUT = (
+    "api --method PUT repos/x/y/environments/github-pages "
+    "-F deployment_branch_policy[protected_branches]=false "
+    "-F deployment_branch_policy[custom_branch_policies]=true"
+)
+ENV_POST = (
+    "api --method POST repos/x/y/environments/github-pages/deployment-branch-policies "
+    "-f name=main -f type=branch"
+)
+
+
 @pytest.mark.parametrize(
-    ("branches", "line", "adds"),
+    ("env_policy", "branches", "line", "puts", "adds"),
     [
-        ("", "environment: allowing main", True),
-        ("release", "environment: allowing main", True),
-        ("release main", "environment: main already allowed", False),
+        ("", "", "environment: allowing main", True, True),
+        ("none", "", "environment: allowing main", True, True),
+        ("custom", "release", "environment: allowing main", False, True),
+        ("custom", "release main", "environment: main already allowed", False, False),
+        ("protected", "", "deploys from protected branches only, left as it is", False, False),
     ],
-    ids=["none", "another-branch", "main-present"],
+    ids=["absent", "no-rule", "another-branch", "main-present", "protected-branches"],
 )
 def test_the_setup_script_limits_the_pages_environment_to_main(
-    tmp_path: Path, branches: str, line: str, adds: bool
+    tmp_path: Path, env_policy: str, branches: str, line: str, puts: bool, adds: bool
 ) -> None:
     """Protects the site from a deploy run on any branch but ``main``.
 
-    The environment takes custom branch policies, sent as booleans rather than
-    strings, and gains a policy for ``main`` unless it has one. A policy for
-    another branch is left alone, and a dry run writes nothing.
+    An environment that is absent or has no branch rule takes custom branch
+    policies, sent as booleans rather than strings. One that already has a
+    rule is not rewritten, because a PUT may drop reviewers or a wait timer
+    the owner set. A policy for ``main`` is added unless one exists, a policy
+    for another branch is left alone, and a dry run writes nothing.
     """
-    done, calls = _run_setup(tmp_path, BRANCHES=branches)
+    done, calls = _run_setup(tmp_path, ENV_POLICY=env_policy, BRANCHES=branches)
     assert done.returncode == 0, done.stderr
     assert line in done.stdout
-    assert (
-        "api --method PUT repos/x/y/environments/github-pages "
-        "-F deployment_branch_policy[protected_branches]=false "
-        "-F deployment_branch_policy[custom_branch_policies]=true" in calls
-    )
-    post = "api --method POST repos/x/y/environments/github-pages/deployment-branch-policies"
-    assert (f"{post} -f name=main -f type=branch" in calls) is adds
+    assert (ENV_PUT in calls) is puts
+    assert (ENV_POST in calls) is adds
     assert "DELETE" not in calls
-    dry, dry_calls = _run_setup(tmp_path, BRANCHES=branches, DRY_RUN="1")
+    dry, dry_calls = _run_setup(tmp_path, ENV_POLICY=env_policy, BRANCHES=branches, DRY_RUN="1")
     assert dry.returncode == 0, dry.stderr
     assert line in dry.stdout
     assert "--method" not in dry_calls
@@ -2013,11 +2028,7 @@ def test_the_setup_script_limits_the_pages_environment_to_main(
     ("pages_type", "line", "write"),
     [
         ("", "pages: enabling, source GitHub Actions", "--method POST repos/x/y/pages"),
-        (
-            "legacy",
-            "pages: switching source from legacy to GitHub Actions",
-            "--method PUT repos/x/y/pages",
-        ),
+        ("legacy", "pages: left as it is, publishing from a branch (legacy).", None),
         ("workflow", "pages: already on, source GitHub Actions", None),
     ],
 )
@@ -2027,7 +2038,9 @@ def test_the_setup_script_turns_pages_on_with_actions_as_its_source(
     """Protects the deploy job, which has nowhere to go with Pages off.
 
     The script reads the site first, so a run against a repository that
-    already has it set leaves it alone, and a dry run writes nothing.
+    already has it set leaves it alone, and a dry run writes nothing. A site
+    publishing from a branch is left alone too, with a message, because
+    switching its source would take down the site it serves.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -2045,7 +2058,7 @@ def test_the_setup_script_turns_pages_on_with_actions_as_its_source(
         ["bash", str(SETUP), "x/y"], env=env, capture_output=True, text=True, check=False
     )
     assert done.returncode == 0, done.stderr
-    assert line in done.stdout
+    assert line in done.stdout + done.stderr
     calls = log.read_text()
     if write:
         assert f"api {write}" in calls
@@ -2062,5 +2075,5 @@ def test_the_setup_script_turns_pages_on_with_actions_as_its_source(
         check=False,
     )
     assert dry.returncode == 0, dry.stderr
-    assert line in dry.stdout
+    assert line in dry.stdout + dry.stderr
     assert "--method" not in (tmp_path / "dry.log").read_text()

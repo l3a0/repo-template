@@ -178,8 +178,10 @@ fi
 # The build board's reusable workflow publishes the board on GitHub Pages
 # through the github-pages environment, and its deploy job has nowhere to go
 # until Pages is on with GitHub Actions as its source rather than a branch.
-# The site is read first, so a repository already set that way is left alone
-# and one publishing from a branch is switched.
+# The site is read first, so a repository already set that way is left alone.
+# One publishing from a branch is left alone too, and the script says so,
+# because switching it would take down the site it serves, which is the
+# owner's call.
 #
 # The exit status decides whether a site exists, not the output. A repository
 # with no site answers 404, and `gh` prints that error's JSON body to stdout,
@@ -191,8 +193,9 @@ if [[ -z "$pages_type" ]]; then
   echo "pages: enabling, source GitHub Actions"
   run gh api --method POST "repos/$repo/pages" -f build_type=workflow >/dev/null
 elif [[ "$pages_type" != "workflow" ]]; then
-  echo "pages: switching source from $pages_type to GitHub Actions"
-  run gh api --method PUT "repos/$repo/pages" -f build_type=workflow >/dev/null
+  echo "pages: left as it is, publishing from a branch ($pages_type)." >&2
+  echo "  The build board deploys only with GitHub Actions as the source. Switch it" >&2
+  echo "  under Settings > Pages if this site can be replaced, then re-run this script." >&2
 else
   echo "pages: already on, source GitHub Actions"
 fi
@@ -201,22 +204,46 @@ fi
 # The board's triggers all run on `main`, and a run from any other branch must
 # not reach the site. GitHub creates the environment when Pages first deploys,
 # so the script creates it here instead, limits it to custom branch policies,
-# and adds a policy for `main` unless one exists. A policy already there for
-# another branch is left alone, because removing one is the owner's call.
-echo "environment: github-pages, deploys from main"
-run gh api --method PUT "repos/$repo/environments/github-pages" \
-  -F 'deployment_branch_policy[protected_branches]=false' \
-  -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
-if ! branch_policies="$(gh api "repos/$repo/environments/github-pages/deployment-branch-policies" \
-  --jq '.branch_policies[] | select(.type == "branch") | .name' 2>/dev/null)"; then
-  branch_policies=""
+# and adds a policy for `main` unless one exists.
+#
+# The environment is read first, and only one with no branch rule at all is
+# written. A PUT rewrites the environment, and GitHub's documentation does not
+# say whether it keeps reviewers or a wait timer it is not sent, so an
+# environment an owner already limited, to protected branches or to its own
+# policies, keeps what it has. A policy already there for another branch is
+# left alone too, because removing one is the owner's call.
+if ! env_policy="$(gh api "repos/$repo/environments/github-pages" \
+  --jq '.deployment_branch_policy | if . == null then "none" elif .custom_branch_policies then "custom" else "protected" end' 2>/dev/null)"; then
+  env_policy="absent"
 fi
-if grep -qx main <<<"$branch_policies"; then
-  echo "environment: main already allowed"
-else
-  echo "environment: allowing main"
-  run gh api --method POST "repos/$repo/environments/github-pages/deployment-branch-policies" \
-    -f name=main -f type=branch >/dev/null
+case "$env_policy" in
+  absent | none)
+    echo "environment: github-pages, limiting to custom branch policies"
+    run gh api --method PUT "repos/$repo/environments/github-pages" \
+      -F 'deployment_branch_policy[protected_branches]=false' \
+      -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
+    ;;
+  protected)
+    echo "environment: github-pages already deploys from protected branches only, left as it is"
+    ;;
+  *)
+    echo "environment: github-pages already uses custom branch policies"
+    ;;
+esac
+# An environment limited to protected branches has no policy list, and its
+# own rule already decides which branches deploy.
+if [[ "$env_policy" != "protected" ]]; then
+  if ! branch_policies="$(gh api "repos/$repo/environments/github-pages/deployment-branch-policies" \
+    --jq '.branch_policies[] | select(.type == "branch") | .name' 2>/dev/null)"; then
+    branch_policies=""
+  fi
+  if grep -qx main <<<"$branch_policies"; then
+    echo "environment: main already allowed"
+  else
+    echo "environment: allowing main"
+    run gh api --method POST "repos/$repo/environments/github-pages/deployment-branch-policies" \
+      -f name=main -f type=branch >/dev/null
+  fi
 fi
 
 # --- Reserved human steps ----------------------------------------------------

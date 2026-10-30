@@ -1868,6 +1868,34 @@ def test_the_owner_sentence_names_what_the_card_waits_on(
         assert "waiting on nothing else" not in flownote
 
 
+@pytest.mark.parametrize(
+    ("rollup", "yours"),
+    [
+        ([["deploy", "skipped"], ["test", "success"]], True),
+        ([["deploy", "skipped"]], False),
+        ([["deploy", "neutral"], ["test", "success"]], False),
+    ],
+    ids=["skipped-beside-a-pass", "only-skipped", "neutral-beside-a-pass"],
+)
+def test_a_skipped_check_beside_a_pass_hands_the_branch_over(
+    tmp_path: Path, rollup: list[list[str]], yours: bool
+) -> None:
+    """Protects a reviewed branch from being held back by a job that never runs on it.
+
+    A job that runs only on the default branch is skipped on every pull
+    request. Read as neither way, it kept every reviewed, green branch out of
+    the owner's column. Read as settled, it hands the branch over once
+    another check passed, and a branch where every check stood aside stays,
+    because nothing built it.
+    """
+    docs = _owner_card()
+    docs["prs"]["items"][0]["rollup"] = rollup
+    ids = draw(tmp_path, docs)
+    assert ("#90501 is yours" in text(ids, "flownote")) is yours
+    if not yours:
+        assert "its checks have not settled green" in text(ids, "flownote")
+
+
 def test_the_owner_sentence_joins_a_free_card_and_a_waiting_one(tmp_path: Path) -> None:
     """Protects the join when the owner's column holds both kinds of card.
 
@@ -2588,7 +2616,12 @@ def test_a_first_board_the_page_refuses_draws_nothing(
         (["success", "success"], "checks green"),
         (["success", "neutral"], "1 check reported neither way"),
         (["success", "SUCCESS"], "1 check reported neither way"),
-        (["success", "skipped"], "1 check reported neither way"),
+        (["success", "skipped"], "checks green"),
+        (["skipped"], "1 check skipped and none ran"),
+        (["skipped", "skipped"], "2 checks skipped and none ran"),
+        (["skipped", "neutral"], "1 check reported neither way"),
+        (["skipped", "running"], "1 check still running"),
+        (["skipped", "failure"], "1 check failing"),
         (["FAILURE", "success"], "1 check reported neither way"),
         (["failure", "running"], "1 check failing, 1 check still running"),
     ],
@@ -2598,8 +2631,14 @@ def test_only_success_reads_as_green(tmp_path: Path, words: list[str], says: str
 
     The page used to count three words and call every other one green, so a
     state passed through in GitHub's own spelling, such as ``FAILURE``, read as
-    a pass. The generator maps every state into the page's four words, and a
+    a pass. The generator maps every state into the page's five words, and a
     word the page does not know now reads as reported neither way.
+
+    ``skipped`` is settled, so a skipped job beside a passing one reads green.
+    A rollup of nothing but skipped jobs is not green, because nothing built
+    the branch, as an empty rollup is not. The generator writes ``skipped``
+    only for a caller that asks for a settled rollup, so no other caller's
+    page changes.
     """
     docs = fixture_docs()
     docs["prs"]["items"][0]["rollup"] = [[f"check {i}", w] for i, w in enumerate(words)]

@@ -192,8 +192,14 @@ def blocker(n: int, state: str, repo: str = REPO) -> dict:
     return {"number": n, "state": state, "repository": {"nameWithOwner": repo}}
 
 
-def check(name: str, conclusion: str | None, status: str = "COMPLETED") -> dict:
-    return {"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion}
+def check(
+    name: str, conclusion: str | None, status: str = "COMPLETED", *, workflow: str | None = None
+) -> dict:
+    """One check run, from the workflow file ``workflow`` names when it names one."""
+    run = {"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion}
+    if workflow is not None:
+        run["checkSuite"] = {"workflowRun": {"file": {"path": workflow}}}
+    return run
 
 
 def status(context: str, state: str) -> dict:
@@ -206,24 +212,59 @@ def pull(
     state: str = "OPEN",
     body: str = "",
     closes: tuple[int | tuple[int, str], ...] = (),
-    comments: tuple[tuple[str, str], ...] = (),
+    comments: tuple[tuple[str, ...], ...] = (),
     contexts: tuple[dict, ...] = (check("test", "SUCCESS"),),
     fork: bool = False,
+    committed: str | None = None,
+    reviews: tuple[tuple[str | None, ...], ...] | None = None,
 ) -> dict:
-    return {
+    """One pull request as the query returns it.
+
+    A comment is ``(association, body)``, or ``(association, body, createdAt)``.
+    ``committed`` is the head commit's ``committedDate``, and ``reviews`` lists
+    ``(association, body, submittedAt)``, or the same with the oid of the
+    commit the review names, which is the head's ``c<n>`` when left out. Each
+    of the three is left out of the fixture unless the test names it, as every
+    fixture written before the ``review-heading`` input left them out, and the
+    head's oid comes with either of the last two.
+    """
+    pr = {
         "id": f"P{n}",
         "number": n,
         "state": state,
         "body": body,
         "isCrossRepository": fork,
         "closingIssuesReferences": conn([ref(i) for i in closes]),
-        "comments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
+        "comments": conn(
+            [
+                {"authorAssociation": a, "body": b, **({"createdAt": t[0]} if t else {})}
+                for a, b, *t in comments
+            ]
+        ),
         "commits": {
             "nodes": [
                 {"commit": {"statusCheckRollup": {"id": f"R{n}", "contexts": conn(list(contexts))}}}
             ]
         },
     }
+    head = pr["commits"]["nodes"][0]["commit"]
+    if committed is not None or reviews is not None:
+        head["oid"] = f"c{n}"
+    if committed is not None:
+        head["committedDate"] = committed
+    if reviews is not None:
+        pr["reviews"] = conn(
+            [
+                {
+                    "authorAssociation": a,
+                    "body": b,
+                    "submittedAt": t,
+                    "commit": {"oid": rest[0] if rest else f"c{n}"},
+                }
+                for a, b, t, *rest in reviews
+            ]
+        )
+    return pr
 
 
 class FakeGitHub:
@@ -284,10 +325,22 @@ class FakeGitHub:
 
 
 def build(
-    gh: FakeGitHub, data_label: str = "", label_colors: str = "", sort_labels: str = ""
+    gh: FakeGitHub,
+    data_label: str = "",
+    label_colors: str = "",
+    sort_labels: str = "",
+    **inputs: str,
 ) -> tuple[dict, dict]:
+    """The board and report for ``gh``, with any of ``review_heading`` and ``settled_rollup``."""
     return bb.build(
-        gh, REPO, 30, NOW, data_label=data_label, label_colors=label_colors, sort_labels=sort_labels
+        gh,
+        REPO,
+        30,
+        NOW,
+        data_label=data_label,
+        label_colors=label_colors,
+        sort_labels=sort_labels,
+        **inputs,
     )
 
 
@@ -1938,6 +1991,9 @@ MARKER_ROWS = [
     "Markers dropped",
     "Finished plans with no verdict after them",
 ]
+# The row the review-heading input added after every row above. It is written
+# whether or not a caller names a heading, as the data label's row is.
+REVIEW_ROWS = ["Review heading"]
 
 
 def test_the_job_summary_adds_the_four_marker_rows_after_the_disagreements(
@@ -1947,7 +2003,7 @@ def test_the_job_summary_adds_the_four_marker_rows_after_the_disagreements(
     text = summary_of(monkeypatch, tmp_path, FakeGitHub([issue(1)], []))
     rows = [line.split(" | ")[0].removeprefix("| ") for line in text.splitlines()[4:]]
     at = SUMMARY_ROWS_BEFORE.index("Labels or lines that disagree") + 1
-    assert rows == SUMMARY_ROWS_BEFORE[:at] + MARKER_ROWS + SUMMARY_ROWS_BEFORE[at:]
+    assert rows == (SUMMARY_ROWS_BEFORE[:at] + MARKER_ROWS + SUMMARY_ROWS_BEFORE[at:] + REVIEW_ROWS)
     for name in MARKER_ROWS:
         assert summary_row(text, name) == "none"
 
@@ -2492,6 +2548,699 @@ def test_only_the_owners_review_heading_counts(association: str, body: str, revi
     item = prs_of(board)[0]
     assert item["reviewed"] is reviewed
     assert item["review"] == ("review posted" if reviewed else "no review posted")
+
+
+# ---- The review heading a caller names ----
+#
+# The times a review is judged against. The head commit was made at HEAD_AT,
+# and a marker counts only when posted strictly after it. The name differs
+# from HEAD, the commit oid the default-branch-head tests read.
+HEAD_AT = "2026-10-29T12:00:00Z"
+AFTER = "2026-10-29T12:05:00Z"
+BEFORE = "2026-10-29T11:55:00Z"
+SECOND_AFTER = "2026-10-29T12:00:01Z"
+HEADING = "Review complete"
+MARKED = "review complete"
+UNMARKED = "no Review complete marker since the head commit"
+# The path the board's own runs come from, as the reusable workflow hardcodes
+# it for the caller, and a CI workflow beside it.
+WORKFLOW_PATH = ".github/workflows/board.yml"
+CI_PATH = ".github/workflows/ci.yml"
+
+
+def _reviewed(pr: dict, **inputs: str) -> tuple[bool, str]:
+    """Whether the board reads ``pr``, which closes issue 5, as reviewed, and its words."""
+    item = prs_of(build(FakeGitHub([issue(5)], [pr]), **inputs)[0])[0]
+    return item["reviewed"], item["review"]
+
+
+@pytest.mark.parametrize(
+    ("comments", "reviews", "marketlake", "shared"),
+    [
+        ((("OWNER", "## Review complete\n\nAll lenses ran.", AFTER),), (), True, True),
+        ((("OWNER", "## Review complete\n", BEFORE),), (), False, True),
+        ((("OWNER", "## Review round 1, lenses running\n", AFTER),), (), False, True),
+        ((("OWNER", "## Review completeness check\n", AFTER),), (), False, True),
+        ((("OWNER", "  ## Review complete\n", AFTER),), (), False, True),
+        ((), (("OWNER", "## Review complete\n", AFTER),), True, False),
+    ],
+    ids=["after-head", "before-head", "round-heading", "longer-heading", "indented", "a-review"],
+)
+def test_the_review_heading_counts_only_its_own_line_after_the_head(
+    comments: tuple, reviews: tuple, marketlake: bool, shared: bool
+) -> None:
+    """Protects the owner's queue from a review that has not finished, or has gone stale.
+
+    These are the six rows of l3a0/repo-template#47's table. Under
+    ``review-heading`` the generator reads l3a0/marketlake's rule: the whole
+    first line is the heading, the author is the owner, and it was posted
+    after the head commit, as a comment or as a submitted review. Without the
+    input the shared rule stands, which counts any owner comment opening
+    ``## Review`` at any time and reads no review, so each row checks both.
+    """
+    pr = pull(6, closes=(5,), comments=comments, reviews=reviews, committed=HEAD_AT)
+    assert _reviewed(pr, review_heading=HEADING) == (marketlake, MARKED if marketlake else UNMARKED)
+    word = "review posted" if shared else "no review posted"
+    assert _reviewed(pr) == (shared, word)
+
+
+@pytest.mark.parametrize(
+    ("comments", "reviews", "committed", "reviewed"),
+    [
+        ((("OWNER", "## Review complete", AFTER),), (), HEAD_AT, True),
+        ((("OWNER", "## Review complete\r\n\r\nAll lenses ran.", AFTER),), (), HEAD_AT, True),
+        ((("OWNER", "## Review complete", HEAD_AT),), (), HEAD_AT, False),
+        ((("OWNER", "## Review complete.", AFTER),), (), HEAD_AT, False),
+        ((("OWNER", "\n## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("OWNER", "## Review complete", AFTER),), (), None, False),
+        ((("NONE", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("COLLABORATOR", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((), (("CONTRIBUTOR", "## Review complete", AFTER),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", None),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", BEFORE),), HEAD_AT, False),
+        ((("OWNER", "## Review complete", None),), (), HEAD_AT, False),
+        (
+            (("OWNER", "## Review complete", BEFORE), ("OWNER", "## Review complete", AFTER)),
+            (),
+            HEAD_AT,
+            True,
+        ),
+        (
+            (("OWNER", "## Review complete", BEFORE),),
+            (("OWNER", "## Review complete", AFTER),),
+            HEAD_AT,
+            True,
+        ),
+        ((("OWNER", "## Review complete", SECOND_AFTER),), (), HEAD_AT, True),
+        ((), (("OWNER", "## Review complete", SECOND_AFTER),), HEAD_AT, True),
+        ((), (("OWNER", "## Review complete", AFTER, "c-older"),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", AFTER, None),), HEAD_AT, False),
+        ((("NONE", "Thanks", BEFORE), ("OWNER", "## Review complete", AFTER)), (), HEAD_AT, True),
+        (
+            (
+                ("OWNER", "## Review round 1, lenses running", AFTER),
+                ("OWNER", "## Review complete", AFTER),
+            ),
+            (),
+            HEAD_AT,
+            True,
+        ),
+        ((("OWNER", "## Review complete", AFTER), ("NONE", "LGTM", AFTER)), (), HEAD_AT, True),
+        ((("MEMBER", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("FIRST_TIMER", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("FIRST_TIME_CONTRIBUTOR", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("MANNEQUIN", "## Review complete", AFTER),), (), HEAD_AT, False),
+    ],
+    ids=[
+        "whole-body",
+        "crlf",
+        "same-second-as-head",
+        "trailing-dot",
+        "second-line",
+        "head-has-no-date",
+        "stranger-comment",
+        "collaborator-comment",
+        "stranger-review",
+        "pending-review",
+        "review-before-head",
+        "comment-with-no-date",
+        "second-marker-after-head",
+        "review-after-a-stale-comment",
+        "comment-one-second-after-head",
+        "review-one-second-after-head",
+        "review-of-an-older-commit",
+        "review-naming-no-commit",
+        "stranger-before-the-marker",
+        "round-heading-before-the-marker",
+        "stranger-after-the-marker",
+        "member-comment",
+        "first-timer-comment",
+        "first-time-contributor-comment",
+        "mannequin-comment",
+    ],
+)
+def test_a_review_heading_needs_the_owner_and_a_time_after_the_head(
+    comments: tuple, reviews: tuple, committed: str | None, reviewed: bool
+) -> None:
+    """Protects the rule's edges: who posted, when, and how the line ends.
+
+    A review still pending has no ``submittedAt``, and a head commit GitHub
+    gives no ``committedDate`` cannot be compared, so either reads as no
+    review rather than as one. GitHub's web editor saves ``\\r\\n``, so the
+    first line may end in ``\\r``. One second after the head is enough, so a
+    rule that adds slack to the comparison fails here. A submitted review
+    names the commit it reviewed, and one started on an older commit reviewed
+    code the head no longer holds, so it does not count however late it was
+    submitted. Every entry is read, so a marker counts wherever it sits among
+    the other comments. Only ``OWNER`` counts, whatever other association
+    GitHub gives the author.
+    """
+    pr = pull(6, closes=(5,), comments=comments, reviews=reviews)
+    if committed is not None:
+        pr["commits"]["nodes"][0]["commit"]["committedDate"] = committed
+    assert _reviewed(pr, review_heading=HEADING) == (reviewed, MARKED if reviewed else UNMARKED)
+
+
+def test_the_review_words_come_from_the_heading_and_name_no_session() -> None:
+    """Protects the card's line from the shared wording under a named heading.
+
+    The words are built from the heading, so a caller naming another one reads
+    its own name back, with only its first letter lowered. Without the input a
+    card held by a session reads ``review in progress``. Under it there is no
+    such wording, because a marker not yet posted reads the same whoever holds
+    the card.
+    """
+    heading = "Ready for Owner"
+    held = issue(5, labels=("working:build",))
+    marked = pull(
+        6,
+        closes=(5,),
+        comments=(("OWNER", "## Ready for Owner", AFTER),),
+        committed=HEAD_AT,
+        reviews=(),
+    )
+    unmarked = pull(7, closes=(5,), committed=HEAD_AT, reviews=())
+    board, _ = build(FakeGitHub([held], [marked, unmarked]), review_heading=heading)
+    assert [(p["pr"], p["reviewed"], p["review"]) for p in prs_of(board)] == [
+        (6, True, "ready for Owner"),
+        (7, False, "no Ready for Owner marker since the head commit"),
+    ]
+    board, _ = build(FakeGitHub([held], [unmarked]))
+    assert prs_of(board)[0]["review"] == "review in progress"
+
+
+def test_a_heading_is_matched_as_written_and_keeps_its_case() -> None:
+    """Protects a heading that holds characters a pattern reads specially.
+
+    The heading is matched as text, so its parentheses and dot match only
+    themselves, and only its first letter is lowered in the card's words.
+    """
+    heading = "Review Complete (v2)"
+    marked = pull(
+        6, closes=(5,), comments=(("OWNER", f"## {heading}", AFTER),), reviews=(), committed=HEAD_AT
+    )
+    assert _reviewed(marked, review_heading=heading) == (True, "review Complete (v2)")
+    near = pull(
+        6,
+        closes=(5,),
+        comments=(("OWNER", "## Review Complete v2", AFTER),),
+        reviews=(),
+        committed=HEAD_AT,
+    )
+    assert _reviewed(near, review_heading=heading) == (
+        False,
+        "no Review Complete (v2) marker since the head commit",
+    )
+
+
+def test_a_review_list_longer_than_a_page_is_read_to_its_end() -> None:
+    """Protects a review GitHub listed past the first hundred.
+
+    Under ``review-heading`` the reviews are read like every other nested
+    list. Without it they are not read at all, since nothing uses them, so the
+    same pull request costs no request for them.
+    """
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=())
+    pr["reviews"] = conn([], more=True, cursor="r1")
+    nested = {
+        ("P6", "reviews", "r1"): conn(
+            [
+                {
+                    "authorAssociation": "OWNER",
+                    "body": "## Review complete",
+                    "submittedAt": AFTER,
+                    "commit": {"oid": "c6"},
+                }
+            ]
+        )
+    }
+    gh = FakeGitHub([issue(5)], [pr], nested)
+    board, _ = build(gh, review_heading=HEADING)
+    assert prs_of(board)[0]["reviewed"] is True
+    pages = [q for q in gh.calls if "node(id:$id)" in q]
+    assert len(pages) == 1
+    assert "reviews: reviews(first:100" in pages[0]
+    assert "submittedAt commit{oid}" in pages[0]
+    gh = FakeGitHub([issue(5)], [pr], nested)
+    board, _ = build(gh)
+    assert prs_of(board)[0]["reviewed"] is False
+    assert not any("node(id:$id)" in q for q in gh.calls)
+
+
+# What each input adds to the query, and the input that adds it.
+HEADING_FIELDS = ("createdAt", "reviews(first:100)", "submittedAt commit{oid}", "committedDate")
+RUN_FIELD = "checkSuite{workflowRun{file{path}}}"
+
+
+@pytest.mark.parametrize(("heading", "settle"), [(False, False), (True, False), (False, True)])
+def test_each_input_selects_only_the_fields_it_reads(heading: bool, settle: bool) -> None:
+    """Protects a caller from a field it never asked for, on every page.
+
+    A caller that sets neither input sends the query it sent before either
+    existed, so it pays no point for a review it does not read, and a field
+    its token cannot resolve cannot stop its board. The first page comes from
+    ``pr_fields`` and every later one from ``nested``, so a field added to one
+    and not the other reads as missing only on a long list. GitHub returns
+    only what a query selects, which the fake does not, so this reads the
+    selections themselves, and then the query a run sends.
+    """
+    fragment = bb.pr_fields(heading, settle)
+    table = bb.nested(heading, settle)
+    for field in HEADING_FIELDS:
+        assert (field in fragment) is heading, field
+    assert ("createdAt" in table["comments"][3]) is heading
+    assert "submittedAt commit{oid}" in table["reviews"][3]
+    assert (RUN_FIELD in fragment) is settle
+    assert (RUN_FIELD in table["contexts"][3]) is settle
+    # The whole selections, so a field dropped from one or moved to another
+    # object fails here rather than only on GitHub.
+    assert table["reviews"] == (
+        "PullRequest",
+        "reviews",
+        "",
+        "authorAssociation body submittedAt commit{oid}",
+    )
+    reviews = (
+        "reviews(first:100){pageInfo{hasNextPage endCursor} "
+        "nodes{authorAssociation body submittedAt commit{oid}}}"
+    )
+    assert (reviews in fragment) is heading
+    head = (
+        "commit{oid committedDate statusCheckRollup{id"
+        if heading
+        else "commit{statusCheckRollup{id"
+    )
+    assert head in fragment
+    assert ("nodes{authorAssociation body createdAt}" in fragment) is heading
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=())
+    pr["comments"] = conn([], more=True, cursor="k1")
+    pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(
+        [], more=True, cursor="x1"
+    )
+    pages = {("P6", "comments", "k1"): conn([]), ("R6", "contexts", "x1"): conn([])}
+    gh = FakeGitHub([issue(5)], [pr], pages)
+    build(gh, review_heading=HEADING if heading else "", settled_rollup="true" if settle else "")
+    sent = next(q for q in gh.calls if "pullRequests(states:OPEN" in q)
+    assert sent == bb.open_prs_query(fragment)
+    comment_page = next(q for q in gh.calls if "comments: comments(" in q)
+    check_page = next(q for q in gh.calls if "contexts: contexts(" in q)
+    assert ("createdAt" in comment_page) is heading
+    assert (RUN_FIELD in check_page) is settle
+
+
+def test_a_head_with_no_oid_matches_no_review() -> None:
+    """Protects the head-commit check from two missing oids reading as equal."""
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=(("OWNER", "## Review complete", AFTER),))
+    del pr["commits"]["nodes"][0]["commit"]["oid"]
+    pr["reviews"]["nodes"][0]["commit"] = None
+    assert _reviewed(pr, review_heading=HEADING) == (False, UNMARKED)
+
+
+@pytest.mark.parametrize(
+    "heading",
+    ["## Review complete", "#Review complete", "Review\ncomplete", "Review complete\r"],
+)
+def test_a_review_heading_that_cannot_match_stops_the_run_before_any_read(heading: str) -> None:
+    """Protects a caller from a heading that would quietly mark nothing reviewed."""
+    gh = FakeGitHub([issue(5)], [pull(6, closes=(5,))])
+    with pytest.raises(bb.BoardError, match="review heading"):
+        build(gh, review_heading=heading)
+    assert gh.calls == []
+
+
+@pytest.mark.parametrize("value", ["yes", "True", "false", "1", " true", "true "])
+def test_a_settled_rollup_other_than_true_or_empty_stops_the_run_before_any_read(
+    value: str,
+) -> None:
+    """Protects a caller whose switch reads as on to them and off to the run."""
+    gh = FakeGitHub([issue(5)], [pull(6, closes=(5,))])
+    message = f"the settled-rollup input {value!r} is neither empty nor true"
+    with pytest.raises(bb.BoardError, match=f"^{re.escape(message)}$"):
+        build(gh, settled_rollup=value)
+    assert gh.calls == []
+
+
+def test_the_command_line_passes_the_two_inputs_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects ``review-heading`` and ``settled-rollup`` on their way from the workflow.
+
+    The workflow passes both flags whether or not the caller set them, so an
+    empty value is the old rule. A misspelt heading marks nothing reviewed and
+    fails no read, so the job summary counts the items it marked. A refused
+    value fails the run and puts its reason in the summary.
+    """
+    pr = pull(
+        6,
+        closes=(5,),
+        comments=(("OWNER", "## Review complete", AFTER),),
+        committed=HEAD_AT,
+        reviews=(),
+        contexts=(
+            check("test", "SUCCESS"),
+            check("board / build", None, "IN_PROGRESS", workflow=WORKFLOW_PATH),
+        ),
+    )
+    second = pull(7, closes=(8,), committed=HEAD_AT, reviews=())
+    fake = FakeGitHub([issue(5), issue(8)], [pr, second])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def items() -> list[dict]:
+        return json.loads((out / "board.json").read_text())["prs"]["items"]
+
+    assert bb.main([*argv, f"--review-heading={HEADING}", "--settled-rollup=true"]) == 0
+    assert [(p["reviewed"], p["review"]) for p in items()] == [(True, MARKED), (False, UNMARKED)]
+    assert items()[0]["rollup"] == [["test", "success"]]
+    assert "| Review heading | `## Review complete` on 1 of 2 pull request items |" in (
+        summary.read_text()
+    )
+    summary.unlink()
+    assert bb.main([*argv, "--review-heading=", "--settled-rollup="]) == 0
+    assert items()[0]["review"] == "review posted"
+    assert items()[0]["rollup"] == [["test", "success"], ["board / build", "running"]]
+    assert "| Review heading | none named |" in summary.read_text()
+    summary.unlink()
+    assert bb.main([*argv, "--review-heading=Review compleet"]) == 0
+    assert "| Review heading | `## Review compleet` on 0 of 2 pull request items |" in (
+        summary.read_text()
+    )
+    (out / "board.json").unlink()
+    summary.unlink()
+    assert bb.main([*argv, "--settled-rollup=yes"]) == 1
+    assert not (out / "board.json").exists()
+    assert (
+        "build_board: the settled-rollup input 'yes' is neither empty nor true"
+        in summary.read_text()
+    )
+    summary.unlink()
+    assert bb.main([*argv, "--review-heading=## Review complete"]) == 1
+    assert "build_board: the review heading '## Review complete' starts with #" in (
+        summary.read_text()
+    )
+
+
+# ---- The settled rollup a caller asks for ----
+
+
+def _rollup_of(contexts: tuple[dict, ...], **inputs: str) -> list[list[str]]:
+    pr = pull(6, closes=(5,), contexts=contexts)
+    return prs_of(build(FakeGitHub([issue(5)], [pr]), **inputs)[0])[0]["rollup"]
+
+
+def test_a_settled_rollup_leaves_out_only_the_boards_own_checks() -> None:
+    """Protects a reviewed branch from reading as running while the board rebuilds.
+
+    The board's own check runs have carried three names, all from the one
+    workflow file, and a caller whose job id is not ``board`` names them
+    another way again. So the file decides, and a CI job that happens to be
+    called ``board / build`` stays. Only the whole path counts, so a workflow
+    whose file name ends in ``board.yml`` or holds the word ``board`` stays. A
+    check run from no workflow, such as one an app posts, has no file and stays
+    too. Without the input every check stays, in GitHub's order.
+    """
+    contexts = (
+        check("board / build", None, "IN_PROGRESS", workflow=WORKFLOW_PATH),
+        check("pages / build", "FAILURE", workflow=WORKFLOW_PATH),
+        check("build", "SUCCESS", workflow=WORKFLOW_PATH),
+        check("board-build", "SUCCESS", workflow=WORKFLOW_PATH),
+        check("board / build", "SUCCESS", workflow=CI_PATH),
+        check("rank", "SUCCESS", workflow=".github/workflows/leaderboard.yml"),
+        check("reuse", "SUCCESS", workflow=".github/workflows/build-board.yml"),
+        check("app check", "SUCCESS"),
+        {**check("no run", "SUCCESS"), "checkSuite": {"workflowRun": None}},
+        status("board / build", "SUCCESS"),
+    )
+    assert _rollup_of(contexts, settled_rollup="true") == [
+        ["app check", "success"],
+        ["board / build", "success"],
+        ["board / build", "success"],
+        ["no run", "success"],
+        ["rank", "success"],
+        ["reuse", "success"],
+    ]
+    assert _rollup_of(contexts) == [
+        ["board / build", "running"],
+        ["pages / build", "failure"],
+        ["build", "success"],
+        ["board-build", "success"],
+        ["board / build", "success"],
+        ["rank", "success"],
+        ["reuse", "success"],
+        ["app check", "success"],
+        ["no run", "success"],
+        ["board / build", "success"],
+    ]
+
+
+def test_a_settled_rollup_is_sorted_by_name_then_word() -> None:
+    """Protects the rollup from reading differently each time GitHub reorders it."""
+    contexts = (
+        check("test", "SUCCESS", workflow=CI_PATH),
+        check("lint", "SUCCESS", workflow=CI_PATH),
+        check("test", "FAILURE", workflow=CI_PATH),
+        status("codeql", "SUCCESS"),
+    )
+    assert _rollup_of(contexts, settled_rollup="true") == [
+        ["codeql", "success"],
+        ["lint", "success"],
+        ["test", "failure"],
+        ["test", "success"],
+    ]
+    assert _rollup_of(contexts) == [
+        ["test", "success"],
+        ["lint", "success"],
+        ["test", "failure"],
+        ["codeql", "success"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "settled", "shared"),
+    [
+        ("SKIPPED", "skipped", "neutral"),
+        ("CANCELLED", "neutral", "failure"),
+        ("ACTION_REQUIRED", "neutral", "failure"),
+        ("SUCCESS", "success", "success"),
+        ("NEUTRAL", "neutral", "neutral"),
+        ("STALE", "neutral", "neutral"),
+        ("FAILURE", "failure", "failure"),
+        ("TIMED_OUT", "failure", "failure"),
+        ("STARTUP_FAILURE", "failure", "failure"),
+    ],
+)
+def test_a_settled_rollup_remaps_three_states_and_keeps_the_rest(
+    state: str, settled: str, shared: str
+) -> None:
+    """Protects a skipped job from holding a reviewed branch out of the owner's queue.
+
+    A job whose condition kept it from running, such as one that runs only on
+    the default branch, read as ``neutral``, which the page reads as neither
+    way. Under the input it reads ``skipped``, which the page reads as
+    settled, and a cancelled run or one waiting on an action reads as neither
+    way rather than as a failure, as l3a0/marketlake's board read them.
+    """
+    contexts = (check("t", state, workflow=CI_PATH),)
+    assert _rollup_of(contexts, settled_rollup="true") == [["t", settled]]
+    assert _rollup_of(contexts) == [["t", shared]]
+
+
+def test_a_status_state_reads_the_same_under_a_settled_rollup() -> None:
+    """Protects the status-context states, which the input does not remap."""
+    for state, word in (("ERROR", "failure"), ("PENDING", "running"), ("EXPECTED", "running")):
+        assert _rollup_of((status("s", state),), settled_rollup="true") == [["s", word]]
+
+
+REVIEW_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator"
+
+
+def review_github() -> FakeGitHub:
+    """A tracker holding every case the two inputs read differently, for the golden board.
+
+    Comments of every shape the review rules tell apart, stamped and not: a
+    marker after the head, one before it, a round heading, a longer heading, an
+    indented one, a deeper one, a stranger's, and a submitted review. Checks
+    from the board's own workflow under three names, from CI, from a workflow
+    whose name only contains ``board``, from no workflow, a status context,
+    and skipped, cancelled, waiting and running checks, out of name order. The
+    data carries every field the inputs select, as a caller setting them
+    would read it.
+    """
+    owner = "OWNER"
+    contexts = (
+        check("test", "SUCCESS", workflow=CI_PATH),
+        check("board / build", None, "IN_PROGRESS", workflow=WORKFLOW_PATH),
+        check("board-deploy", "FAILURE", workflow=WORKFLOW_PATH),
+        check("build", "SUCCESS", workflow=WORKFLOW_PATH),
+        check("board / build", "SUCCESS", workflow=CI_PATH),
+        check("rank", "SUCCESS", workflow=".github/workflows/leaderboard.yml"),
+        check("deploy", "SKIPPED", workflow=CI_PATH),
+        check("approve", "CANCELLED", workflow=CI_PATH),
+        check("gate", "ACTION_REQUIRED", workflow=CI_PATH),
+        check("app check", "NEUTRAL"),
+        status("codeql", "SUCCESS"),
+        status("lint", "PENDING"),
+    )
+    prs = [
+        pull(
+            20,
+            closes=(10,),
+            comments=((owner, "## Review complete\n\nAll lenses ran.", AFTER),),
+            contexts=contexts,
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            21,
+            closes=(11,),
+            comments=((owner, "## Review complete", BEFORE),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            22,
+            closes=(12,),
+            comments=((owner, "## Review round 1, lenses running", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            23,
+            closes=(13,),
+            comments=((owner, "## Review completeness check", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            24,
+            closes=(14,),
+            comments=((owner, "  ## Review complete", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            25,
+            closes=(15,),
+            comments=((owner, "### Review complete", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            26,
+            closes=(16,),
+            comments=(("NONE", "## Review complete", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(27, closes=(17,), committed=HEAD_AT, reviews=((owner, "## Review complete", AFTER),)),
+        pull(
+            28,
+            closes=(18,),
+            comments=((owner, "## Reviewer notes", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(29, closes=(19,), committed=HEAD_AT, reviews=()),
+    ]
+    # Pull request 29's comments and checks run past their first page, so the
+    # query text recorded for a later page is compared too.
+    later = prs[-1]
+    later["comments"] = conn([], more=True, cursor="k1")
+    later["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(
+        [], more=True, cursor="x1"
+    )
+    nested = {
+        ("P29", "comments", "k1"): conn(
+            [{"authorAssociation": owner, "body": "## Review complete", "createdAt": AFTER}]
+        ),
+        ("R29", "contexts", "x1"): conn(
+            [
+                check("board / deploy", "SUCCESS", workflow=WORKFLOW_PATH),
+                check("test", "SKIPPED", workflow=CI_PATH),
+            ]
+        ),
+    }
+    issues = [issue(n) for n in range(10, 19)] + [issue(19, labels=("working:build",))]
+    return FakeGitHub(issues, prs, nested)
+
+
+class _Fixed(datetime):
+    """``datetime`` with ``now`` held at ``NOW``, so a written board's stamp is fixed."""
+
+    @classmethod
+    def now(cls, tz=None):  # noqa: ANN001, ANN206 - the signature datetime.now has
+        return NOW
+
+
+def write_board(module, fake: FakeGitHub, out: Path, monkeypatch, *flags: str) -> bytes:  # noqa: ANN001
+    """The bytes ``module.main`` writes to ``board.json`` for ``fake``, at ``NOW``."""
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(module, "GhGraphql", lambda: fake)
+    monkeypatch.setattr(module, "datetime", _Fixed)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(out / "summary.md"))
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out), *flags]
+    assert module.main(argv) == 0
+    return (out / "board.json").read_bytes()
+
+
+def test_a_board_with_no_input_is_the_one_ec53810e_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects every current caller, which sets neither input.
+
+    ``review.json`` is the ``board.json`` that the generator at
+    l3a0/repo-template commit ``ec53810e``, the last on ``main`` before either
+    input, wrote from ``review_github``. ``review_queries.json`` lists every
+    query that run sent. The generator here, run the same way with neither
+    input, has to write the same bytes and send the same query text, so a
+    caller that never asked pays no point and meets no field its token might
+    not read. Rewrite the two files only from the generator on ``main`` before
+    either input, never from this one, or the test compares the head with
+    itself. ``cf2959a3`` and ``7b86e288`` wrote the same board. Their queries
+    differ from ``ec53810e``'s only where ``main`` changed them for every
+    caller: ``7b86e288`` added the closing links' repository, and
+    ``ec53810e`` added each issue's ``authorAssociation`` and each label's
+    ``color``.
+    """
+    fake = review_github()
+    written = write_board(bb, fake, tmp_path, monkeypatch)
+    assert written == (REVIEW_GOLDEN / "review.json").read_bytes()
+    assert fake.calls == json.loads(
+        (REVIEW_GOLDEN / "review_queries.json").read_text(encoding="utf-8")
+    )
+    fake = review_github()
+    empty = write_board(bb, fake, tmp_path, monkeypatch, "--review-heading=", "--settled-rollup=")
+    assert empty == written
+
+
+def test_the_golden_tracker_reads_differently_under_each_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the golden test from data that could not tell the rules apart.
+
+    A golden board passes trivially if its data reads the same under every
+    rule. So the same tracker has to read differently under each input.
+    """
+    plain = json.loads(write_board(bb, review_github(), tmp_path, monkeypatch))
+    heading = json.loads(
+        write_board(bb, review_github(), tmp_path, monkeypatch, f"--review-heading={HEADING}")
+    )
+    settled = json.loads(
+        write_board(bb, review_github(), tmp_path, monkeypatch, "--settled-rollup=true")
+    )
+
+    def reviewed(board: dict) -> list[int]:
+        return [p["pr"] for p in board["prs"]["items"] if p["reviewed"]]
+
+    assert reviewed(plain) == [20, 21, 22, 23, 24, 29]
+    assert reviewed(heading) == [20, 27, 29]
+    assert plain["prs"]["items"][0]["rollup"] != settled["prs"]["items"][0]["rollup"]
 
 
 # ---- Check states ----
@@ -3348,6 +4097,8 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.default-branch-head",
                 "inputs.label-colors",
                 "inputs.sort-labels",
+                "inputs.review-heading",
+                "inputs.settled-rollup",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -3383,6 +4134,8 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
         ("default-branch-head", "DEFAULT_BRANCH_HEAD"),
         ("label-colors", "LABEL_COLORS"),
         ("sort-labels", "SORT_LABELS"),
+        ("review-heading", "REVIEW_HEADING"),
+        ("settled-rollup", "SETTLED_ROLLUP"),
     ):
         uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
         assert [(before.strip(), after) for before, after in uses] == [(f"{var}:", "")]
@@ -3422,12 +4175,17 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     The template's own board passes no input, and a seeded repository sets
     only what it needs. A required input, or a default naming a file or a
     label, would fail or change every such run. An empty title gives
-    ``<name> build board``, an empty icon serves the template's, and an empty
-    data label reads no ``data`` kind, and an empty subtitle, note,
+    ``<name> build board``, an empty icon serves the template's, an empty
+    data label reads no ``data`` kind, an empty subtitle, note,
     default-branch-head, label-colors or sort-labels leaves the board as it
-    was. The README and the l3a0 plugin's update-build-board skill name the
-    inputs by the keys declared here. The README quotes ``"true"``, because a
-    bare ``true`` in YAML is a boolean and the inputs are strings.
+    was, an empty review heading keeps the shared review rule, and an empty
+    settled rollup keeps the rollup as GitHub lists it. A switch such as
+    ``settled-rollup`` is a string taking empty or ``true``. The README and
+    the l3a0 plugin's update-build-board skill name the inputs by the keys
+    declared here. The README quotes ``"true"``, because a bare ``true`` in
+    YAML is a boolean and the inputs are strings. The plugin release that
+    names ``review-heading`` and ``settled-rollup`` has not shipped, so only
+    the README's examples of those two are read here.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
@@ -3441,6 +4199,8 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
         "default-branch-head",
         "label-colors",
         "sort-labels",
+        "review-heading",
+        "settled-rollup",
     ]
     for block in declared.values():
         assert "        type: string\n" in block
@@ -3454,6 +4214,8 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     assert '\n      default-branch-head: "true"\n' in readme
     assert '    with:\n      label-colors: "true"\n' in readme
     assert '    with:\n      sort-labels: "true"\n' in readme
+    assert "    with:\n      review-heading: Review complete\n" in readme
+    assert '    with:\n      settled-rollup: "true"\n' in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
     assert f"`with: data-label: {DATA_LABEL}`" in _skill()
@@ -3623,7 +4385,10 @@ def test_each_job_declares_only_the_scopes_it_uses() -> None:
     Declaring any scope sets every unlisted one to none, so the build job
     lists each scope the generator reads. A called workflow can only narrow
     what its caller grants, so the caller's job grants the union of the two
-    and nothing more, and both workflows grant nothing at the top.
+    and nothing more, and both workflows grant nothing at the top. The build
+    job reads ``actions`` because a check run's workflow run, whose file tells
+    the board's own checks apart, belongs to Actions. The query asks for it
+    whatever the inputs, so the scope is granted whatever they are.
     """
     flow = _called()
     assert "\npermissions: {}\n" in flow
@@ -3636,6 +4401,7 @@ def test_each_job_declares_only_the_scopes_it_uses() -> None:
         "pull-requests": "read",
         "checks": "read",
         "statuses": "read",
+        "actions": "read",
     }
     deploy_scopes = {
         "pages": "write",
@@ -3685,10 +4451,18 @@ def test_the_measure_step_holds_the_pages_group_for_a_minute_at_most() -> None:
 
 
 def test_the_page_published_is_the_checked_in_one() -> None:
-    """Protects the one page every board publishes, and the schedule it reads."""
+    """Protects the one page every board publishes, and the schedule it reads.
+
+    The generator names the caller's workflow file a second time, as
+    ``BOARD_WORKFLOW``, to tell the board's own check runs apart. The file the
+    workflow hands it for the schedule has to be that same file, or a settled
+    rollup keeps the board's checks it was asked to leave out.
+    """
     flow = _called()
     assert "cp template/.claude/skills/update-build-board/board.html _site/index.html" in flow
     assert "--workflow caller/.github/workflows/board.yml" in flow
+    assert f"--workflow caller/{bb.BOARD_WORKFLOW}" in flow
+    assert f"            {bb.BOARD_WORKFLOW}\n" in flow.split("sparse-checkout: |\n", 1)[1]
 
 
 def _add_the_page(

@@ -218,6 +218,53 @@ Each of the two takes empty or `"true"`, and any other value fails the run
 with its reason in the job summary. Both need a pin at or after the template
 commit that added them, for the reason the icon gives.
 
+A repository can name the heading that closes a review. A pull request then
+reads as reviewed only when the owner posts a comment or a pull request review
+whose whole first line is two `#` signs, a space and that heading, after the
+branch's head commit. A pull request review counts only when it names the
+head commit. So a heading such as `## Review round 1, lenses running`, posted
+while a review is still under way, does not count, and a commit made after the
+review sends the branch back for another. Write the heading without its two
+`#` signs and the space after them, because YAML reads an unquoted `#` after a
+space as the start of a comment and would leave the input empty. Left out, any
+owner comment opening with `## Review` counts, whenever it was posted.
+
+Two limits come with the heading.
+
+1. A comment reaches the board at once, because a comment starts a board run.
+   A pull request review reaches it on the board's next run of any other kind,
+   because no event the board listens to fires when a review is submitted.
+2. The head commit's time is the date the commit carries, which whoever makes
+   the commit sets, and not when it was pushed. A commit dated before the
+   comment and pushed after it keeps the branch reviewed. Post the heading
+   after the last push. A pull request review names the commit it reviewed, so
+   it has no such gap.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      review-heading: Review complete
+```
+
+The job summary counts the pull request items the heading marked reviewed, so
+a misspelt heading shows up as a count of zero.
+
+A repository can also ask for a settled rollup. The board's own checks, the
+ones from `.github/workflows/board.yml`, then leave each pull request's
+rollup, so a branch does not read as still running while the board rebuilds.
+A skipped check reads as settled, a cancelled one as neither way, and the
+checks are sorted by name. Left out, the rollup lists every check as GitHub
+reports it.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      settled-rollup: "true"
+```
+
+Both inputs need a pin at or after the template commit that added them, for
+the reason the icon gives.
+
 To take a later fix, move the SHA in the caller. The skills and the generator
 share the label names and line formats, so a skill newer or older than the
 pinned generator tells a session to set something the board does not read.

@@ -82,7 +82,7 @@ HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
-# this commit, the head of l3a0/claude-plugins pull request 37, the 0.6.0
+# this commit, the head of l3a0/claude-plugins pull request 38, the 0.6.1
 # release, which merges together with the pull request that set this pin.
 # GitHub keeps a pull request's head fetchable after it merges, and a later
 # pull request moves the pin to the release's merge commit. A change here to a
@@ -90,7 +90,7 @@ HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 # until the plugin releases a skill that matches and this pin moves to it. Any
 # other format change rests on the plugin's own rule that a generator's format
 # change ships with a plugin release in the same step.
-PLUGIN_COMMIT = "6d13ab279c17f62b6d2ea736ea042365b087c5e9"
+PLUGIN_COMMIT = "b86117075f3cc27cda1af9138e86d3dd3c290270"
 PLUGIN_SKILLS = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.
@@ -5591,6 +5591,13 @@ def _called() -> str:
     return CALLED.read_text(encoding="utf-8")
 
 
+def _inputs() -> dict[str, str]:
+    """Each input the reusable workflow declares, in order, with its block."""
+    inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+    blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
+    return dict(zip(blocks[::2], blocks[1::2], strict=True))
+
+
 def _scopes(block: str) -> dict[str, str]:
     """The scopes one ``permissions:`` block grants, at any indent."""
     lines = block.split("permissions:\n", 1)[1].splitlines()
@@ -5737,9 +5744,7 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     the inputs are strings. The plugin's ``with:`` form of every input is
     read by ``test_the_plugin_names_every_input_in_its_with_form``.
     """
-    inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
-    blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
-    declared = dict(zip(blocks[::2], blocks[1::2], strict=True))
+    declared = _inputs()
     assert list(declared) == [
         "title",
         "icon",
@@ -6283,16 +6288,10 @@ def test_the_setup_script_turns_pages_on_with_actions_as_its_source(
     assert "--method" not in (tmp_path / "dry.log").read_text()
 
 
-# ---- The plugin's 0.6.0 text ----
+# ---- The plugin's 0.6.x text ----
 #
 # The release that names every input the reusable workflow declares. These
 # tests read what it tells a session to run, as well as what it says.
-
-
-def _inputs() -> list[str]:
-    """The inputs the reusable workflow declares, in order."""
-    inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
-    return re.findall(r"^      ([\w-]+):\n", inputs, flags=re.M)
 
 
 # Each input's ``with:`` form as the plugin writes it, by the file that writes
@@ -6314,6 +6313,7 @@ PAGE_WITH = (
     '`with: label-colors: "true"`',
     '`with: sort-labels: "true"`',
 )
+WITH_FORM = re.compile(r"`with: ([\w-]+):")
 
 
 def test_the_plugin_names_every_input_in_its_with_form() -> None:
@@ -6321,8 +6321,9 @@ def test_the_plugin_names_every_input_in_its_with_form() -> None:
 
     Each form is read where the plugin writes it, and between them they name
     every input the workflow declares, so a new input fails here until the
-    plugin says how to pass it. ``page.md`` also names the key the milestone
-    selector stores its choice under.
+    plugin says how to pass it. Every other ``with:`` form in either file has
+    to name a declared input too, so a misspelt one fails. ``page.md`` also
+    names the key the milestone selector stores its choice under.
     """
     skill = _skill()
     page = _plugin("page.md")
@@ -6331,8 +6332,10 @@ def test_the_plugin_names_every_input_in_its_with_form() -> None:
     for form in PAGE_WITH:
         assert form in page, form
     assert "`board-ms:<owner/repo>`" in page
-    named = {re.match(r"`with: ([\w-]+):", t).group(1) for t in SKILL_WITH + PAGE_WITH}
+    named = {WITH_FORM.match(t).group(1) for t in SKILL_WITH + PAGE_WITH}
     assert named == set(_inputs())
+    written = set(WITH_FORM.findall(skill)) | set(WITH_FORM.findall(page))
+    assert written <= set(_inputs()), written - set(_inputs())
 
 
 def test_the_skill_table_lists_every_input_the_workflow_declares() -> None:
@@ -6343,9 +6346,9 @@ def test_the_skill_table_lists_every_input_the_workflow_declares() -> None:
     assert sorted(listed) == sorted(_inputs())
 
 
-def test_the_skill_states_the_digit_limit() -> None:
+def test_the_skill_states_the_digit_limit_once() -> None:
     """Protects the skill from a second copy of ``MAX_DIGITS`` that drifts."""
-    assert f"at most {bb.MAX_DIGITS} digits" in _skill()
+    assert _skill().count(f"at most {bb.MAX_DIGITS} digits") == 1
 
 
 def _tool(name: str) -> str:
@@ -6358,16 +6361,19 @@ def _tool(name: str) -> str:
     pytest.skip(f"{name} is not installed")
 
 
-# A caller that passes every input the workflow declares. A bare ``true`` is a
-# YAML boolean, which the build command has to pass as the string ``true``.
+# A caller that passes every input the workflow declares, each as YAML text
+# and the value the generator should receive. A bare ``true`` is a YAML
+# boolean, which the build command has to pass as the string ``true``. A
+# literal block keeps its newline, and an input written with no value is
+# empty.
 CALLER_WITH = {
-    "title": ("Octo Board", "Octo Board"),
+    "title": ("", ""),
     "icon": (".github/board/favicon.ico", None),
     "data-label": (DATA_LABEL, DATA_LABEL),
     "subtitle": ("the order of work", "the order of work"),
     "note": (
-        ">-\n        Read [the design](https://example.com/design)\n        for why.",
-        "Read [the design](https://example.com/design) for why.",
+        "|\n        Read [the design](https://example.com/design).\n        Then the plan.",
+        "Read [the design](https://example.com/design).\nThen the plan.\n",
     ),
     "default-branch-head": ("true", "true"),
     "label-colors": ('"true"', "true"),
@@ -6379,7 +6385,18 @@ CALLER_WITH = {
     "ranking": ("order", "order"),
 }
 
-# A generator that records the arguments its build would have run with.
+# Three callers: one passing every input, one with no ``with:`` block, which
+# is this repository's own, and one whose ``with:`` is left empty.
+CALLERS = {
+    "every input": "    with:\n"
+    + "\n".join(f"      {k}: {v}".rstrip() for k, (v, _) in CALLER_WITH.items())
+    + "\n",
+    "no with block": "",
+    "an empty with": "    with:\n",
+}
+
+# A generator that records the arguments its build would have run with, and
+# exits as ``BOARD_EXIT`` says, so a test can see the command's own status.
 RECORDING_GENERATOR = """
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("build_board", os.environ["BOARD_SCRIPT"])
@@ -6390,8 +6407,14 @@ def record(args):
     with open(os.environ["BOARD_RECORD"], "w") as f:
         json.dump({k: v for k, v in vars(args).items() if k != "func"}, f)
 bb.cmd_build = record
-sys.exit(bb.main(sys.argv[1:]))
+status = bb.main(sys.argv[1:])
+sys.exit(int(os.environ.get("BOARD_EXIT", status)))
 """
+
+
+def test_every_input_has_a_value_in_the_stand_in_caller() -> None:
+    """Protects the build-command test from skipping an input the workflow adds."""
+    assert set(CALLER_WITH) == set(_inputs())
 
 
 def _build_block() -> str:
@@ -6402,56 +6425,123 @@ def _build_block() -> str:
     return found[0]
 
 
-def _run_build_block(block: str, tmp_path: Path) -> dict | None:
-    """What the generator received when ``block`` ran in a caller, or None.
+def _run_build_block(
+    block: str, tmp_path: Path, caller_with: str = CALLERS["every input"], status: str = ""
+) -> tuple[dict | None, subprocess.CompletedProcess, Path]:
+    """What the generator received when ``block`` ran in a caller, the run, and the output.
 
-    The caller's ``board.yml`` passes every input. ``template`` serves the
-    recording generator in place of the template's, so nothing reads GitHub.
+    ``template`` serves files from a stand-in template whose
+    ``scripts/build_board.py`` is the recording generator, so nothing reads
+    GitHub and a command fetching any other path fetches nothing.
     """
     bash, _ = _tool("bash"), _tool("uv")
     caller = tmp_path / "caller"
     (caller / ".github" / "workflows").mkdir(parents=True)
-    lines = [f"      {k}: {v}" for k, (v, _) in CALLER_WITH.items()]
     (caller / ".github" / "workflows" / "board.yml").write_text(
         "on:\n  workflow_dispatch:\njobs:\n  board:\n"
-        "    uses: l3a0/repo-template/.github/workflows/build-board.yml@main\n"
-        "    with:\n" + "\n".join(lines) + "\n",
+        "    uses: l3a0/repo-template/.github/workflows/build-board.yml@main\n" + caller_with,
         encoding="utf-8",
     )
-    generator = tmp_path / "recording.py"
-    generator.write_text(RECORDING_GENERATOR, encoding="utf-8")
+    root = tmp_path / "template"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "build_board.py").write_text(RECORDING_GENERATOR, encoding="utf-8")
     record = tmp_path / "record.json"
     out = tmp_path / "out"
     out.mkdir()
-    script = f'REPO={REPO}\ntemplate() {{ cat "$BOARD_GENERATOR"; }}\n' + block.replace(
+    script = f'REPO={REPO}\ntemplate() {{ cat "$TEMPLATE_ROOT/$1"; }}\n' + block.replace(
         "<scratch>", str(out)
     )
     env = {
         **os.environ,
         "BOARD_SCRIPT": str(SCRIPT),
         "BOARD_RECORD": str(record),
-        "BOARD_GENERATOR": str(generator),
+        "TEMPLATE_ROOT": str(root),
     }
     env.pop("VIRTUAL_ENV", None)
-    subprocess.run(
+    env.pop("BOARD_EXIT", None)
+    if status:
+        env["BOARD_EXIT"] = status
+    done = subprocess.run(
         [bash, "-c", script], cwd=caller, env=env, capture_output=True, text=True, timeout=300
     )
-    return json.loads(record.read_text()) if record.exists() else None
+    got = json.loads(record.read_text()) if record.exists() else None
+    left = sorted(str(p.relative_to(caller)) for p in caller.rglob("*") if p.is_file())
+    if left != [".github/workflows/board.yml"]:
+        done.stderr += f"\nthe command left files in the caller: {left}"
+    return got, done, out
 
 
-def _input_problems(got: dict | None) -> list[str]:
-    """Each way the recorded arguments differ from the caller's inputs."""
+def _input_problems(
+    got: dict | None, done: subprocess.CompletedProcess, out: Path, want: dict[str, str]
+) -> list[str]:
+    """Each way a run of the build command differs from what the caller asked for."""
     if got is None:
-        return ["the generator never reached its build"]
+        return [f"the generator never reached its build: {done.stderr[-2000:]}"]
     problems = []
+    if done.returncode != 0:
+        problems.append(f"exit status {done.returncode}: {done.stderr[-2000:]}")
+    if "left files in the caller" in done.stderr:
+        problems.append(done.stderr.rsplit("\n", 1)[-1])
     if got.get("repo") != REPO or got.get("workflow") != ".github/workflows/board.yml":
         problems.append(f"repo or workflow: {got.get('repo')!r} {got.get('workflow')!r}")
+    if got.get("out") != str(out):
+        problems.append(f"out: {got.get('out')!r}, not {str(out)!r}")
     if "icon" in got:
         problems.append("icon reached the generator")
-    for name, (_, want) in CALLER_WITH.items():
-        if want is not None and got.get(name.replace("-", "_")) != want:
-            problems.append(f"{name}: {got.get(name.replace('-', '_'))!r}, not {want!r}")
+    for name, value in want.items():
+        if got.get(name.replace("-", "_")) != value:
+            problems.append(f"{name}: {got.get(name.replace('-', '_'))!r}, not {value!r}")
     return problems
+
+
+def _every_input() -> dict[str, str]:
+    return {k: v for k, (_, v) in CALLER_WITH.items() if v is not None}
+
+
+def _no_input() -> dict[str, str]:
+    return {k: "" for k in _inputs() if k != "icon"}
+
+
+@pytest.mark.parametrize("caller", list(CALLERS))
+def test_the_skill_build_command_passes_every_input(caller: str, tmp_path: Path) -> None:
+    """Protects a local build from reading a different board than the Action.
+
+    A status round reads the board the skill's command builds, not the
+    published one. A command that drops the caller's inputs builds the
+    defaults, so under ``ranking: order`` it ranks nothing and under
+    ``review-heading`` it counts the wrong reviews, with nothing failing. A
+    caller with no inputs, such as this repository's own, has to reach the
+    generator with every input empty rather than stop the command.
+    """
+    got, done, out = _run_build_block(_build_block(), tmp_path, CALLERS[caller])
+    want = _every_input() if caller == "every input" else _no_input()
+    assert _input_problems(got, done, out, want) == [], done.stderr
+
+
+def test_the_skill_build_command_passes_the_generators_failure_on(tmp_path: Path) -> None:
+    """Protects a round from reading an old board after the build failed."""
+    got, done, _ = _run_build_block(_build_block(), tmp_path, status="1")
+    assert got is not None, done.stderr
+    assert done.returncode != 0, done.stderr
+
+
+def test_the_skill_setup_block_prints_every_input(tmp_path: Path) -> None:
+    """Protects the setup block's list of the caller's inputs from missing one."""
+    bash = _tool("bash")
+    line = next((x for x in _skill().splitlines() if x.startswith("sed -n '/^    with:$/")), None)
+    assert line, "the skill's setup block prints no with: block"
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "board.yml").write_text(
+        "on:\n  workflow_dispatch:\njobs:\n  board:\n"
+        "    uses: l3a0/repo-template/.github/workflows/build-board.yml@main\n"
+        + CALLERS["every input"]
+        + "concurrency:\n  group: pages\n",
+        encoding="utf-8",
+    )
+    done = subprocess.run([bash, "-c", line], cwd=tmp_path, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    printed = re.findall(r"^      ([\w-]+):", done.stdout, re.M)
+    assert printed == list(CALLER_WITH), done.stdout
 
 
 # Four ways the build command can stop passing the caller's inputs, each as
@@ -6464,49 +6554,86 @@ BUILD_MUTANTS = {
 }
 
 
-def test_the_skill_build_command_passes_every_input(tmp_path: Path) -> None:
-    """Protects a local build from reading a different board than the Action.
-
-    A status round reads the board the skill's command builds, not the
-    published one. A command that drops the caller's inputs builds the
-    defaults, so under ``ranking: order`` it ranks nothing and under
-    ``review-heading`` it counts the wrong reviews, with nothing failing.
-    """
-    assert _input_problems(_run_build_block(_build_block(), tmp_path)) == []
-
-
 @pytest.mark.parametrize("mutant", list(BUILD_MUTANTS))
 def test_the_build_command_check_fails_a_broken_command(mutant: str, tmp_path: Path) -> None:
-    """Protects the check above from passing a command that loses the inputs."""
+    """Protects the check above from passing a command that loses the inputs.
+
+    The clean command runs first, so an offline run, where every command
+    fails to reach the generator, cannot make a mutant look caught.
+    """
     old, new = BUILD_MUTANTS[mutant]
     block = _build_block()
-    assert block.count(old) == 1, old
-    assert _input_problems(_run_build_block(block.replace(old, new), tmp_path)) != []
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    got, done, _ = _run_build_block(block, clean)
+    assert got is not None, f"the clean command never reached the generator: {done.stderr}"
+    assert block.count(old) == 1, (
+        f"the mutant {mutant!r} no longer matches the skill's command once; "
+        "re-aim it at the rewritten block"
+    )
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    assert _input_problems(*_run_build_block(block.replace(old, new), broken), _every_input())
 
 
 # A jq call on a board, with its options and either a quoted or a bare filter.
 # ``--jq``, which reads gh's output rather than a board, is not one.
 JQ_CALL = re.compile(r"(?<![-\w])jq(?: -[a-z]+)* (?:'([^']+)'|(\.[\w.]+))")
+# The pull request the review read asks about, which the golden holds.
+JQ_PR = 30
 
 
-@pytest.mark.parametrize("skill", ["update-build-board", "sync-prune-next"])
-def test_each_jq_filter_in_the_skills_reads_a_board(skill: str) -> None:
-    """Protects a status round from a filter that reads nothing from a board.
+def _jq_expected(board: dict) -> dict[str, list]:
+    """What each filter the skills carry should print for ``board``, read in Python."""
 
-    Every filter runs against a board the generator wrote, a golden here. A
-    filter on a section has to yield its items as objects, because a round
-    reads fields from each. One on ``.state`` has to yield a value.
+    def items(section: str) -> list:
+        return board[section]["items"]
+
+    return {
+        '(.working | if type=="object" then .items else . end)[]': items("working"),
+        '(.prs | if type=="object" then .items else . end)[] | select(.pr == <n>) | .reviewed': [
+            p["reviewed"] for p in items("prs") if p["pr"] == JQ_PR
+        ],
+        ".state.updatedAt": [board["state"]["updatedAt"]],
+    }
+
+
+def _jq(jq: str, f: str, path: Path) -> list:
+    done = subprocess.run(
+        [jq, "-c", f.replace("<n>", str(JQ_PR)), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, (f, done.stderr)
+    return [json.loads(line) for line in done.stdout.splitlines()]
+
+
+def test_each_jq_filter_in_the_skills_reads_a_board(tmp_path: Path) -> None:
+    """Protects a status round from a filter that reads the wrong thing.
+
+    Every filter in either skill runs against a board the generator wrote, a
+    golden here, and has to print what the board holds, read in Python. A
+    filter on a section has to print the same from a board whose sections are
+    bare lists, as l3a0/marketlake's own generator writes until it retires.
     """
     jq = _tool("jq")
-    text = _plugin("SKILL.md", skill)
-    filters = [quoted or bare for quoted, bare in JQ_CALL.findall(text)]
-    assert filters, f"{skill} carries no jq filter"
-    for f in filters:
-        done = subprocess.run(
-            [jq, "-c", f, str(MARKERS_GOLDEN)], capture_output=True, text=True, check=False
-        )
-        assert done.returncode == 0, (f, done.stderr)
-        out = done.stdout.splitlines()
-        assert out, f
-        if ".state" not in f:
-            assert all(isinstance(json.loads(line), dict) for line in out), f
+    texts = [_plugin("SKILL.md", "update-build-board"), _plugin("SKILL.md", "sync-prune-next")]
+    filters = {quoted or bare for text in texts for quoted, bare in JQ_CALL.findall(text)}
+    board = json.loads(MARKERS_GOLDEN.read_text(encoding="utf-8"))
+    expected = _jq_expected(board)
+    assert filters == set(expected), (
+        f"add each new filter's expected output to _jq_expected: {filters ^ set(expected)}"
+    )
+    assert expected[
+        '(.prs | if type=="object" then .items else . end)[] | select(.pr == <n>) | .reviewed'
+    ]
+    bare = tmp_path / "bare.json"
+    bare.write_text(
+        json.dumps({k: v if k == "state" else v["items"] for k, v in board.items()}),
+        encoding="utf-8",
+    )
+    for f, want in expected.items():
+        assert _jq(jq, f, MARKERS_GOLDEN) == want, f
+        if not f.startswith(".state"):
+            assert _jq(jq, f, bare) == want, f

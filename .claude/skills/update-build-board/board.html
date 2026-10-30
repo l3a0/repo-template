@@ -905,7 +905,7 @@ function readMs() {
 const inMs = c => MS === MS_ALL || (!!c && c.ms === MS);
 const msName = ms => ms === "" ? "no milestone" : ms;
 /* The words a sentence adds when it is about the chosen milestone only. */
-const msWhere = () => MS === MS_ALL ? "" : MS === "" ? " with no milestone" : ` in ${esc(MS)}`;
+const msWhere = () => MS === MS_ALL ? "" : MS === "" ? ` with ${msName(MS)}` : ` in ${esc(MS)}`;
 
 /* Resolves MS and draws the selector. `render()` runs it before the cards,
    because every section reads MS. The options are rebuilt only when the set

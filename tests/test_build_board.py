@@ -2960,14 +2960,23 @@ def test_a_card_with_no_milestone_names_none_in_its_pill(tmp_path: Path) -> None
     The generator writes ``ms`` as an empty string when an issue has no
     milestone. The selector already names that "no milestone", and the card's
     pill uses the same name rather than drawing a blank box beside the title.
+    A milestone's own name is escaped like any other text the page draws.
     """
     docs = _ms_docs(
-        [(1, "MVP 2", "ready", ()), (2, "", "ready", ())], ranked=(1, 2), default=NO_DEFAULT
+        [(1, "MVP 2", "ready", ()), (2, "", "ready", ()), (3, 'A&B "x" <i>', "ready", ())],
+        ranked=(1, 2, 3),
+        default=NO_DEFAULT,
     )
     ids = draw(tmp_path, docs)
-    pill = r'data-n="(\d+)".*?<span class="sl">(.*?)</span>'
+    # Each match stays inside one card, so a card without a pill cannot borrow
+    # the next card's.
+    pill = r'data-n="(\d+)"(?:(?!data-n=).)*?<span class="sl">(.*?)</span>'
     pills = re.findall(pill, ids["board"]["html"], re.S)
-    assert {int(n): name for n, name in pills} == {1: "MVP 2", 2: "no milestone"}
+    assert [(int(n), name) for n, name in pills] == [
+        (1, "MVP 2"),
+        (2, "no milestone"),
+        (3, "A&amp;B &quot;x&quot; &lt;i&gt;"),
+    ]
 
 
 @pytest.mark.parametrize(

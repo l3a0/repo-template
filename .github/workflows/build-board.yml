@@ -36,13 +36,13 @@ name: Build board
 # the named heading after the head commit, and leave the board's own checks
 # out of a pull request's rollup.
 #
-# An `owner-body-lines` input, added by the pull request that closes
-# l3a0/repo-template#48, reads order and after lines only from issues the
-# owner opened. A `milestone-default` input, added by the pull request that
-# closes l3a0/repo-template#45, draws a milestone selector on the page and
-# names the milestone it opens on. A `ranking` input, added by the pull
-# request that closes l3a0/repo-template#46, ranks a card by its order line
-# alone when set to `order`.
+# A `milestone-default` input, added by the pull request that closes
+# l3a0/repo-template#45, draws a milestone selector on the page and names the
+# milestone it opens on. An `owner-body-lines` input, added by the pull request
+# that closes l3a0/repo-template#48, reads order and after lines only from
+# issues the owner opened. A `ranking` input, added by the pull request that
+# closes l3a0/repo-template#46, ranks a card by its order line alone when set
+# to `order`.
 #
 # Every input is a string that defaults to empty, and an empty one leaves the
 # board as it was.
@@ -148,20 +148,20 @@ on:
           as GitHub lists it.
         type: string
         default: ""
-      owner-body-lines:
-        description: >-
-          "true" reads a "Board order:" or "Board after:" line only in the
-          body of an issue the owner opened, and lists a stranger's as
-          refused in the job summary. Empty reads them from anyone's issue,
-          unless ranking is "order". Any other value fails the run.
-        type: string
-        default: ""
       milestone-default:
         description: >-
           The milestone the page opens on, where <n> stands for a number, such
           as MVP <n> for the lowest-numbered open "MVP" milestone. Setting it
           draws a milestone selector and cuts each milestone's title at its
           first comma. Empty draws no selector and keeps whole titles.
+        type: string
+        default: ""
+      owner-body-lines:
+        description: >-
+          "true" reads a "Board order:" or "Board after:" line only in the
+          body of an issue the owner opened, and lists a stranger's as
+          refused in the job summary. Empty reads them from anyone's issue,
+          unless ranking is "order". Any other value fails the run.
         type: string
         default: ""
       ranking:
@@ -227,8 +227,8 @@ jobs:
           SORT_LABELS: ${{ inputs.sort-labels }}
           REVIEW_HEADING: ${{ inputs.review-heading }}
           SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
-          OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
           MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
+          OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
           RANKING: ${{ inputs.ranking }}
         run: >-
           python3 template/scripts/build_board.py build
@@ -243,8 +243,8 @@ jobs:
           --sort-labels="$SORT_LABELS"
           --review-heading="$REVIEW_HEADING"
           --settled-rollup="$SETTLED_ROLLUP"
-          --owner-body-lines="$OWNER_BODY_LINES"
           --milestone-default="$MILESTONE_DEFAULT"
+          --owner-body-lines="$OWNER_BODY_LINES"
           --ranking="$RANKING"
           --out _site
 

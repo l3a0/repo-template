@@ -265,24 +265,6 @@ reports it.
 Both inputs need a pin at or after the template commit that added them, for
 the reason the icon gives.
 
-Anyone can open an issue on a public repository, and by default a
-`Board order:` or `Board after:` line in any issue's body counts. Such a line
-places only the stranger's own card, because a card ranks only with a
-`band:N` label, which needs triage access. A stranger's after line also adds
-a sentence to the detail of each card it names, saying the stranger's card
-should land after it. A repository that wants those lines read
-only from issues its owner opened sets `owner-body-lines`. A stranger's lines
-then set nothing, and the job summary lists them as refused. The input takes
-`"true"` or nothing, and any other value fails the run. The pin has to be at
-or after the template commit that added the input, for the reason the icon
-gives.
-
-```yaml
-    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
-    with:
-      owner-body-lines: "true"
-```
-
 A repository that works toward one milestone at a time can open its board on
 that milestone. Name it in the caller's job, with `<n>` standing for a
 number. The page then draws a milestone selector above the board and opens on
@@ -302,6 +284,24 @@ the icon gives.
 
 The run's job summary names the milestone the board opens on, or says the
 name matches no open milestone, which is where a misspelt name shows up.
+
+Anyone can open an issue on a public repository, and by default a
+`Board order:` or `Board after:` line in any issue's body counts. Such a line
+places only the stranger's own card, because a card ranks only with a
+`band:N` label, which needs triage access. A stranger's after line also adds
+a sentence to the detail of each card it names, saying the stranger's card
+should land after it. A repository that wants those lines read
+only from issues its owner opened sets `owner-body-lines`. A stranger's lines
+then set nothing, and the job summary lists them as refused. The input takes
+`"true"` or nothing, and any other value fails the run. The pin has to be at
+or after the template commit that added the input, for the reason the icon
+gives.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      owner-body-lines: "true"
+```
 
 A repository that ranks its work by `Board order:` lines and keeps no
 `band:N` labels sets `ranking` to `order`. A card then ranks by its order

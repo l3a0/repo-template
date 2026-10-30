@@ -1516,8 +1516,8 @@ def build(
     *,
     review_heading: str = "",
     settled_rollup: str = "",
-    owner_body_lines: str = "",
     milestone_default: str = "",
+    owner_body_lines: str = "",
     ranking: str = "",
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
@@ -1802,8 +1802,8 @@ def cmd_build(args: argparse.Namespace) -> None:
         sort_labels=args.sort_labels,
         review_heading=args.review_heading,
         settled_rollup=args.settled_rollup,
-        owner_body_lines=args.owner_body_lines,
         milestone_default=args.milestone_default,
+        owner_body_lines=args.owner_body_lines,
         ranking=args.ranking,
     )
     try:
@@ -1992,14 +1992,14 @@ def main(argv: list[str] | None = None) -> int:
         help="true to leave the board's own checks out and read skipped as settled",
     )
     b.add_argument(
-        "--owner-body-lines",
-        default="",
-        help="true to read order and after lines only from the owner's issues, empty for anyone's",
-    )
-    b.add_argument(
         "--milestone-default",
         default="",
         help="the milestone the page opens on, such as 'MVP <n>', no selector if empty",
+    )
+    b.add_argument(
+        "--owner-body-lines",
+        default="",
+        help="true to read order and after lines only from the owner's issues, empty for anyone's",
     )
     b.add_argument(
         "--ranking",

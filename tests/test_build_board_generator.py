@@ -5633,8 +5633,8 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.sort-labels",
                 "inputs.review-heading",
                 "inputs.settled-rollup",
-                "inputs.owner-body-lines",
                 "inputs.milestone-default",
+                "inputs.owner-body-lines",
                 "inputs.ranking",
                 "job.workflow_repository",
                 "job.workflow_sha",
@@ -5750,8 +5750,8 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
         "sort-labels",
         "review-heading",
         "settled-rollup",
-        "owner-body-lines",
         "milestone-default",
+        "owner-body-lines",
         "ranking",
     ]
     for block in declared.values():
@@ -5768,8 +5768,8 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     assert '    with:\n      sort-labels: "true"\n' in readme
     assert "    with:\n      review-heading: Review complete\n" in readme
     assert '    with:\n      settled-rollup: "true"\n' in readme
-    assert '    with:\n      owner-body-lines: "true"\n' in readme
     assert "    with:\n      milestone-default: MVP <n>\n" in readme
+    assert '    with:\n      owner-body-lines: "true"\n' in readme
     assert "    with:\n      ranking: order\n" in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page

@@ -501,8 +501,12 @@ function source() {
    own review decision stays at "review required" whatever a session posts,
    because a session comments rather than approving, so a review that has
    landed and a review nobody has written look identical to the API. Counting
-   the comments that open with a review heading is what separates them, and a
-   card cannot leave the column saying the next move is mine without it.
+   the owner's comments that open with a review heading is what separates
+   them, and a card cannot leave the column saying the next move is mine
+   without it. A repository that names its own heading counts only that whole
+   line, posted as a comment or a review after the head commit, so a commit
+   made after the review sends the card back. The page reads the flag and
+   prints `review` as it comes, so it draws either rule the same way.
 
    A branch that closes no issue gets no card at all, because the board is
    built from the tracker. That happened once, and the fix was to file the
@@ -607,21 +611,32 @@ const orlist = xs => joinwith("or", xs);
    still running and an empty rollup each read as themselves rather than as a
    pass, so nothing unfinished is drawn as green.
 
-   Only `success` is green. This used to count `failure`, `running` and
-   `neutral` and call every other word a pass, so GitHub's own uppercase
-   `FAILURE` or `TIMED_OUT`, passed through as they come, read as green. The
-   generator behind the board on GitHub Pages maps every state into the four
-   words, and a word this page does not know now reads as reported neither way,
-   so the next state GitHub adds cannot arrive here as a pass. */
+   Only `success` and `skipped` are settled, and only `success` makes green.
+   This used to count `failure`, `running` and `neutral` and call every other
+   word a pass, so GitHub's own uppercase `FAILURE` or `TIMED_OUT`, passed
+   through as they come, read as green. The generator behind the board on
+   GitHub Pages maps every state into five words, and a word this page does
+   not know now reads as reported neither way, so the next state GitHub adds
+   cannot arrive here as a pass.
+
+   `skipped` is a job whose condition kept it from running, such as one that
+   runs only on the default branch. The generator writes it only for a
+   repository that asks for a settled rollup, and writes `neutral` otherwise,
+   so a repository that does not ask draws as it did before.
+
+   A rollup of nothing but skipped checks is not green. Every check standing
+   aside means nothing built the branch, which is the same reason an empty
+   rollup does not pass, so it reads as skipped with none run. */
 function checkword(rollup) {
-  const c = k => (rollup || []).filter(([, s]) => s === k).length;
   if (!rollup || !rollup.length) return ["none", "no checks reported"];
-  const bad = c("failure"), run = c("running");
-  const odd = rollup.length - bad - run - c("success");
+  const c = k => rollup.filter(([, s]) => s === k).length;
+  const bad = c("failure"), run = c("running"), ok = c("success"), skip = c("skipped");
+  const odd = rollup.length - bad - run - ok - skip;
   if (bad) return ["bad", plu(bad, "check") + " failing" +
     (run ? ", " + plu(run, "check") + " still running" : "")];
   if (run) return ["run", plu(run, "check") + " still running"];
   if (odd) return ["none", plu(odd, "check") + " reported neither way"];
+  if (!ok) return ["none", plu(skip, "check") + " skipped and none ran"];
   return ["ok", "checks green"];
 }
 
@@ -1864,11 +1879,13 @@ function buildOrder() {
    once, and the card read "2 checks still running" under a heading saying the
    next move was theirs, which invites a merge of a branch that can still go red.
 
-   `checkword` returns "ok" only when every entry succeeded, so three states all
-   stay on this side: a check still running, a check that failed, and no checks
-   reported at all. The last is not an oversight. A conflicting pull request gets
-   no run created, which `CLAUDE.md` records as its own failure mode, and a
-   branch nothing built is not one to hand over either.
+   `checkword` returns "ok" only when every entry succeeded or was skipped, and
+   at least one succeeded. So anything else stays on this side: a check still
+   running, a check that failed, a check reported neither way, every check
+   skipped, and no checks reported at all. The last two are not an oversight. A
+   conflicting pull request gets no run created, which `CLAUDE.md` records as
+   its own failure mode, and a branch nothing built is not one to hand over
+   either.
 
    The third thing is that the branch's own session has finished with it. A
    branch can be reviewed and green while its session is still pushing to it,

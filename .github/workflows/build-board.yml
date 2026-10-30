@@ -31,6 +31,11 @@ name: Build board
 # request that closes l3a0/repo-template#41, fill each label chip with the
 # colour GitHub stores for the label and sort each card's labels by name.
 #
+# The `review-heading` and `settled-rollup` inputs, added by the pull request
+# that closes l3a0/repo-template#47, count a review only when the owner posts
+# the named heading after the head commit, and leave the board's own checks
+# out of a pull request's rollup.
+#
 # An `owner-body-lines` input, added by the pull request that closes
 # l3a0/repo-template#48, reads order and after lines only from issues the
 # owner opened. A `milestone-default` input, added by the pull request that
@@ -123,6 +128,26 @@ on:
           GitHub returns, which is the order the labels were added.
         type: string
         default: ""
+      review-heading:
+        description: >-
+          The heading, without its "## ", that closes a review, such as
+          Review complete. A pull request reads as reviewed only when the
+          owner posts a comment or a review whose whole first line is that
+          heading after its head commit. A review counts only when it names
+          the head commit, and it reaches the board on the next run of any
+          other kind, because no event the board listens to fires when a
+          review is submitted. Empty counts any owner comment opening with
+          "## Review", posted at any time.
+        type: string
+        default: ""
+      settled-rollup:
+        description: >-
+          "true" leaves the board's own checks out of a pull request's
+          rollup, reads a skipped check as settled, reads a cancelled one as
+          neither way, and sorts the checks by name. Empty keeps the rollup
+          as GitHub lists it.
+        type: string
+        default: ""
       owner-body-lines:
         description: >-
           "true" reads a "Board order:" or "Board after:" line only in the
@@ -157,12 +182,15 @@ jobs:
     timeout-minutes: 10
     # Declaring any scope sets every unlisted one to none, so each scope the
     # generator reads is named. The caller's job grants at least these.
+    # `actions: read` covers the workflow run behind each check run, whose
+    # file tells the board's own checks apart.
     permissions:
       contents: read
       issues: read
       pull-requests: read
       checks: read
       statuses: read
+      actions: read
     outputs:
       updated_at: ${{ steps.board.outputs.updated_at }}
     steps:
@@ -197,6 +225,8 @@ jobs:
           DEFAULT_BRANCH_HEAD: ${{ inputs.default-branch-head }}
           LABEL_COLORS: ${{ inputs.label-colors }}
           SORT_LABELS: ${{ inputs.sort-labels }}
+          REVIEW_HEADING: ${{ inputs.review-heading }}
+          SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
           OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
           MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
           RANKING: ${{ inputs.ranking }}
@@ -211,6 +241,8 @@ jobs:
           --default-branch-head="$DEFAULT_BRANCH_HEAD"
           --label-colors="$LABEL_COLORS"
           --sort-labels="$SORT_LABELS"
+          --review-heading="$REVIEW_HEADING"
+          --settled-rollup="$SETTLED_ROLLUP"
           --owner-body-lines="$OWNER_BODY_LINES"
           --milestone-default="$MILESTONE_DEFAULT"
           --ranking="$RANKING"

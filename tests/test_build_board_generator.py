@@ -90,7 +90,7 @@ HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 # until the plugin releases a skill that matches and this pin moves to it. Any
 # other format change rests on the plugin's own rule that a generator's format
 # change ships with a plugin release in the same step.
-PLUGIN_COMMIT = "82b40213293d8f0b7abe9b13a78b16d106a84b64"
+PLUGIN_COMMIT = "7f392da18a227df8ce6c1f34b2bc57ade278d8aa"
 PLUGIN_SKILLS = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.
@@ -5992,9 +5992,8 @@ def test_a_change_that_starts_no_run_names_the_dispatch() -> None:
     for moment in moments:
         if NO_RUN_WORDING.search(moment):
             assert "dispatch the board" in moment.lower(), moment.split("\n", 1)[0]
-    skill = _skill()
-    assert f"\n{DISPATCH}\n" in skill
-    assert f"{DISPATCH} --ref" not in skill
+    assert f"\n{DISPATCH}\n" in _skill()
+    assert f"{DISPATCH} --ref" not in _plugin("SKILL.md")
     assert re.search(r"^  workflow_dispatch:\s*$", _workflow(), re.M)
 
 
@@ -6366,7 +6365,9 @@ WITH_FORM = re.compile(r"`with:\s+([\w-]+):")
 
 
 FENCE = re.compile(r"^ *(```|~~~)[^\n]*\n(.*?)^ *\1", re.S | re.M)
-SHARED_USES = re.compile(r"uses:\s*l3a0/repo-template/\.github/workflows/build-board\.yml@")
+SHARED_USES = re.compile(r"uses:\s*[\"']?l3a0/repo-template/\.github/workflows/build-board\.yml@")
+# A flow mapping's entries, split on commas outside quotes.
+FLOW_ENTRY = re.compile(r"(?:[^,\"']|\"[^\"]*\"|'[^']*')+")
 WITH_LINE = re.compile(r"( *)with:\s*(?:\{(.*)\})?\s*(?:#.*)?")
 
 
@@ -6393,7 +6394,9 @@ def _fenced_with(text: str) -> set[str]:
     is read, so an action's own inputs, such as ``actions/checkout``'s
     ``fetch-depth``, are not. A fence is backticks or tildes, line endings may
     be CRLF, the ``with:`` may carry a comment, its block may hold blank lines
-    and comment lines, and the flow form ``with: {a: x}`` is read too.
+    and comment lines, and the flow form ``with: {a: x}`` is read too. The
+    ``uses:`` value and each key may be quoted, and a quoted flow value may
+    hold a comma.
     """
     names = set()
     for _, fence in FENCE.findall(text.replace("\r\n", "\n")):
@@ -6403,7 +6406,7 @@ def _fenced_with(text: str) -> set[str]:
             if not m or not any(SHARED_USES.match(s.strip()) for s in _siblings(lines, k)):
                 continue
             if m.group(2) is not None:
-                names |= {p.split(":", 1)[0].strip() for p in m.group(2).split(",") if p.strip()}
+                names |= {_key(p) for p in FLOW_ENTRY.findall(m.group(2)) if p.strip() and ":" in p}
                 continue
             inner = None
             for below in lines[k + 1 :]:
@@ -6413,8 +6416,13 @@ def _fenced_with(text: str) -> set[str]:
                     break
                 inner = _indent(below) if inner is None else inner
                 if _indent(below) == inner and ":" in below:
-                    names.add(below.strip().split(":", 1)[0])
+                    names.add(_key(below))
     return names
+
+
+def _key(entry: str) -> str:
+    """The key of one ``key: value`` entry, without the quotes YAML allows round it."""
+    return entry.strip().split(":", 1)[0].strip().strip("\"'")
 
 
 def test_the_plugin_names_every_input_in_its_with_form() -> None:
@@ -6496,20 +6504,40 @@ def test_the_pin_to_use_declares_every_input() -> None:
 BOARD_ROWS = "| Repository | Pin | Inputs |\n| --- | --- | --- |\n"
 
 
+# The table under "Generator compatibility" that repeats each repository's pin.
+COMPAT_ROWS = (
+    "| Repository | Pinned at | Formats that pin reads | Caller read at |\n"
+    "| --- | --- | --- | --- |\n"
+)
+
+
+def _rows(raw: str, header: str) -> list[list[str]]:
+    """The cells of each row of the one table under ``header``."""
+    assert raw.count(header) == 1, f"the skill carries no single table under {header!r}"
+    rows = raw.split(header, 1)[1].split("\n\n", 1)[0].splitlines()
+    assert rows
+    return [row.strip("| ").split(" | ") for row in rows]
+
+
 def test_the_board_table_names_declared_inputs_and_no_refused_pin() -> None:
     """Protects a session from copying a repository's row that GitHub would refuse.
 
     Every input a row names in a code span has to be one the workflow
-    declares, and no row pins ``4c546fc``. The whole file is read.
+    declares, and no row pins ``4c546fc``. The compatibility table repeats
+    each repository's pin, so it pins no ``4c546fc`` either, and names the
+    same pin for each repository. The whole file is read.
     """
     raw = _plugin("SKILL.md")
-    assert raw.count(BOARD_ROWS) == 1, "the skill carries no single table of boards"
-    rows = raw.split(BOARD_ROWS, 1)[1].split("\n\n", 1)[0].splitlines()
-    assert rows
-    for row in rows:
-        _, pin, inputs = row.strip("| ").split(" | ")
-        assert not any(p.startswith("4c546fc") for p in re.findall(r"`([^`]+)`", pin)), row
-        assert set(re.findall(r"`([\w-]+)`", inputs)) <= set(_inputs()), row
+    pins = {}
+    for repo, pin, inputs in _rows(raw, BOARD_ROWS):
+        pins[repo] = re.findall(r"`([^`]+)`", pin)
+        assert not any(p.startswith("4c546fc") for p in pins[repo]), repo
+        assert set(re.findall(r"`([\w-]+)`", inputs)) <= set(_inputs()), repo
+    compat = {}
+    for repo, pin, *_ in _rows(raw, COMPAT_ROWS):
+        compat[repo] = re.findall(r"`([^`]+)`", pin)
+        assert not any(p.startswith("4c546fc") for p in compat[repo]), repo
+    assert compat == pins
 
 
 def test_the_skill_states_the_digit_limit_once() -> None:
@@ -6815,9 +6843,13 @@ def test_the_build_command_check_fails_a_broken_command(mutant: str, tmp_path: P
 # and the file it reads. ``--jq``, which reads gh's output rather than a
 # board, is not one.
 JQ_CALL = re.compile(r"(?<![-\w])jq(?: -[a-z]+)* (?:'([^']+)'|(\.[\w.]+))(?: ([^\s`]+))?")
-# Any jq command at all, which the count of calls above has to equal, so a
-# call the pattern cannot read, such as a double-quoted filter, fails.
-LOOSE_JQ = re.compile(r"(?<![-\w`])jq\s")
+# Any jq command at all, a code span's included, which the count of calls
+# above has to equal, so a call the pattern cannot read, such as a
+# double-quoted filter or one with ``--arg``, fails. Both are counted only in
+# fences and code spans, since a jq in plain prose is a word, not a command.
+LOOSE_JQ = re.compile(r"(?<![-\w])jq\s")
+# An inline code span, of any number of backticks.
+SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 # Where every jq call reads the board, the file the build command writes.
 JQ_FILE = "<scratch>/board.json"
 # The review read moment 5 gives, which the fallback in sync-prune-next reuses.
@@ -6841,6 +6873,13 @@ def _jq_expected(board: dict) -> dict[str, dict[str, list]]:
             ".state.updatedAt": [board["state"]["updatedAt"]],
         },
     }
+
+
+def _code(text: str) -> list[str]:
+    """The text of each fenced block and each code span in ``text``."""
+    text = text.replace("\r\n", "\n")
+    fences = [body for _, body in FENCE.findall(text)]
+    return fences + [span for _, span in SPAN.findall(FENCE.sub("", text))]
 
 
 def _jq_file(file: str) -> str:
@@ -6886,8 +6925,8 @@ def test_each_jq_filter_in_the_skills_reads_a_board(tmp_path: Path) -> None:
 
     Each skill's filters are compared on their own, so a read dropped from
     one skill fails even while the other carries the same filter. Every jq
-    command in a skill has to be a call the pattern reads, and every call
-    reads the file the build command writes. Each filter runs against a board
+    command in a fence or a code span has to be a call the pattern reads, and
+    every call reads the file the build command writes. Each filter runs against a board
     the generator wrote, a golden here, and against a wider copy that
     ``_wide_board`` describes, and has to print what each holds, read in
     Python. Filters compare with whitespace collapsed, so a plugin release
@@ -6902,9 +6941,10 @@ def test_each_jq_filter_in_the_skills_reads_a_board(tmp_path: Path) -> None:
     wide_path = tmp_path / "wide.json"
     wide_path.write_text(json.dumps(wide), encoding="utf-8")
     for skill, outputs in _jq_expected(golden).items():
-        text = _plugin("SKILL.md", skill)
-        calls = JQ_CALL.findall(text)
-        assert len(LOOSE_JQ.findall(text)) == len(calls), f"{skill} has a jq command not read"
+        code = _code(_plugin("SKILL.md", skill))
+        calls = [call for part in code for call in JQ_CALL.findall(part)]
+        commands = sum(len(LOOSE_JQ.findall(part)) for part in code)
+        assert commands == len(calls), f"{skill} has a jq command the pattern cannot read"
         for quoted, bare, file in calls:
             assert _jq_file(file) == JQ_FILE, (skill, quoted or bare, file)
         filters = {_collapse(quoted or bare) for quoted, bare, _ in calls}
@@ -6917,3 +6957,182 @@ def test_each_jq_filter_in_the_skills_reads_a_board(tmp_path: Path) -> None:
         for f in filters:
             assert _jq(jq, f, MARKERS_GOLDEN) == want[f], (skill, f)
             assert _jq(jq, f, wide_path) == wider[f], (skill, f)
+
+
+# Two commits in a stand-in answer, by oid, with their dates.
+HEAD_OID, OTHER_OID = "b" * 40, "a" * 40
+COMMIT_DATES = {HEAD_OID: "2026-10-28T19:40:29Z", OTHER_OID: "2026-09-01T00:00:00Z"}
+
+
+def test_the_fallback_reads_the_head_commits_date(tmp_path: Path) -> None:
+    """Protects a round from trusting a review the head commit came after.
+
+    ``sync-prune-next``'s fallback reads a pull request whose head commit is
+    later than the published board as unknown. ``gh pr view --json commits``
+    lists only the first 100 commits, so its last is not always the head. The
+    skill's command asks for the last commit and keeps it only when its oid
+    is the head's. Its filter runs on stand-in answers holding two commits,
+    the head first and then last, and has to print the head's date both
+    times, and the sentence after it has to read a later date as unknown.
+    """
+    jq = _tool("jq")
+    raw = _plugin("SKILL.md", "sync-prune-next")
+    lines = [
+        x
+        for x in raw.splitlines()
+        if x.startswith("gh api graphql") and "headRefOid" in x and "committedDate" in x
+    ]
+    assert len(lines) == 1, "the fallback carries no single head-date command"
+    assert "commits(last:1)" in lines[0], "the command does not ask for the last commit"
+    found = re.search(r"--jq '([^']+)'", lines[0])
+    assert found, "the command carries no --jq filter"
+    for order in ([OTHER_OID, HEAD_OID], [HEAD_OID, OTHER_OID]):
+        nodes = [{"commit": {"oid": o, "committedDate": COMMIT_DATES[o]}} for o in order]
+        answer = {
+            "data": {
+                "repository": {"pullRequest": {"headRefOid": HEAD_OID, "commits": {"nodes": nodes}}}
+            }
+        }
+        path = tmp_path / "answer.json"
+        path.write_text(json.dumps(answer), encoding="utf-8")
+        done = subprocess.run([jq, "-r", found.group(1), str(path)], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.splitlines() == [COMMIT_DATES[HEAD_OID]], order
+    assert re.search(r"dated later than the file's `state\.updatedAt` reads as unknown", raw)
+
+
+SHARED = "uses: l3a0/repo-template/.github/workflows/build-board.yml@main"
+
+
+def _fence(body: str, mark: str = "```") -> str:
+    return f"{mark}yaml\n{body}\n{mark}\n"
+
+
+HELPER_CASES = [
+    (
+        "block",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with:\n      title: T\n      ranking: order"),
+        {"title", "ranking"},
+    ),
+    (
+        "with before uses",
+        _fenced_with,
+        _fence(f"    with:\n      title: T\n    {SHARED}"),
+        {"title"},
+    ),
+    (
+        "trailing comment",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with:  # inputs\n      title: T"),
+        {"title"},
+    ),
+    (
+        "blank lines",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with:\n      title: T\n\n      ranking: order"),
+        {"title", "ranking"},
+    ),
+    (
+        "comment lines",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with:\n      # a note\n      title: T"),
+        {"title"},
+    ),
+    (
+        "a folded value",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with:\n      note: >-\n        Read: this.\n      title: T"),
+        {"note", "title"},
+    ),
+    ("tildes", _fenced_with, _fence(f"    {SHARED}\n    with:\n      title: T", "~~~"), {"title"}),
+    (
+        "CRLF",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with:  # inputs\n      title: T").replace("\n", "\r\n"),
+        {"title"},
+    ),
+    (
+        "four backticks",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with:\n      title: T", "````"),
+        {"title"},
+    ),
+    (
+        "a fence in a list item",
+        _fenced_with,
+        f"1. Item\n\n   ```yaml\n   jobs:\n     board:\n       {SHARED}\n       with:\n"
+        "         title: T\n   ```\n",
+        {"title"},
+    ),
+    (
+        "flow",
+        _fenced_with,
+        _fence(f"    {SHARED}\n    with: {{title: T, ranking: order}}"),
+        {"title", "ranking"},
+    ),
+    (
+        "actions/checkout",
+        _fenced_with,
+        _fence("      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0"),
+        set(),
+    ),
+    (
+        "a quoted uses",
+        _fenced_with,
+        _fence(
+            '    uses: "l3a0/repo-template/.github/workflows/build-board.yml@main"\n'
+            "    with:\n      title: T"
+        ),
+        {"title"},
+    ),
+    (
+        "flow with a comma in quotes",
+        _fenced_with,
+        _fence(f'    {SHARED}\n    with: {{title: "a, b", ranking: order}}'),
+        {"title", "ranking"},
+    ),
+    ("a quoted key", _fenced_with, _fence(f'    {SHARED}\n    with:\n      "title": T'), {"title"}),
+    (
+        "an item continued at three spaces",
+        lambda t: bool(_pinned_list_problems(t)),
+        f"\n{PINNED_OPENER} More.\n\n1. One.\n   continued.\n2. Two.\n",
+        False,
+    ),
+    (
+        "a paragraph nested at four spaces",
+        lambda t: bool(_pinned_list_problems(t)),
+        f"\n{PINNED_OPENER} More.\n\n1. One.\n2. Two.\n\n    Nested.\n",
+        False,
+    ),
+    (
+        "an unindented paragraph",
+        lambda t: bool(_pinned_list_problems(t)),
+        f"\n{PINNED_OPENER} More.\n\n1. One.\n2. Two.\n\nLoose.\n",
+        True,
+    ),
+    (
+        "a paragraph at two spaces",
+        lambda t: bool(_pinned_list_problems(t)),
+        f"\n{PINNED_OPENER} More.\n\n1. One.\n2. Two.\n\n  Two spaces.\n",
+        True,
+    ),
+    ("a bare file", _jq_file, "<scratch>/board.json", "<scratch>/board.json"),
+    ("a double-quoted file", _jq_file, '"<scratch>/board.json"', "<scratch>/board.json"),
+    ("a single-quoted file", _jq_file, "'<scratch>/board.json'", "<scratch>/board.json"),
+    ("a file ending a $( )", _jq_file, "<scratch>/board.json)", "<scratch>/board.json"),
+]
+
+
+@pytest.mark.parametrize(
+    ("helper", "given", "want"),
+    [pytest.param(h, g, w, id=name) for name, h, g, w in HELPER_CASES],
+)
+def test_the_helpers_that_read_the_plugin_read_what_they_say(helper, given, want) -> None:
+    """Protects the plugin checks above from a helper that quietly reads nothing.
+
+    Each check rests on a helper. A helper that returned nothing, or read
+    every block, would leave its check passing on any text, so each one runs
+    on cases built here, both ones it must read and ones it must not.
+    """
+    assert helper(given) == want

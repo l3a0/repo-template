@@ -624,7 +624,19 @@ fragment pr on PullRequest {{
 
 PR_FIELDS = pr_fields()
 
-ISSUES_QUERY = f"""
+# What the issues query reads about each issue's sub-issues. A caller that sets
+# no ranking reads the count it always read, so it sends the query it sent
+# before. ``--ranking=order`` also needs how many have closed, which only
+# ``subIssuesSummary`` carries, and its ``total`` counts the same sub-issues as
+# ``subIssues``'s ``totalCount``.
+SUB_ISSUES_COUNT = "subIssues{totalCount}"
+SUB_ISSUES_SUMMARY = "subIssuesSummary{total completed}"
+
+
+def issues_query(by_order: bool = False) -> str:
+    """The query for the open issues, with the sub-issue fields ``by_order`` needs."""
+    sub_issues = SUB_ISSUES_SUMMARY if by_order else SUB_ISSUES_COUNT
+    return f"""
 query($owner:String!, $name:String!, $after:String) {{
   rateLimit{{cost}}
   repository(owner:$owner, name:$name) {{
@@ -635,7 +647,7 @@ query($owner:String!, $name:String!, $after:String) {{
         milestone{{title}}
         labels(first:100){{{PAGE_INFO} nodes{{name color}}}}
         blockedBy(first:100){{{PAGE_INFO} nodes{{number state repository{{nameWithOwner}}}}}}
-        subIssuesSummary{{total completed}}
+        {sub_issues}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
         closedByPullRequestsReferences(first:100, includeClosedPrs:true){{
           {PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
@@ -647,6 +659,9 @@ query($owner:String!, $name:String!, $after:String) {{
   }}
 }}
 """
+
+
+ISSUES_QUERY = issues_query()
 
 
 def open_prs_query(fields: str = PR_FIELDS) -> str:
@@ -1299,13 +1314,18 @@ def tracker_card(
     issues the body's ``Board after:`` lines name, which ``read_body`` reads.
     ``cut`` writes the milestone's short name in place of its whole title.
     ``by_order`` counts only the open sub-issues toward a parent, which
-    ``--ranking=order`` asks for. ``subIssuesSummary`` counts closed ones in
-    ``total`` too, so the open ones are ``total`` less ``completed``.
+    ``--ranking=order`` asks for. Only then does the issues query read
+    ``subIssuesSummary``, whose ``total`` counts closed ones too, so the open
+    ones are ``total`` less ``completed``. Otherwise it reads ``subIssues``,
+    whose ``totalCount`` is every sub-issue, as every run before the input did.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
-    summary = issue["subIssuesSummary"]
-    children = summary["total"] - (summary["completed"] if by_order else 0)
+    if by_order:
+        summary = issue["subIssuesSummary"]
+        children = summary["total"] - summary["completed"]
+    else:
+        children = issue["subIssues"]["totalCount"]
     kinds = card_kinds(names, children, kinds_read)
     if len(kinds) > 1:
         conflicts.append(f"#{n} reads as {' and '.join(kinds)}, read as {kinds[0]}")
@@ -1557,7 +1577,7 @@ def build(
     milestone_pattern(milestone_default)
     owner, name = repo.split("/", 1)
     main = head_commit(gql, owner, name) if head else None
-    issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
+    issues = _top_pages(gql, issues_query(ordered), owner, name, "issues")
     open_issues = {i["number"] for i in issues}
 
     tracker = []

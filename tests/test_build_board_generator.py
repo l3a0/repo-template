@@ -166,7 +166,8 @@ def issue(
     """One open issue as the issues query returns it.
 
     ``sub_issues`` is the count of sub-issues, all open, or a ``(total,
-    completed)`` pair, the two fields ``subIssuesSummary`` carries. A label
+    completed)`` pair, the two fields ``subIssuesSummary`` carries. The issue
+    carries ``subIssues`` too, which the query reads when no ranking is set. A label
     carries a ``color`` field only when ``colors`` names it. GitHub always
     returns one, so a fixture without ``colors`` is a label whose colour the
     generator never needs to read.
@@ -184,6 +185,7 @@ def issue(
             [{"name": x} | ({"color": colors[x]} if x in colors else {}) for x in labels]
         ),
         "blockedBy": conn([blocker(*b) for b in blocked_by]),
+        "subIssues": {"totalCount": total},
         "subIssuesSummary": {"total": total, "completed": completed},
         "issueComments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
         "closedByPullRequestsReferences": conn([ref(p) for p in closed_by]),
@@ -2100,14 +2102,37 @@ def test_the_issues_query_reads_each_issues_author() -> None:
 def test_the_issues_query_reads_both_sub_issue_counts() -> None:
     """Protects the parent rule from a field the live read never asked for.
 
-    ``tracker_card`` reads ``total`` and ``completed`` from every issue's
-    ``subIssuesSummary``. ``FakeGitHub`` answers from fixtures whatever a
-    query selects, so a query that dropped either field would pass every
-    other test here and stop the live run on a missing key.
+    Under ``ranking=order``, ``tracker_card`` reads ``total`` and
+    ``completed`` from every issue's ``subIssuesSummary``, and otherwise
+    ``totalCount`` from its ``subIssues``. ``FakeGitHub`` answers from
+    fixtures whatever a query selects, so a query that dropped a field would
+    pass every other test here and stop the live run on a missing key.
     """
-    summary = re.search(r"subIssuesSummary\{\{?([^}]*)\}", bb.ISSUES_QUERY)
-    assert summary, "the issues query reads no subIssuesSummary"
+    summary = re.search(r"subIssuesSummary\{([^}]*)\}", bb.issues_query(True))
+    assert summary, "the order query reads no subIssuesSummary"
     assert sorted(summary.group(1).split()) == ["completed", "total"]
+    assert "subIssues{totalCount}" not in bb.issues_query(True)
+    assert "subIssues{totalCount}" in bb.ISSUES_QUERY
+    assert "subIssuesSummary" not in bb.ISSUES_QUERY
+
+
+@pytest.mark.parametrize(("ranking", "field"), [("", "subIssues{"), ("order", "subIssuesSummary{")])
+def test_the_ranking_chooses_the_sub_issue_field_the_live_read_asks_for(
+    ranking: str, field: str
+) -> None:
+    """Protects each rule from a query that asks for the other rule's field.
+
+    ``FakeGitHub`` hands every issue both fields, so only the query text
+    shows which one a run asked GitHub for. A run that read the wrong one
+    would stop on a missing key against the live API.
+    """
+    gh = FakeGitHub([issue(1, sub_issues=(2, 1))], [])
+    bb.build(gh, REPO, 30, NOW, ranking=ranking)
+    issues_queries = [q for q in gh.calls if "issues(states:OPEN" in q]
+    assert issues_queries
+    assert all(field in q for q in issues_queries)
+    other = "subIssuesSummary{" if field == "subIssues{" else "subIssues{"
+    assert not any(other in q for q in issues_queries)
 
 
 @pytest.mark.parametrize(
@@ -5897,7 +5922,7 @@ def test_a_change_that_starts_no_run_names_the_dispatch() -> None:
     trigger.
     """
     assert set(NO_RUN_READS) <= set(
-        re.findall(r"\b(blockedBy|subIssuesSummary)\b", bb.ISSUES_QUERY)
+        re.findall(r"\b(blockedBy|subIssuesSummary)\b", bb.issues_query(True))
     )
     moments = _moments()
     for words in NO_RUN_READS.values():

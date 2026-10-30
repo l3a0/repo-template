@@ -155,14 +155,26 @@ def issue(
     blocked_by: tuple[tuple, ...] = (),
     sub_issues: int = 0,
     comments: tuple[tuple[str, str], ...] = (),
+    colors: dict[str, str] | None = None,
+    association: str = "OWNER",
 ) -> dict:
+    """One open issue as GitHub returns it.
+
+    A label carries a ``color`` field only when ``colors`` names it. GitHub
+    always returns one, so a fixture without ``colors`` is a label whose colour
+    the generator never needs to read.
+    """
+    colors = colors or {}
     return {
         "id": f"I{n}",
         "number": n,
         "title": title or f"Issue {n}",
         "body": body,
+        "authorAssociation": association,
         "milestone": {"title": milestone} if milestone is not None else None,
-        "labels": conn([{"name": x} for x in labels]),
+        "labels": conn(
+            [{"name": x} | ({"color": colors[x]} if x in colors else {}) for x in labels]
+        ),
         "blockedBy": conn([blocker(*b) for b in blocked_by]),
         "subIssues": {"totalCount": sub_issues},
         "issueComments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
@@ -184,8 +196,14 @@ def blocker(n: int, state: str, repo: str = REPO) -> dict:
     return {"number": n, "state": state, "repository": {"nameWithOwner": repo}}
 
 
-def check(name: str, conclusion: str | None, status: str = "COMPLETED") -> dict:
-    return {"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion}
+def check(
+    name: str, conclusion: str | None, status: str = "COMPLETED", *, workflow: str | None = None
+) -> dict:
+    """One check run, from the workflow file ``workflow`` names when it names one."""
+    run = {"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion}
+    if workflow is not None:
+        run["checkSuite"] = {"workflowRun": {"file": {"path": workflow}}}
+    return run
 
 
 def status(context: str, state: str) -> dict:
@@ -198,24 +216,59 @@ def pull(
     state: str = "OPEN",
     body: str = "",
     closes: tuple[int | tuple[int, str], ...] = (),
-    comments: tuple[tuple[str, str], ...] = (),
+    comments: tuple[tuple[str, ...], ...] = (),
     contexts: tuple[dict, ...] = (check("test", "SUCCESS"),),
     fork: bool = False,
+    committed: str | None = None,
+    reviews: tuple[tuple[str | None, ...], ...] | None = None,
 ) -> dict:
-    return {
+    """One pull request as the query returns it.
+
+    A comment is ``(association, body)``, or ``(association, body, createdAt)``.
+    ``committed`` is the head commit's ``committedDate``, and ``reviews`` lists
+    ``(association, body, submittedAt)``, or the same with the oid of the
+    commit the review names, which is the head's ``c<n>`` when left out. Each
+    of the three is left out of the fixture unless the test names it, as every
+    fixture written before the ``review-heading`` input left them out, and the
+    head's oid comes with either of the last two.
+    """
+    pr = {
         "id": f"P{n}",
         "number": n,
         "state": state,
         "body": body,
         "isCrossRepository": fork,
         "closingIssuesReferences": conn([ref(i) for i in closes]),
-        "comments": conn([{"authorAssociation": a, "body": b} for a, b in comments]),
+        "comments": conn(
+            [
+                {"authorAssociation": a, "body": b, **({"createdAt": t[0]} if t else {})}
+                for a, b, *t in comments
+            ]
+        ),
         "commits": {
             "nodes": [
                 {"commit": {"statusCheckRollup": {"id": f"R{n}", "contexts": conn(list(contexts))}}}
             ]
         },
     }
+    head = pr["commits"]["nodes"][0]["commit"]
+    if committed is not None or reviews is not None:
+        head["oid"] = f"c{n}"
+    if committed is not None:
+        head["committedDate"] = committed
+    if reviews is not None:
+        pr["reviews"] = conn(
+            [
+                {
+                    "authorAssociation": a,
+                    "body": b,
+                    "submittedAt": t,
+                    "commit": {"oid": rest[0] if rest else f"c{n}"},
+                }
+                for a, b, t, *rest in reviews
+            ]
+        )
+    return pr
 
 
 class FakeGitHub:
@@ -275,8 +328,24 @@ class FakeGitHub:
         return {"rateLimit": {"cost": 1}, "repository": found}
 
 
-def build(gh: FakeGitHub, data_label: str = "", milestone_default: str = "") -> tuple[dict, dict]:
-    return bb.build(gh, REPO, 30, NOW, data_label=data_label, milestone_default=milestone_default)
+def build(
+    gh: FakeGitHub,
+    data_label: str = "",
+    label_colors: str = "",
+    sort_labels: str = "",
+    **inputs: str,
+) -> tuple[dict, dict]:
+    """The board and report for ``gh``, with any of the keyword-only inputs."""
+    return bb.build(
+        gh,
+        REPO,
+        30,
+        NOW,
+        data_label=data_label,
+        label_colors=label_colors,
+        sort_labels=sort_labels,
+        **inputs,
+    )
 
 
 def prs_of(board: dict) -> list[dict]:
@@ -617,7 +686,7 @@ def test_a_caller_setting_no_line_gets_the_board_it_got_before() -> None:
 # with `git show cf2959a3:scripts/build_board.py`, through its own `main()`.
 # The file is never rewritten from the code under test, because a golden
 # written by the head would compare the head with itself.
-GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "lines.json"
+LINES_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "lines.json"
 GOLDEN_CRON = 'on:\n  schedule:\n    - cron: "8,38 * * * *"\n'
 
 
@@ -631,7 +700,16 @@ class FixedNow(datetime):
 
 @pytest.mark.parametrize(
     "lines",
-    [[], ["--subtitle=", "--note=", "--default-branch-head="]],
+    [
+        [],
+        [
+            "--subtitle=",
+            "--note=",
+            "--default-branch-head=",
+            "--label-colors=",
+            "--sort-labels=",
+        ],
+    ],
     ids=["left-out", "passed-empty"],
 )
 def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
@@ -639,10 +717,11 @@ def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
 ) -> None:
     """Protects every current caller's board.json, byte for byte.
 
-    The generator at cf2959a3 wrote ``GOLDEN`` from the same tracker before the
-    three inputs existed. The head, with none of them set, has to write the
-    same bytes to the file it publishes. The workflow passes every flag
-    whether or not the caller set it, so passing them empty counts too.
+    The generator at cf2959a3 wrote ``LINES_GOLDEN`` from the same tracker
+    before the three inputs existed. The head, with none of them set, has to
+    write the same bytes to the file it publishes. The workflow passes every
+    flag whether or not the caller set it, the two label inputs included, so
+    passing them all empty counts too.
     """
     fake = every_case()
     fake.requests, fake.retries, fake.cost = 1, 0, 1
@@ -655,7 +734,7 @@ def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
     out = tmp_path / "site"
     argv = ["build", "--repo", REPO, "--workflow", str(workflow), "--out", str(out)]
     assert bb.main([*argv, *lines]) == 0
-    assert (out / "board.json").read_bytes() == GOLDEN.read_bytes()
+    assert (out / "board.json").read_bytes() == LINES_GOLDEN.read_bytes()
 
 
 def test_the_subtitle_reaches_the_state() -> None:
@@ -763,7 +842,8 @@ def test_a_default_branch_head_other_than_true_stops_the_run(value: str) -> None
     before it reads GitHub, rather than quietly drawing no commit.
     """
     gh = FakeGitHub([issue(1)], [])
-    with pytest.raises(bb.BoardError, match="takes only an empty value or true"):
+    message = f"the default-branch-head input {value!r} is neither empty nor true"
+    with pytest.raises(bb.BoardError, match=f"^{re.escape(message)}$"):
         _with(gh, default_branch_head=value)
     assert gh.calls == []
 
@@ -913,6 +993,334 @@ def test_the_command_line_passes_the_data_label_through(
     assert "build_board: the data label 'deferred' is a label the board already reads" in (
         summary.read_text()
     )
+
+
+# ---- Label chips: GitHub's colours and name order ----
+
+# The state keys a board carried before ``label-colors`` existed, in the order
+# the generator writes them. ``board.json`` is written in insertion order, so a
+# key added here changes the bytes every caller publishes.
+STATE_KEYS = [
+    "schema",
+    "repo",
+    "title",
+    "updatedAt",
+    "issues",
+    "source",
+    "longestGapMinutes",
+    "staleAfterMinutes",
+]
+
+
+LABELS_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "labels.json"
+
+
+def labels_github() -> FakeGitHub:
+    """A repository whose board exercises every field a label input could move.
+
+    Labels arrive out of name order and carry GitHub's colours, in either case.
+    The issues also carry a band, a working label, a data-looking label, a
+    verdict, an order line, after lines and "blocked by" links, and the pull
+    requests close, reference and review them. One title is not ASCII, so the
+    file's encoding is compared too.
+    """
+    return FakeGitHub(
+        [
+            issue(
+                1,
+                title="Colour the façade's chips",
+                labels=("test", "deferred", "band:1", "enhancement"),
+                colors={"test": "5319E7", "deferred": "ededed", "band:1": "c2e0c6"},
+                body="Board order: 2\nBoard after: #3\n",
+                comments=(("OWNER", "Board verdict: build after 2 passes"),),
+            ),
+            issue(
+                2,
+                milestone=None,
+                labels=("working:build", "question", "Bug", "accessibility", "band:2"),
+                colors={"question": "d876e3", "Bug": "D73A4A", "accessibility": "a2eeef\n"},
+                blocked_by=((1, "OPEN"), (9, "CLOSED")),
+            ),
+            issue(
+                3,
+                labels=("replication", "blocked-on-data"),
+                colors={"replication": "0e8a16"},
+                mentioned_by=(22,),
+            ),
+            issue(4, labels=(), sub_issues=2, body="Board after: #1 #2\n"),
+            issue(5, labels=("decision", "github_actions"), colors={"github_actions": "000000"}),
+        ],
+        [
+            pull(20, closes=(1,), comments=(("OWNER", "## Review\n"),)),
+            pull(21, body="Part of #2", contexts=(check("test", "FAILURE"),)),
+            pull(22, state="MERGED", body="Part of #3"),
+        ],
+    )
+
+
+def _main_writes(module: object, out: Path) -> bytes:
+    """The bytes ``module.main`` writes to ``board.json`` for ``labels_github()``.
+
+    The run reads GitHub through ``labels_github()`` and stamps the board at
+    ``NOW``, so two generators' files can be compared byte for byte. Neither
+    label flag is passed. The module's attributes are put back afterwards.
+    """
+    fake = labels_github()
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001, ANN206
+            return NOW
+
+    saved = module.GhGraphql, module.datetime
+    module.GhGraphql, module.datetime = (lambda: fake), Frozen
+    try:
+        argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+        assert module.main(argv) == 0
+    finally:
+        module.GhGraphql, module.datetime = saved
+    return (out / "board.json").read_bytes()
+
+
+def test_with_neither_label_input_the_board_is_the_bytes_cf2959a3_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects every caller that sets neither ``label-colors`` nor ``sort-labels``.
+
+    ``tests/fixtures/build_board_generator/labels.json`` is the file that
+    ``scripts/build_board.py`` at l3a0/repo-template ``cf2959a3``, the commit
+    before the label inputs, wrote for ``labels_github()``. The generator here,
+    run the same way with neither flag, has to write the same bytes. Comparing
+    the file rather than a parsed copy catches a key added anywhere, a changed
+    key order, and a change to how the file is serialised. To write the file
+    again, run ``_main_writes`` on ``cf2959a3``'s generator, never on this one.
+    """
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert _main_writes(bb, tmp_path / "site") == LABELS_GOLDEN.read_bytes()
+
+
+def test_with_neither_label_input_the_board_is_the_one_it_was() -> None:
+    """Protects every caller that sets neither ``label-colors`` nor ``sort-labels``.
+
+    The labels keep the order GitHub returns, and ``state`` carries exactly the
+    keys it carried before, so no ``labelColors``. Passing both inputs empty
+    writes the same board as passing neither. The byte comparison with
+    ``cf2959a3``'s output is the test above.
+    """
+    gh = lambda: FakeGitHub(  # noqa: E731
+        [issue(1, labels=("test", "deferred", "band:1", "enhancement"))], []
+    )
+    board, _ = build(gh())
+    assert card(board, 1)["labels"] == ["test", "deferred", "enhancement"]
+    assert list(board["state"]) == STATE_KEYS
+    assert build(gh(), label_colors="", sort_labels="")[0] == board
+
+
+def test_sort_labels_puts_each_cards_labels_in_name_order() -> None:
+    """Protects the chip order a caller setting ``sort-labels`` gets.
+
+    GitHub returns an issue's labels in the order they were added. The sort is
+    Python's code-point order, so a capital sorts ahead of a lower-case letter,
+    and the board's own labels are still left off. Sorting writes no colours.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, labels=("test", "deferred")),
+            issue(2, labels=("working:build", "question", "band:2", "Bug", "accessibility")),
+        ],
+        [],
+    )
+    board, _ = build(gh, sort_labels="true")
+    assert card(board, 1)["labels"] == ["deferred", "test"]
+    assert card(board, 2)["labels"] == ["Bug", "accessibility", "question"]
+    assert list(board["state"]) == STATE_KEYS
+
+
+def test_label_colors_writes_each_card_labels_colour_lower_cased() -> None:
+    """Protects the map the page fills each chip from under ``label-colors``.
+
+    The map holds each label a card draws, keyed by name in sorted order, with
+    GitHub's colour lower-cased, since GitHub returns some in capitals. The
+    board's own labels draw no chip, so they are left out, and so is a colour
+    that is not six hex digits, which the page would write into a style
+    attribute. The labels keep GitHub's order, because colouring sorts nothing.
+    """
+    gh = FakeGitHub(
+        [
+            issue(
+                1,
+                labels=(
+                    "opentofu",
+                    "band:1",
+                    "working:build",
+                    "broken",
+                    "short",
+                    "long",
+                    "newline",
+                ),
+                colors={
+                    "opentofu": "F9DB4E",
+                    "band:1": "ededed",
+                    "working:build": "0e8a16",
+                    "broken": "zzzzzz",
+                    "short": "fff",
+                    "long": "a2eeef0",
+                    "newline": "a2eeef\n",
+                },
+            ),
+            issue(2, labels=("enhancement",), colors={"enhancement": "a2eeef"}),
+        ],
+        [],
+    )
+    board, _ = build(gh, label_colors="true")
+    assert board["state"]["labelColors"] == {"enhancement": "a2eeef", "opentofu": "f9db4e"}
+    assert list(board["state"]["labelColors"]) == ["enhancement", "opentofu"]
+    assert list(board["state"]) == [*STATE_KEYS, "labelColors"]
+    assert card(board, 1)["labels"] == ["opentofu", "broken", "short", "long", "newline"]
+
+
+def test_the_page_and_the_generator_accept_the_same_colours() -> None:
+    """Protects the colour check from drifting between its two halves.
+
+    The generator keeps a colour only when it matches ``HEX_COLOUR`` whole, and
+    the page checks it again before writing it into a style attribute. A
+    pattern that changed on one side alone would drop colours the other keeps.
+    """
+    found = re.findall(r"^const HEX_COLOUR = /(.*)/;$", PAGE.read_text(encoding="utf-8"), re.M)
+    assert found == [f"^{bb.HEX_COLOUR.pattern}$"]
+
+
+def test_label_colors_with_no_coloured_label_writes_an_empty_map() -> None:
+    """Protects the map's presence, which follows the input rather than its contents.
+
+    A caller that sets ``label-colors`` gets ``state.labelColors`` even when no
+    card draws a label with a usable colour, so the key says the input reached
+    the generator.
+    """
+    board, _ = build(FakeGitHub([issue(1, labels=("test",))], []), label_colors="true")
+    assert board["state"]["labelColors"] == {}
+
+
+def test_a_label_read_on_a_later_page_carries_its_colour() -> None:
+    """Protects the colour of a label past an issue's first hundred.
+
+    The first page of labels comes with the issue, and the rest are read again
+    from where it stopped. Both reads select ``color`` beside ``name``, or a
+    label read on a later page would draw the page's own colour.
+    """
+    first = issue(1, labels=("enhancement",), colors={"enhancement": "a2eeef"})
+    first["labels"]["pageInfo"]["hasNextPage"] = True
+    later = conn([{"name": "question", "color": "D876E3"}], cursor="c2")
+    gh = FakeGitHub([first], [], nested={("I1", "labels", "c1"): later})
+    board, _ = build(gh, label_colors="true")
+    assert board["state"]["labelColors"] == {"enhancement": "a2eeef", "question": "d876e3"}
+    assert "nodes{name color}" in bb.ISSUES_QUERY
+    assert [q for q in gh.calls if "node(id:$id)" in q] == [
+        "query($id:ID!, $after:String) { node(id:$id) { ... on Issue { labels: labels(first:100, "
+        "after:$after) { pageInfo{hasNextPage endCursor} nodes{ name color } } } } }"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--label-colors", "yes"),
+        ("--label-colors", "True"),
+        ("--sort-labels", "name"),
+        ("--sort-labels", "false"),
+    ],
+)
+def test_a_label_input_other_than_empty_or_true_stops_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, value: str
+) -> None:
+    """Protects a caller from a board that quietly ignores its input.
+
+    Each input takes empty or ``true``. Any other value stops the run before
+    it reads GitHub, and the reason goes under ``## Board run failed`` in the
+    job summary, where the run's page shows it, since the run stops the same
+    way until someone edits the caller.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+    assert bb.main([*argv, f"{flag}={value}"]) == 1
+    assert fake.calls == []
+    assert not (out / "board.json").exists()
+    name = flag.removeprefix("--")
+    assert summary.read_text() == (
+        "## Board run failed\n\n"
+        f"build_board: the {name} input {value!r} is neither empty nor true\n"
+    )
+
+
+def test_the_command_line_passes_the_label_inputs_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the two label inputs on their way from the workflow to the board.
+
+    The workflow passes each as a flag joined to its value by ``=``, whether or
+    not the caller set it, so an empty value has to read as off. A run of the
+    script that leaves both flags out reads them as off too.
+    """
+    fake = FakeGitHub([issue(1, labels=("test", "deferred"), colors={"test": "5319E7"})], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def written() -> dict:
+        return json.loads((out / "board.json").read_text())
+
+    assert bb.main([*argv, "--label-colors=true", "--sort-labels=true"]) == 0
+    assert written()["state"]["labelColors"] == {"test": "5319e7"}
+    assert written()["tracker"]["items"][0]["labels"] == ["deferred", "test"]
+    assert bb.main([*argv, "--label-colors=true"]) == 0
+    assert written()["state"]["labelColors"] == {"test": "5319e7"}
+    assert written()["tracker"]["items"][0]["labels"] == ["test", "deferred"]
+    assert bb.main([*argv, "--sort-labels=true"]) == 0
+    assert "labelColors" not in written()["state"]
+    assert written()["tracker"]["items"][0]["labels"] == ["deferred", "test"]
+    assert bb.main([*argv, "--label-colors=", "--sort-labels="]) == 0
+    assert "labelColors" not in written()["state"]
+    assert written()["tracker"]["items"][0]["labels"] == ["test", "deferred"]
+    assert bb.main(argv) == 0
+    assert "labelColors" not in written()["state"]
+    assert written()["tracker"]["items"][0]["labels"] == ["test", "deferred"]
+
+
+def test_the_page_fills_the_chips_the_generator_coloured(tmp_path: Path) -> None:
+    """Protects the join between the colour map and the chip that reads it.
+
+    A map the generator writes under a key the page does not read would leave
+    every chip in the page's own colours, and neither half's tests would see it.
+    The band label ranks the card, so the page's short view draws it.
+    """
+    gh = FakeGitHub(
+        [
+            issue(
+                1,
+                labels=("band:1", "replication", "enhancement"),
+                colors={"band:1": "ededed", "replication": "1D76DB"},
+            )
+        ],
+        [],
+    )
+    board, _ = build(gh, label_colors="true", sort_labels="true")
+    board["state"]["updatedAt"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids, _ = run_fetch_page(tmp_path, [served(board)])
+    drawn = ids["flow"]["html"] + ids["board"]["html"]
+    assert (
+        '<b style="color:#2F7F86">enhancement</b>'
+        '<b style="background:#1d76db;border-color:#1d76db;color:#000">replication</b>'
+    ) in drawn
 
 
 # ---- The milestone default ----
@@ -1175,7 +1583,8 @@ def test_the_command_line_passes_the_milestone_default_through(
     assert bb.main([*argv, "--milestone-default=MVP <n>"]) == 0
     assert state()["milestoneDefault"] == "MVP 4"
     assert summary.read_text().endswith(
-        "| Data label | none named |\n| Milestone default | `MVP <n>` opens on MVP 4 |\n"
+        "| Data label | none named |\n| Review heading | none named |\n"
+        "| Milestone default | `MVP <n>` opens on MVP 4 |\n"
     )
     summary.unlink()
     assert bb.main([*argv, "--milestone-default=Slice <n>"]) == 0
@@ -1184,7 +1593,9 @@ def test_the_command_line_passes_the_milestone_default_through(
     summary.unlink()
     assert bb.main([*argv, "--milestone-default="]) == 0
     assert "milestoneDefault" not in state()
-    assert summary.read_text().endswith("| Data label | none named |\n")
+    assert summary.read_text().endswith(
+        "| Data label | none named |\n| Review heading | none named |\n"
+    )
     summary.unlink()
     assert bb.main(argv) == 0
     assert "milestoneDefault" not in state()
@@ -1620,6 +2031,505 @@ def test_labels_that_disagree_take_one_value_and_are_reported() -> None:
     ]
 
 
+# ---- Markers the board does not use ----
+
+
+def summary_of(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: FakeGitHub, *args: str
+) -> str:
+    """The job summary a run writes, read through ``main`` as the workflow runs it."""
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out), *args]
+    assert bb.main(argv) == 0
+    return summary.read_text()
+
+
+def summary_row(text: str, name: str) -> str:
+    """The value of the summary row ``name``."""
+    rows = [line for line in text.splitlines() if line.startswith(f"| {name} | ")]
+    assert len(rows) == 1, name
+    return rows[0].removeprefix(f"| {name} | ").removesuffix(" |")
+
+
+PASS = "## Plan audit, pass 1\n\nFound nothing.\n"
+VERDICT_LINE = "Board verdict: build after 2 passes"
+# More lines than the pass heading has characters, so an offset that dropped
+# each line's newline would put a verdict right after the heading above it.
+PREAMBLE = "Note.\n" * 30
+
+
+def test_the_issues_query_reads_each_issues_author() -> None:
+    """Protects the unread row from going quiet on every real run.
+
+    ``FakeGitHub`` answers from fixtures whatever a query selects, so only the
+    query's own text shows that a run reads who wrote each issue. Without it
+    every body reads as a stranger's, and no near miss in one is ever listed.
+    """
+    node = re.search(r"nodes \{\n\s*(id [^\n]*)\n", bb.ISSUES_QUERY)
+    assert node, "the issues query's node selection moved"
+    assert "authorAssociation" in node.group(1).split()
+
+
+@pytest.mark.parametrize(
+    ("near_miss", "kind"),
+    [
+        ("Board order: first", "Board order"),
+        ("Board order 3", "Board order"),
+        ("**Board order**: 3", "Board order"),
+        ("- Board Order: 3", "Board order"),
+        ("Board order: 3\r", "Board order"),
+        ("Board after: soon", "Board after"),
+        ("Board after: 3", "Board after"),
+        ("Board after", "Board after"),
+        ("Board verdict: build after 3 passes", "Board verdict"),
+        ("Board after #2", "Board after"),
+        ("> Board order: 3", "Board order"),
+        ("1. Board order: 3", "Board order"),
+        ("1) Board order: 3", "Board order"),
+        ("+ Board order: 3", "Board order"),
+        ("Board  order: 3", "Board order"),
+        ("10. Board order: first", "Board order"),
+        ("Board order #3", "Board order"),
+        ("**Board after**", "Board after"),
+        ("Board after   ", "Board after"),
+        ("Board after: #2x", "Board after"),
+        ("Board verd\u0130ct: build after 3 passes", "Board verdict"),
+        ("Board verd\u0131ct: build after 3 passes", "Board verdict"),
+    ],
+)
+def test_a_near_miss_in_the_owners_body_is_listed_as_unread(near_miss: str, kind: str) -> None:
+    """Protects a mistyped body marker from vanishing with nothing said.
+
+    A verdict counts only in a comment, so a verdict line in a body is unread
+    too. The well-formed line beside the near miss still reaches the board.
+    """
+    body = f"{near_miss}\nBoard order: 2\nBoard after: #2\n"
+    gh = FakeGitHub([issue(1, labels=("band:1",), body=body), issue(2)], [])
+    board, report = build(gh)
+    assert report["unread"] == [(1, kind)]
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 2}]
+    assert card(board, 1)["after"] == [2]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Board orders form one sequence.\nBoard after the merge, rebase.\n",
+        "See Board order: 3 in the skill.\n",
+        "```\nBoard order: first\nBoard verdict: build after 3 passes\n```\n",
+        "Board order: 2\nBoard after: #2\n",
+    ],
+)
+def test_prose_fences_and_markers_read_are_not_listed_as_unread(body: str) -> None:
+    """Protects the summary from listing prose about the markers on every run."""
+    gh = FakeGitHub([issue(1, labels=("band:1",), body=body), issue(2)], [])
+    _, report = build(gh)
+    assert report["unread"] == []
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "MEMBER"])
+def test_a_strangers_body_is_read_as_before_and_its_near_misses_are_not_listed(
+    association: str,
+) -> None:
+    """Protects the summary from a stranger filling it, and the board from changing.
+
+    Anyone can open an issue on a public repository. Its order and after lines
+    still count, as they did before the summary listed anything.
+    """
+    body = "Board order: first\nBoard order: 4\nBoard after: soon\nBoard after: #2\n"
+    gh = FakeGitHub(
+        [issue(1, labels=("band:1",), body=body, association=association), issue(2)], []
+    )
+    board, report = build(gh)
+    assert report["unread"] == []
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
+    assert card(board, 1)["after"] == [2]
+
+
+def test_every_after_line_in_a_body_counts() -> None:
+    """Protects the second of two after lines from being read over by the first."""
+    gh = FakeGitHub([issue(1, body="Board after: #2\nBoard after: #3\n"), issue(2), issue(3)], [])
+    board, _ = build(gh)
+    assert card(board, 1)["after"] == [2, 3]
+
+
+def test_an_unbanded_cards_near_miss_is_listed_as_unread() -> None:
+    """Protects a near miss on a card the priority order does not draw."""
+    _, report = build(FakeGitHub([issue(1, body="Board order: first\n")], []))
+    assert report["unread"] == [(1, "Board order")]
+
+
+@pytest.mark.parametrize(
+    ("comment", "kinds"),
+    [
+        ("Board order: 3", ["Board order"]),
+        ("Board after: #2", ["Board after"]),
+        ("Board verdict: ready after 5 passes", ["Board verdict"]),
+        ("**Board verdict**: build after 5 passes", ["Board verdict"]),
+        ("Board verdict: build after 5 passes\r", ["Board verdict"]),
+        ("Board verdict: decide after", ["Board verdict"]),
+        ("Board verd\u0130ct: build after 5 passes", ["Board verdict"]),
+        ("Board verd\u0131ct: build after 5 passes", ["Board verdict"]),
+        ("The line `Board verdict: build after 5 passes` goes here.", []),
+        ("```\nBoard verdict: ready after 5 passes\n```", []),
+    ],
+)
+def test_a_near_miss_in_an_owners_comment_is_listed_as_unread(
+    comment: str, kinds: list[str]
+) -> None:
+    """Protects a mistyped verdict from vanishing with nothing said.
+
+    An order or after line counts only in a body, so one in a comment is
+    unread too. The well-formed verdict beside the near miss still plans the
+    card.
+    """
+    comments = (("OWNER", f"{comment}\n{VERDICT_LINE}\n"),)
+    board, report = build(FakeGitHub([issue(1, comments=comments), issue(2)], []))
+    assert report["unread"] == [(1, kind) for kind in kinds]
+    assert board["planned"]["items"] == [{"n": 1, "passes": 2, "ready": "build"}]
+
+
+def test_a_strangers_near_miss_in_a_comment_is_not_listed() -> None:
+    """Protects the summary from a stranger filling it."""
+    comments = (("NONE", "Board order: 3\nBoard verdict: ready after 5 passes\n"),)
+    _, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["unread"] == []
+    assert report["refused"] == []
+
+
+def test_refused_verdicts_come_out_in_issue_order() -> None:
+    """Protects the refused row from listing issues in the order a set holds them.
+
+    Twelve issues are enough for a set's order to differ from the sorted one.
+    """
+    issues = [issue(n, comments=(("NONE", VERDICT_LINE),)) for n in range(1, 13)]
+    _, report = build(FakeGitHub(issues, []))
+    assert report["refused"] == [(n, "Board verdict, not the owner's") for n in range(1, 13)]
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "MEMBER"])
+def test_a_strangers_verdict_is_listed_as_refused(association: str) -> None:
+    """Protects a verdict the board refuses from vanishing with nothing said.
+
+    The verdict still plans nothing, because anyone can comment on a public
+    repository.
+    """
+    comments = ((association, VERDICT_LINE),)
+    board, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["refused"] == [(1, "Board verdict, not the owner's")]
+    assert report["unread"] == []
+    assert board["planned"]["items"] == []
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        ("OWNER", VERDICT_LINE),
+        ("NONE", f"```\n{VERDICT_LINE}\n```"),
+        ("NONE", f"Quoting `{VERDICT_LINE}` here."),
+    ],
+)
+def test_an_owners_verdict_or_a_quoted_one_is_not_refused(comment: tuple[str, str]) -> None:
+    """Protects the refused row from listing what was never a stranger's verdict."""
+    _, report = build(FakeGitHub([issue(1, comments=(comment,))], []))
+    assert report["refused"] == []
+
+
+@pytest.mark.parametrize(
+    "comments",
+    [
+        (("OWNER", PASS),),
+        (("OWNER", VERDICT_LINE), ("OWNER", PASS)),
+        (("OWNER", f"{VERDICT_LINE}\n\n{PASS}"),),
+        (("OWNER", PASS), ("OWNER", "## Plan audit, pass 2\n"), ("NONE", VERDICT_LINE)),
+        (("OWNER", f"{VERDICT_LINE}\n{PASS}"),),
+        (("OWNER", f"{PASS}\n{VERDICT_LINE}\n## Plan audit, pass 2\n"),),
+        (("OWNER", VERDICT_LINE), ("OWNER", "   ## Plan audit, pass 1\n")),
+    ],
+)
+def test_a_pass_after_the_newest_verdict_is_a_plan_with_no_verdict(
+    comments: tuple[tuple[str, str], ...],
+) -> None:
+    """Protects a finished decompose loop that never wrote its verdict.
+
+    Its card waits for a builder that the board never sends, and the owner
+    learns of it only from this row.
+    """
+    _, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["no_verdict"] == [1]
+
+
+@pytest.mark.parametrize(
+    "comments",
+    [
+        (),
+        (("OWNER", f"{PASS}\n{VERDICT_LINE}\n"),),
+        (("OWNER", f"{PREAMBLE}{PASS.splitlines()[0]}\n{VERDICT_LINE}\n"),),
+        (("OWNER", PASS), ("OWNER", VERDICT_LINE)),
+        (("NONE", PASS),),
+        (("OWNER", f"```\n{PASS}```\n"),),
+        (("OWNER", f"The heading `{PASS.splitlines()[0]}` opens a pass."),),
+        (("OWNER", "## Plan audit, pass N\n"),),
+    ],
+)
+def test_a_verdict_after_the_newest_pass_or_no_pass_is_not_listed(
+    comments: tuple[tuple[str, str], ...],
+) -> None:
+    """Protects the row from listing a plan that finished properly.
+
+    An exit comment headed as the last pass and ending with the verdict is the
+    usual shape, and the verdict comes after the heading in it.
+    """
+    _, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    assert report["no_verdict"] == []
+
+
+def test_a_card_that_owes_no_verdict_is_not_listed() -> None:
+    """Protects the row from cards whose missing verdict is no work for the owner.
+
+    A parent builds nothing, a deferred card is one nobody should take, a
+    decompose loop still holds its card, and an open pull request is carrying
+    the plan out, whether it closes the issue or names it with ``Part of``. A
+    data label takes the kind ahead of ``deferred``, so the
+    label is what is tested. A merged pull request carries nothing out.
+    """
+    comments = (("OWNER", PASS),)
+    gh = FakeGitHub(
+        [
+            issue(1, comments=comments, sub_issues=1),
+            issue(2, comments=comments, labels=("deferred",)),
+            issue(3, comments=comments, labels=("deferred", DATA_LABEL)),
+            issue(4, comments=comments, labels=("working:decompose",)),
+            issue(5, comments=comments),
+            issue(6, comments=comments, mentioned_by=(21,)),
+            issue(7, comments=comments, labels=("working:build",)),
+            issue(8, comments=comments),
+        ],
+        [
+            pull(20, closes=(5,)),
+            pull(21, state="MERGED", body="Part of #6"),
+            pull(22, body="Part of #8"),
+        ],
+    )
+    board, report = build(gh, DATA_LABEL)
+    assert card(board, 3)["kind"] == "data"
+    assert report["no_verdict"] == [6, 7]
+
+
+def test_equal_order_lines_are_a_conflict() -> None:
+    """Protects a leftover order line, whose edit would move nothing, from going unseen."""
+    gh = FakeGitHub([issue(1, labels=("band:1",), body="Board order: 4\nBoard order: 4\n")], [])
+    board, report = build(gh)
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
+    assert report["label_conflicts"] == ["#1 carries 2 order lines, read as 4"]
+    single = FakeGitHub([issue(1, labels=("band:1",), body="Board order: 4\n")], [])
+    assert build(single)[1]["label_conflicts"] == []
+
+
+# Rows of the job summary at l3a0/repo-template commit cf2959a3, before the
+# four marker rows. The l3a0 plugin's sync-prune-next skill reads the four new
+# rows by name, so a change to a name or to the order fails here.
+SUMMARY_ROWS_BEFORE = [
+    "GitHub read at",
+    "GraphQL requests",
+    "GraphQL requests tried again after a server or connection error",
+    "GraphQL points",
+    "Open issues",
+    "Open pull requests",
+    "Merged or closed pull requests read",
+    "Pull request items written",
+    "Open pull requests naming no open issue",
+    "Check states mapped to neither way",
+    "Labels or lines that disagree",
+    "Data label",
+]
+MARKER_ROWS = [
+    "Marker lines not read",
+    "Marker lines refused",
+    "Markers dropped",
+    "Finished plans with no verdict after them",
+]
+# The row the review-heading input added after every row above. It is written
+# whether or not a caller names a heading, as the data label's row is.
+REVIEW_ROWS = ["Review heading"]
+
+
+def test_the_job_summary_adds_the_four_marker_rows_after_the_disagreements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the rows a status round reads by name, and every row before them."""
+    text = summary_of(monkeypatch, tmp_path, FakeGitHub([issue(1)], []))
+    rows = [line.split(" | ")[0].removeprefix("| ") for line in text.splitlines()[4:]]
+    at = SUMMARY_ROWS_BEFORE.index("Labels or lines that disagree") + 1
+    assert rows == (SUMMARY_ROWS_BEFORE[:at] + MARKER_ROWS + SUMMARY_ROWS_BEFORE[at:] + REVIEW_ROWS)
+    for name in MARKER_ROWS:
+        assert summary_row(text, name) == "none"
+
+
+def test_the_job_summary_lists_each_marker_it_did_not_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the one place a mistyped or misplaced marker surfaces."""
+    gh = FakeGitHub(
+        [
+            issue(2, body="Board after: soon\n"),
+            issue(1, body="Board order: first\n", comments=(("NONE", VERDICT_LINE),)),
+            issue(3, comments=(("OWNER", PASS),)),
+            issue(4, comments=(("OWNER", PASS),)),
+        ],
+        [],
+    )
+    text = summary_of(monkeypatch, tmp_path, gh)
+    assert summary_row(text, "Marker lines not read") == "#1 Board order; #2 Board after"
+    assert summary_row(text, "Marker lines refused") == "#1 Board verdict, not the owner's"
+    assert summary_row(text, "Markers dropped") == "none"
+    assert summary_row(text, "Finished plans with no verdict after them") == "#3, #4"
+
+
+def test_the_job_summary_lists_a_dropped_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the dropped row from printing nothing when a marker goes unused."""
+    gh = FakeGitHub([issue(2, body="Board after: #2\n"), issue(1, body="Board order: 3\n")], [])
+    text = summary_of(monkeypatch, tmp_path, gh)
+    assert summary_row(text, "Markers dropped") == (
+        "#1 Board order on a card with no band; #2 Board after, naming itself"
+    )
+
+
+def test_an_order_on_a_card_with_no_band_is_listed_as_dropped() -> None:
+    """Protects a well-formed order that ranks nothing from vanishing unseen.
+
+    Only a banded card has a place in the priority order, so the order line on
+    an unbanded card sets nothing. A banded card's order is not listed.
+    """
+    gh = FakeGitHub(
+        [issue(1, body="Board order: 3\n"), issue(2, labels=("band:1",), body="Board order: 3\n")],
+        [],
+    )
+    board, report = build(gh)
+    assert report["dropped"] == [(1, "Board order on a card with no band")]
+    assert board["next"]["items"] == [{"issue": 2, "band": 1, "ready": "plan", "order": 3}]
+    assert build(FakeGitHub([issue(1)], []))[1]["dropped"] == []
+
+
+@pytest.mark.parametrize(
+    ("body", "dropped"),
+    [
+        ("Board after: #5\n", True),
+        ("Board after: #5 and #5\n", True),
+        ("Board after: #5, #2\n", False),
+        ("Board after: #2\n", False),
+        ("Board after: #7\n", False),
+    ],
+)
+def test_an_after_line_naming_only_its_own_card_is_listed_as_dropped(
+    body: str, dropped: bool
+) -> None:
+    """Protects an after line that can never hold its card from vanishing unseen.
+
+    A line naming another issue too still sets something, and a line naming a
+    closed issue is a blocker that has finished, so neither is listed.
+    """
+    board, report = build(FakeGitHub([issue(2), issue(5, body=body)], []))
+    assert report["dropped"] == ([(5, "Board after, naming itself")] if dropped else [])
+    assert card(board, 5).get("after", []) == ([2] if "#2" in body else [])
+
+
+def marker_tracker() -> FakeGitHub:
+    """A tracker holding every marker shape the summary rows read, at once."""
+    passed = (("OWNER", PASS),)
+    return FakeGitHub(
+        [
+            issue(
+                1,
+                labels=("band:1",),
+                body="Board order: first\nBoard order: 2\nBoard after: soon\nBoard after: #2\n"
+                "Board verdict: build after 3 passes\n",
+            ),
+            issue(2, labels=("band:2",), body="Board order: 5\r\nBoard after: #1\r\n"),
+            issue(
+                3,
+                labels=("band:1",),
+                body="Board order: 7\nBoard order: seven\nBoard after: #1\n",
+                association="NONE",
+            ),
+            issue(4, comments=(("NONE", VERDICT_LINE), ("OWNER", PASS))),
+            issue(5, labels=("band:1",), comments=(("OWNER", f"{PASS}\n{VERDICT_LINE}\n"),)),
+            issue(6, labels=("band:1",), body="Board order: 4\nBoard order: 4\n"),
+            issue(7, comments=(("OWNER", "Board order: 3\n**Board verdict**: build after 2\n"),)),
+            issue(
+                8,
+                body="```\nBoard order: x\n```\n",
+                comments=(("OWNER", f"```\n{PASS}```\n"),),
+            ),
+            issue(9, comments=passed, sub_issues=1),
+            issue(10, comments=passed, labels=("deferred",)),
+            issue(11, comments=passed, labels=("working:decompose",)),
+            issue(12, comments=passed),
+            issue(13, comments=passed, mentioned_by=(31,)),
+            issue(14, comments=(("OWNER", VERDICT_LINE), ("OWNER", PASS))),
+            issue(15, comments=passed, labels=("deferred", DATA_LABEL)),
+            issue(16, labels=("band:2",), body="Board order: 8\nBoard order: 1\n"),
+            issue(17, body="Board order: 3\nBoard after: #17\n"),
+        ],
+        [pull(30, closes=(12,)), pull(31, state="MERGED", body="Part of #13")],
+    )
+
+
+def test_every_marker_shape_reaches_its_row() -> None:
+    """Protects the four rows on a tracker holding all their cases at once."""
+    _, report = build(marker_tracker(), DATA_LABEL)
+    assert report["unread"] == [
+        (1, "Board after"),
+        (1, "Board order"),
+        (1, "Board verdict"),
+        (2, "Board order"),
+        (7, "Board order"),
+        (7, "Board verdict"),
+    ]
+    assert report["refused"] == [(4, "Board verdict, not the owner's")]
+    assert report["dropped"] == [
+        (17, "Board after, naming itself"),
+        (17, "Board order on a card with no band"),
+    ]
+    assert report["no_verdict"] == [4, 13, 14]
+    assert "#6 carries 2 order lines, read as 4" in report["label_conflicts"]
+
+
+GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
+
+
+class FrozenNow(datetime):
+    """A ``datetime`` whose ``now`` is ``NOW``, so a run's board carries a fixed time."""
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return NOW
+
+
+def test_the_marker_rows_change_nothing_in_the_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects every caller that sets no input from a board that moves.
+
+    The rows list what the board did not use, so the board itself has to stay
+    as it was. ``GOLDEN`` is the ``board.json`` that the command line at
+    l3a0/repo-template commit cf2959a3 wrote for ``marker_tracker``, and this
+    run has to write the same bytes. The file is read as the command line
+    writes it, so a change to how it is written fails here too.
+    """
+    monkeypatch.setattr(bb, "datetime", FrozenNow)
+    summary_of(monkeypatch, tmp_path, marker_tracker(), "--data-label", DATA_LABEL)
+    written = (tmp_path / "site" / "board.json").read_bytes()
+    assert written == GOLDEN.read_bytes().removesuffix(b"\n")
+
+
 def test_an_issues_comments_and_blockers_are_read_to_their_end() -> None:
     """Protects a verdict or a blocker past the first hundred.
 
@@ -2001,6 +2911,699 @@ def test_only_the_owners_review_heading_counts(association: str, body: str, revi
     item = prs_of(board)[0]
     assert item["reviewed"] is reviewed
     assert item["review"] == ("review posted" if reviewed else "no review posted")
+
+
+# ---- The review heading a caller names ----
+#
+# The times a review is judged against. The head commit was made at HEAD_AT,
+# and a marker counts only when posted strictly after it. The name differs
+# from HEAD, the commit oid the default-branch-head tests read.
+HEAD_AT = "2026-10-29T12:00:00Z"
+AFTER = "2026-10-29T12:05:00Z"
+BEFORE = "2026-10-29T11:55:00Z"
+SECOND_AFTER = "2026-10-29T12:00:01Z"
+HEADING = "Review complete"
+MARKED = "review complete"
+UNMARKED = "no Review complete marker since the head commit"
+# The path the board's own runs come from, as the reusable workflow hardcodes
+# it for the caller, and a CI workflow beside it.
+WORKFLOW_PATH = ".github/workflows/board.yml"
+CI_PATH = ".github/workflows/ci.yml"
+
+
+def _reviewed(pr: dict, **inputs: str) -> tuple[bool, str]:
+    """Whether the board reads ``pr``, which closes issue 5, as reviewed, and its words."""
+    item = prs_of(build(FakeGitHub([issue(5)], [pr]), **inputs)[0])[0]
+    return item["reviewed"], item["review"]
+
+
+@pytest.mark.parametrize(
+    ("comments", "reviews", "marketlake", "shared"),
+    [
+        ((("OWNER", "## Review complete\n\nAll lenses ran.", AFTER),), (), True, True),
+        ((("OWNER", "## Review complete\n", BEFORE),), (), False, True),
+        ((("OWNER", "## Review round 1, lenses running\n", AFTER),), (), False, True),
+        ((("OWNER", "## Review completeness check\n", AFTER),), (), False, True),
+        ((("OWNER", "  ## Review complete\n", AFTER),), (), False, True),
+        ((), (("OWNER", "## Review complete\n", AFTER),), True, False),
+    ],
+    ids=["after-head", "before-head", "round-heading", "longer-heading", "indented", "a-review"],
+)
+def test_the_review_heading_counts_only_its_own_line_after_the_head(
+    comments: tuple, reviews: tuple, marketlake: bool, shared: bool
+) -> None:
+    """Protects the owner's queue from a review that has not finished, or has gone stale.
+
+    These are the six rows of l3a0/repo-template#47's table. Under
+    ``review-heading`` the generator reads l3a0/marketlake's rule: the whole
+    first line is the heading, the author is the owner, and it was posted
+    after the head commit, as a comment or as a submitted review. Without the
+    input the shared rule stands, which counts any owner comment opening
+    ``## Review`` at any time and reads no review, so each row checks both.
+    """
+    pr = pull(6, closes=(5,), comments=comments, reviews=reviews, committed=HEAD_AT)
+    assert _reviewed(pr, review_heading=HEADING) == (marketlake, MARKED if marketlake else UNMARKED)
+    word = "review posted" if shared else "no review posted"
+    assert _reviewed(pr) == (shared, word)
+
+
+@pytest.mark.parametrize(
+    ("comments", "reviews", "committed", "reviewed"),
+    [
+        ((("OWNER", "## Review complete", AFTER),), (), HEAD_AT, True),
+        ((("OWNER", "## Review complete\r\n\r\nAll lenses ran.", AFTER),), (), HEAD_AT, True),
+        ((("OWNER", "## Review complete", HEAD_AT),), (), HEAD_AT, False),
+        ((("OWNER", "## Review complete.", AFTER),), (), HEAD_AT, False),
+        ((("OWNER", "\n## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("OWNER", "## Review complete", AFTER),), (), None, False),
+        ((("NONE", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("COLLABORATOR", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((), (("CONTRIBUTOR", "## Review complete", AFTER),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", None),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", BEFORE),), HEAD_AT, False),
+        ((("OWNER", "## Review complete", None),), (), HEAD_AT, False),
+        (
+            (("OWNER", "## Review complete", BEFORE), ("OWNER", "## Review complete", AFTER)),
+            (),
+            HEAD_AT,
+            True,
+        ),
+        (
+            (("OWNER", "## Review complete", BEFORE),),
+            (("OWNER", "## Review complete", AFTER),),
+            HEAD_AT,
+            True,
+        ),
+        ((("OWNER", "## Review complete", SECOND_AFTER),), (), HEAD_AT, True),
+        ((), (("OWNER", "## Review complete", SECOND_AFTER),), HEAD_AT, True),
+        ((), (("OWNER", "## Review complete", AFTER, "c-older"),), HEAD_AT, False),
+        ((), (("OWNER", "## Review complete", AFTER, None),), HEAD_AT, False),
+        ((("NONE", "Thanks", BEFORE), ("OWNER", "## Review complete", AFTER)), (), HEAD_AT, True),
+        (
+            (
+                ("OWNER", "## Review round 1, lenses running", AFTER),
+                ("OWNER", "## Review complete", AFTER),
+            ),
+            (),
+            HEAD_AT,
+            True,
+        ),
+        ((("OWNER", "## Review complete", AFTER), ("NONE", "LGTM", AFTER)), (), HEAD_AT, True),
+        ((("MEMBER", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("FIRST_TIMER", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("FIRST_TIME_CONTRIBUTOR", "## Review complete", AFTER),), (), HEAD_AT, False),
+        ((("MANNEQUIN", "## Review complete", AFTER),), (), HEAD_AT, False),
+    ],
+    ids=[
+        "whole-body",
+        "crlf",
+        "same-second-as-head",
+        "trailing-dot",
+        "second-line",
+        "head-has-no-date",
+        "stranger-comment",
+        "collaborator-comment",
+        "stranger-review",
+        "pending-review",
+        "review-before-head",
+        "comment-with-no-date",
+        "second-marker-after-head",
+        "review-after-a-stale-comment",
+        "comment-one-second-after-head",
+        "review-one-second-after-head",
+        "review-of-an-older-commit",
+        "review-naming-no-commit",
+        "stranger-before-the-marker",
+        "round-heading-before-the-marker",
+        "stranger-after-the-marker",
+        "member-comment",
+        "first-timer-comment",
+        "first-time-contributor-comment",
+        "mannequin-comment",
+    ],
+)
+def test_a_review_heading_needs_the_owner_and_a_time_after_the_head(
+    comments: tuple, reviews: tuple, committed: str | None, reviewed: bool
+) -> None:
+    """Protects the rule's edges: who posted, when, and how the line ends.
+
+    A review still pending has no ``submittedAt``, and a head commit GitHub
+    gives no ``committedDate`` cannot be compared, so either reads as no
+    review rather than as one. GitHub's web editor saves ``\\r\\n``, so the
+    first line may end in ``\\r``. One second after the head is enough, so a
+    rule that adds slack to the comparison fails here. A submitted review
+    names the commit it reviewed, and one started on an older commit reviewed
+    code the head no longer holds, so it does not count however late it was
+    submitted. Every entry is read, so a marker counts wherever it sits among
+    the other comments. Only ``OWNER`` counts, whatever other association
+    GitHub gives the author.
+    """
+    pr = pull(6, closes=(5,), comments=comments, reviews=reviews)
+    if committed is not None:
+        pr["commits"]["nodes"][0]["commit"]["committedDate"] = committed
+    assert _reviewed(pr, review_heading=HEADING) == (reviewed, MARKED if reviewed else UNMARKED)
+
+
+def test_the_review_words_come_from_the_heading_and_name_no_session() -> None:
+    """Protects the card's line from the shared wording under a named heading.
+
+    The words are built from the heading, so a caller naming another one reads
+    its own name back, with only its first letter lowered. Without the input a
+    card held by a session reads ``review in progress``. Under it there is no
+    such wording, because a marker not yet posted reads the same whoever holds
+    the card.
+    """
+    heading = "Ready for Owner"
+    held = issue(5, labels=("working:build",))
+    marked = pull(
+        6,
+        closes=(5,),
+        comments=(("OWNER", "## Ready for Owner", AFTER),),
+        committed=HEAD_AT,
+        reviews=(),
+    )
+    unmarked = pull(7, closes=(5,), committed=HEAD_AT, reviews=())
+    board, _ = build(FakeGitHub([held], [marked, unmarked]), review_heading=heading)
+    assert [(p["pr"], p["reviewed"], p["review"]) for p in prs_of(board)] == [
+        (6, True, "ready for Owner"),
+        (7, False, "no Ready for Owner marker since the head commit"),
+    ]
+    board, _ = build(FakeGitHub([held], [unmarked]))
+    assert prs_of(board)[0]["review"] == "review in progress"
+
+
+def test_a_heading_is_matched_as_written_and_keeps_its_case() -> None:
+    """Protects a heading that holds characters a pattern reads specially.
+
+    The heading is matched as text, so its parentheses and dot match only
+    themselves, and only its first letter is lowered in the card's words.
+    """
+    heading = "Review Complete (v2)"
+    marked = pull(
+        6, closes=(5,), comments=(("OWNER", f"## {heading}", AFTER),), reviews=(), committed=HEAD_AT
+    )
+    assert _reviewed(marked, review_heading=heading) == (True, "review Complete (v2)")
+    near = pull(
+        6,
+        closes=(5,),
+        comments=(("OWNER", "## Review Complete v2", AFTER),),
+        reviews=(),
+        committed=HEAD_AT,
+    )
+    assert _reviewed(near, review_heading=heading) == (
+        False,
+        "no Review Complete (v2) marker since the head commit",
+    )
+
+
+def test_a_review_list_longer_than_a_page_is_read_to_its_end() -> None:
+    """Protects a review GitHub listed past the first hundred.
+
+    Under ``review-heading`` the reviews are read like every other nested
+    list. Without it they are not read at all, since nothing uses them, so the
+    same pull request costs no request for them.
+    """
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=())
+    pr["reviews"] = conn([], more=True, cursor="r1")
+    nested = {
+        ("P6", "reviews", "r1"): conn(
+            [
+                {
+                    "authorAssociation": "OWNER",
+                    "body": "## Review complete",
+                    "submittedAt": AFTER,
+                    "commit": {"oid": "c6"},
+                }
+            ]
+        )
+    }
+    gh = FakeGitHub([issue(5)], [pr], nested)
+    board, _ = build(gh, review_heading=HEADING)
+    assert prs_of(board)[0]["reviewed"] is True
+    pages = [q for q in gh.calls if "node(id:$id)" in q]
+    assert len(pages) == 1
+    assert "reviews: reviews(first:100" in pages[0]
+    assert "submittedAt commit{oid}" in pages[0]
+    gh = FakeGitHub([issue(5)], [pr], nested)
+    board, _ = build(gh)
+    assert prs_of(board)[0]["reviewed"] is False
+    assert not any("node(id:$id)" in q for q in gh.calls)
+
+
+# What each input adds to the query, and the input that adds it.
+HEADING_FIELDS = ("createdAt", "reviews(first:100)", "submittedAt commit{oid}", "committedDate")
+RUN_FIELD = "checkSuite{workflowRun{file{path}}}"
+
+
+@pytest.mark.parametrize(("heading", "settle"), [(False, False), (True, False), (False, True)])
+def test_each_input_selects_only_the_fields_it_reads(heading: bool, settle: bool) -> None:
+    """Protects a caller from a field it never asked for, on every page.
+
+    A caller that sets neither input sends the query it sent before either
+    existed, so it pays no point for a review it does not read, and a field
+    its token cannot resolve cannot stop its board. The first page comes from
+    ``pr_fields`` and every later one from ``nested``, so a field added to one
+    and not the other reads as missing only on a long list. GitHub returns
+    only what a query selects, which the fake does not, so this reads the
+    selections themselves, and then the query a run sends.
+    """
+    fragment = bb.pr_fields(heading, settle)
+    table = bb.nested(heading, settle)
+    for field in HEADING_FIELDS:
+        assert (field in fragment) is heading, field
+    assert ("createdAt" in table["comments"][3]) is heading
+    assert "submittedAt commit{oid}" in table["reviews"][3]
+    assert (RUN_FIELD in fragment) is settle
+    assert (RUN_FIELD in table["contexts"][3]) is settle
+    # The whole selections, so a field dropped from one or moved to another
+    # object fails here rather than only on GitHub.
+    assert table["reviews"] == (
+        "PullRequest",
+        "reviews",
+        "",
+        "authorAssociation body submittedAt commit{oid}",
+    )
+    reviews = (
+        "reviews(first:100){pageInfo{hasNextPage endCursor} "
+        "nodes{authorAssociation body submittedAt commit{oid}}}"
+    )
+    assert (reviews in fragment) is heading
+    head = (
+        "commit{oid committedDate statusCheckRollup{id"
+        if heading
+        else "commit{statusCheckRollup{id"
+    )
+    assert head in fragment
+    assert ("nodes{authorAssociation body createdAt}" in fragment) is heading
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=())
+    pr["comments"] = conn([], more=True, cursor="k1")
+    pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(
+        [], more=True, cursor="x1"
+    )
+    pages = {("P6", "comments", "k1"): conn([]), ("R6", "contexts", "x1"): conn([])}
+    gh = FakeGitHub([issue(5)], [pr], pages)
+    build(gh, review_heading=HEADING if heading else "", settled_rollup="true" if settle else "")
+    sent = next(q for q in gh.calls if "pullRequests(states:OPEN" in q)
+    assert sent == bb.open_prs_query(fragment)
+    comment_page = next(q for q in gh.calls if "comments: comments(" in q)
+    check_page = next(q for q in gh.calls if "contexts: contexts(" in q)
+    assert ("createdAt" in comment_page) is heading
+    assert (RUN_FIELD in check_page) is settle
+
+
+def test_a_head_with_no_oid_matches_no_review() -> None:
+    """Protects the head-commit check from two missing oids reading as equal."""
+    pr = pull(6, closes=(5,), committed=HEAD_AT, reviews=(("OWNER", "## Review complete", AFTER),))
+    del pr["commits"]["nodes"][0]["commit"]["oid"]
+    pr["reviews"]["nodes"][0]["commit"] = None
+    assert _reviewed(pr, review_heading=HEADING) == (False, UNMARKED)
+
+
+@pytest.mark.parametrize(
+    "heading",
+    ["## Review complete", "#Review complete", "Review\ncomplete", "Review complete\r"],
+)
+def test_a_review_heading_that_cannot_match_stops_the_run_before_any_read(heading: str) -> None:
+    """Protects a caller from a heading that would quietly mark nothing reviewed."""
+    gh = FakeGitHub([issue(5)], [pull(6, closes=(5,))])
+    with pytest.raises(bb.BoardError, match="review heading"):
+        build(gh, review_heading=heading)
+    assert gh.calls == []
+
+
+@pytest.mark.parametrize("value", ["yes", "True", "false", "1", " true", "true "])
+def test_a_settled_rollup_other_than_true_or_empty_stops_the_run_before_any_read(
+    value: str,
+) -> None:
+    """Protects a caller whose switch reads as on to them and off to the run."""
+    gh = FakeGitHub([issue(5)], [pull(6, closes=(5,))])
+    message = f"the settled-rollup input {value!r} is neither empty nor true"
+    with pytest.raises(bb.BoardError, match=f"^{re.escape(message)}$"):
+        build(gh, settled_rollup=value)
+    assert gh.calls == []
+
+
+def test_the_command_line_passes_the_two_inputs_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects ``review-heading`` and ``settled-rollup`` on their way from the workflow.
+
+    The workflow passes both flags whether or not the caller set them, so an
+    empty value is the old rule. A misspelt heading marks nothing reviewed and
+    fails no read, so the job summary counts the items it marked. A refused
+    value fails the run and puts its reason in the summary.
+    """
+    pr = pull(
+        6,
+        closes=(5,),
+        comments=(("OWNER", "## Review complete", AFTER),),
+        committed=HEAD_AT,
+        reviews=(),
+        contexts=(
+            check("test", "SUCCESS"),
+            check("board / build", None, "IN_PROGRESS", workflow=WORKFLOW_PATH),
+        ),
+    )
+    second = pull(7, closes=(8,), committed=HEAD_AT, reviews=())
+    fake = FakeGitHub([issue(5), issue(8)], [pr, second])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def items() -> list[dict]:
+        return json.loads((out / "board.json").read_text())["prs"]["items"]
+
+    assert bb.main([*argv, f"--review-heading={HEADING}", "--settled-rollup=true"]) == 0
+    assert [(p["reviewed"], p["review"]) for p in items()] == [(True, MARKED), (False, UNMARKED)]
+    assert items()[0]["rollup"] == [["test", "success"]]
+    assert "| Review heading | `## Review complete` on 1 of 2 pull request items |" in (
+        summary.read_text()
+    )
+    summary.unlink()
+    assert bb.main([*argv, "--review-heading=", "--settled-rollup="]) == 0
+    assert items()[0]["review"] == "review posted"
+    assert items()[0]["rollup"] == [["test", "success"], ["board / build", "running"]]
+    assert "| Review heading | none named |" in summary.read_text()
+    summary.unlink()
+    assert bb.main([*argv, "--review-heading=Review compleet"]) == 0
+    assert "| Review heading | `## Review compleet` on 0 of 2 pull request items |" in (
+        summary.read_text()
+    )
+    (out / "board.json").unlink()
+    summary.unlink()
+    assert bb.main([*argv, "--settled-rollup=yes"]) == 1
+    assert not (out / "board.json").exists()
+    assert (
+        "build_board: the settled-rollup input 'yes' is neither empty nor true"
+        in summary.read_text()
+    )
+    summary.unlink()
+    assert bb.main([*argv, "--review-heading=## Review complete"]) == 1
+    assert "build_board: the review heading '## Review complete' starts with #" in (
+        summary.read_text()
+    )
+
+
+# ---- The settled rollup a caller asks for ----
+
+
+def _rollup_of(contexts: tuple[dict, ...], **inputs: str) -> list[list[str]]:
+    pr = pull(6, closes=(5,), contexts=contexts)
+    return prs_of(build(FakeGitHub([issue(5)], [pr]), **inputs)[0])[0]["rollup"]
+
+
+def test_a_settled_rollup_leaves_out_only_the_boards_own_checks() -> None:
+    """Protects a reviewed branch from reading as running while the board rebuilds.
+
+    The board's own check runs have carried three names, all from the one
+    workflow file, and a caller whose job id is not ``board`` names them
+    another way again. So the file decides, and a CI job that happens to be
+    called ``board / build`` stays. Only the whole path counts, so a workflow
+    whose file name ends in ``board.yml`` or holds the word ``board`` stays. A
+    check run from no workflow, such as one an app posts, has no file and stays
+    too. Without the input every check stays, in GitHub's order.
+    """
+    contexts = (
+        check("board / build", None, "IN_PROGRESS", workflow=WORKFLOW_PATH),
+        check("pages / build", "FAILURE", workflow=WORKFLOW_PATH),
+        check("build", "SUCCESS", workflow=WORKFLOW_PATH),
+        check("board-build", "SUCCESS", workflow=WORKFLOW_PATH),
+        check("board / build", "SUCCESS", workflow=CI_PATH),
+        check("rank", "SUCCESS", workflow=".github/workflows/leaderboard.yml"),
+        check("reuse", "SUCCESS", workflow=".github/workflows/build-board.yml"),
+        check("app check", "SUCCESS"),
+        {**check("no run", "SUCCESS"), "checkSuite": {"workflowRun": None}},
+        status("board / build", "SUCCESS"),
+    )
+    assert _rollup_of(contexts, settled_rollup="true") == [
+        ["app check", "success"],
+        ["board / build", "success"],
+        ["board / build", "success"],
+        ["no run", "success"],
+        ["rank", "success"],
+        ["reuse", "success"],
+    ]
+    assert _rollup_of(contexts) == [
+        ["board / build", "running"],
+        ["pages / build", "failure"],
+        ["build", "success"],
+        ["board-build", "success"],
+        ["board / build", "success"],
+        ["rank", "success"],
+        ["reuse", "success"],
+        ["app check", "success"],
+        ["no run", "success"],
+        ["board / build", "success"],
+    ]
+
+
+def test_a_settled_rollup_is_sorted_by_name_then_word() -> None:
+    """Protects the rollup from reading differently each time GitHub reorders it."""
+    contexts = (
+        check("test", "SUCCESS", workflow=CI_PATH),
+        check("lint", "SUCCESS", workflow=CI_PATH),
+        check("test", "FAILURE", workflow=CI_PATH),
+        status("codeql", "SUCCESS"),
+    )
+    assert _rollup_of(contexts, settled_rollup="true") == [
+        ["codeql", "success"],
+        ["lint", "success"],
+        ["test", "failure"],
+        ["test", "success"],
+    ]
+    assert _rollup_of(contexts) == [
+        ["test", "success"],
+        ["lint", "success"],
+        ["test", "failure"],
+        ["codeql", "success"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "settled", "shared"),
+    [
+        ("SKIPPED", "skipped", "neutral"),
+        ("CANCELLED", "neutral", "failure"),
+        ("ACTION_REQUIRED", "neutral", "failure"),
+        ("SUCCESS", "success", "success"),
+        ("NEUTRAL", "neutral", "neutral"),
+        ("STALE", "neutral", "neutral"),
+        ("FAILURE", "failure", "failure"),
+        ("TIMED_OUT", "failure", "failure"),
+        ("STARTUP_FAILURE", "failure", "failure"),
+    ],
+)
+def test_a_settled_rollup_remaps_three_states_and_keeps_the_rest(
+    state: str, settled: str, shared: str
+) -> None:
+    """Protects a skipped job from holding a reviewed branch out of the owner's queue.
+
+    A job whose condition kept it from running, such as one that runs only on
+    the default branch, read as ``neutral``, which the page reads as neither
+    way. Under the input it reads ``skipped``, which the page reads as
+    settled, and a cancelled run or one waiting on an action reads as neither
+    way rather than as a failure, as l3a0/marketlake's board read them.
+    """
+    contexts = (check("t", state, workflow=CI_PATH),)
+    assert _rollup_of(contexts, settled_rollup="true") == [["t", settled]]
+    assert _rollup_of(contexts) == [["t", shared]]
+
+
+def test_a_status_state_reads_the_same_under_a_settled_rollup() -> None:
+    """Protects the status-context states, which the input does not remap."""
+    for state, word in (("ERROR", "failure"), ("PENDING", "running"), ("EXPECTED", "running")):
+        assert _rollup_of((status("s", state),), settled_rollup="true") == [["s", word]]
+
+
+REVIEW_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator"
+
+
+def review_github() -> FakeGitHub:
+    """A tracker holding every case the two inputs read differently, for the golden board.
+
+    Comments of every shape the review rules tell apart, stamped and not: a
+    marker after the head, one before it, a round heading, a longer heading, an
+    indented one, a deeper one, a stranger's, and a submitted review. Checks
+    from the board's own workflow under three names, from CI, from a workflow
+    whose name only contains ``board``, from no workflow, a status context,
+    and skipped, cancelled, waiting and running checks, out of name order. The
+    data carries every field the inputs select, as a caller setting them
+    would read it.
+    """
+    owner = "OWNER"
+    contexts = (
+        check("test", "SUCCESS", workflow=CI_PATH),
+        check("board / build", None, "IN_PROGRESS", workflow=WORKFLOW_PATH),
+        check("board-deploy", "FAILURE", workflow=WORKFLOW_PATH),
+        check("build", "SUCCESS", workflow=WORKFLOW_PATH),
+        check("board / build", "SUCCESS", workflow=CI_PATH),
+        check("rank", "SUCCESS", workflow=".github/workflows/leaderboard.yml"),
+        check("deploy", "SKIPPED", workflow=CI_PATH),
+        check("approve", "CANCELLED", workflow=CI_PATH),
+        check("gate", "ACTION_REQUIRED", workflow=CI_PATH),
+        check("app check", "NEUTRAL"),
+        status("codeql", "SUCCESS"),
+        status("lint", "PENDING"),
+    )
+    prs = [
+        pull(
+            20,
+            closes=(10,),
+            comments=((owner, "## Review complete\n\nAll lenses ran.", AFTER),),
+            contexts=contexts,
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            21,
+            closes=(11,),
+            comments=((owner, "## Review complete", BEFORE),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            22,
+            closes=(12,),
+            comments=((owner, "## Review round 1, lenses running", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            23,
+            closes=(13,),
+            comments=((owner, "## Review completeness check", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            24,
+            closes=(14,),
+            comments=((owner, "  ## Review complete", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            25,
+            closes=(15,),
+            comments=((owner, "### Review complete", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(
+            26,
+            closes=(16,),
+            comments=(("NONE", "## Review complete", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(27, closes=(17,), committed=HEAD_AT, reviews=((owner, "## Review complete", AFTER),)),
+        pull(
+            28,
+            closes=(18,),
+            comments=((owner, "## Reviewer notes", AFTER),),
+            committed=HEAD_AT,
+            reviews=(),
+        ),
+        pull(29, closes=(19,), committed=HEAD_AT, reviews=()),
+    ]
+    # Pull request 29's comments and checks run past their first page, so the
+    # query text recorded for a later page is compared too.
+    later = prs[-1]
+    later["comments"] = conn([], more=True, cursor="k1")
+    later["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = conn(
+        [], more=True, cursor="x1"
+    )
+    nested = {
+        ("P29", "comments", "k1"): conn(
+            [{"authorAssociation": owner, "body": "## Review complete", "createdAt": AFTER}]
+        ),
+        ("R29", "contexts", "x1"): conn(
+            [
+                check("board / deploy", "SUCCESS", workflow=WORKFLOW_PATH),
+                check("test", "SKIPPED", workflow=CI_PATH),
+            ]
+        ),
+    }
+    issues = [issue(n) for n in range(10, 19)] + [issue(19, labels=("working:build",))]
+    return FakeGitHub(issues, prs, nested)
+
+
+class _Fixed(datetime):
+    """``datetime`` with ``now`` held at ``NOW``, so a written board's stamp is fixed."""
+
+    @classmethod
+    def now(cls, tz=None):  # noqa: ANN001, ANN206 - the signature datetime.now has
+        return NOW
+
+
+def write_board(module, fake: FakeGitHub, out: Path, monkeypatch, *flags: str) -> bytes:  # noqa: ANN001
+    """The bytes ``module.main`` writes to ``board.json`` for ``fake``, at ``NOW``."""
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(module, "GhGraphql", lambda: fake)
+    monkeypatch.setattr(module, "datetime", _Fixed)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(out / "summary.md"))
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out), *flags]
+    assert module.main(argv) == 0
+    return (out / "board.json").read_bytes()
+
+
+def test_a_board_with_no_input_is_the_one_ec53810e_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects every current caller, which sets neither input.
+
+    ``review.json`` is the ``board.json`` that the generator at
+    l3a0/repo-template commit ``ec53810e``, the last on ``main`` before either
+    input, wrote from ``review_github``. ``review_queries.json`` lists every
+    query that run sent. The generator here, run the same way with neither
+    input, has to write the same bytes and send the same query text, so a
+    caller that never asked pays no point and meets no field its token might
+    not read. Rewrite the two files only from the generator on ``main`` before
+    either input, never from this one, or the test compares the head with
+    itself. ``cf2959a3`` and ``7b86e288`` wrote the same board. Their queries
+    differ from ``ec53810e``'s only where ``main`` changed them for every
+    caller: ``7b86e288`` added the closing links' repository, and
+    ``ec53810e`` added each issue's ``authorAssociation`` and each label's
+    ``color``.
+    """
+    fake = review_github()
+    written = write_board(bb, fake, tmp_path, monkeypatch)
+    assert written == (REVIEW_GOLDEN / "review.json").read_bytes()
+    assert fake.calls == json.loads(
+        (REVIEW_GOLDEN / "review_queries.json").read_text(encoding="utf-8")
+    )
+    fake = review_github()
+    empty = write_board(bb, fake, tmp_path, monkeypatch, "--review-heading=", "--settled-rollup=")
+    assert empty == written
+
+
+def test_the_golden_tracker_reads_differently_under_each_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the golden test from data that could not tell the rules apart.
+
+    A golden board passes trivially if its data reads the same under every
+    rule. So the same tracker has to read differently under each input.
+    """
+    plain = json.loads(write_board(bb, review_github(), tmp_path, monkeypatch))
+    heading = json.loads(
+        write_board(bb, review_github(), tmp_path, monkeypatch, f"--review-heading={HEADING}")
+    )
+    settled = json.loads(
+        write_board(bb, review_github(), tmp_path, monkeypatch, "--settled-rollup=true")
+    )
+
+    def reviewed(board: dict) -> list[int]:
+        return [p["pr"] for p in board["prs"]["items"] if p["reviewed"]]
+
+    assert reviewed(plain) == [20, 21, 22, 23, 24, 29]
+    assert reviewed(heading) == [20, 27, 29]
+    assert plain["prs"]["items"][0]["rollup"] != settled["prs"]["items"][0]["rollup"]
 
 
 # ---- Check states ----
@@ -2544,8 +4147,12 @@ def test_the_skill_states_every_marker_the_generator_reads() -> None:
     The data label is the caller's, so the skill names the input and the label
     its example passes.
     """
-    spans = [s.replace("#N", "#1") for s in re.findall(r"`([^`\n]+)`", _skill())]
-    for marker in (bb.VERDICT, bb.ORDER, bb.AFTER, bb.REVIEW, bb.PART_OF, bb.BAND):
+    spans = [
+        s.replace("#N", "#1").replace("pass N", "pass 1")
+        for s in re.findall(r"`([^`\n]+)`", _skill())
+    ]
+    markers = (bb.VERDICT, bb.ORDER, bb.AFTER, bb.REVIEW, bb.PART_OF, bb.BAND, bb.PASS_HEADING)
+    for marker in markers:
         assert any(marker.search(s) for s in spans), marker.pattern
     for label, _ in bb.kind_labels(DATA_LABEL):
         assert label in spans, label
@@ -2851,6 +4458,10 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.subtitle",
                 "inputs.note",
                 "inputs.default-branch-head",
+                "inputs.label-colors",
+                "inputs.sort-labels",
+                "inputs.review-heading",
+                "inputs.settled-rollup",
                 "inputs.milestone-default",
                 "job.workflow_repository",
                 "job.workflow_sha",
@@ -2885,6 +4496,10 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
         ("subtitle", "SUBTITLE"),
         ("note", "NOTE"),
         ("default-branch-head", "DEFAULT_BRANCH_HEAD"),
+        ("label-colors", "LABEL_COLORS"),
+        ("sort-labels", "SORT_LABELS"),
+        ("review-heading", "REVIEW_HEADING"),
+        ("settled-rollup", "SETTLED_ROLLUP"),
     ):
         uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
         assert [(before.strip(), after) for before, after in uses] == [(f"{var}:", "")]
@@ -2928,10 +4543,17 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     only what it needs. A required input, or a default naming a file or a
     label, would fail or change every such run. An empty title gives
     ``<name> build board``, an empty icon serves the template's, an empty
-    data label reads no ``data`` kind, an empty subtitle, note or
-    default-branch-head leaves the board as it was, and an empty milestone
-    default draws no selector. The README and the l3a0 plugin's
-    update-build-board skill name the inputs by the keys declared here.
+    data label reads no ``data`` kind, an empty subtitle, note,
+    default-branch-head, label-colors or sort-labels leaves the board as it
+    was, an empty review heading keeps the shared review rule, an empty
+    settled rollup keeps the rollup as GitHub lists it, and an empty
+    milestone default draws no selector. A switch such as
+    ``settled-rollup`` is a string taking empty or ``true``. The README and
+    the l3a0 plugin's update-build-board skill name the inputs by the keys
+    declared here. The README quotes ``"true"``, because a bare ``true`` in
+    YAML is a boolean and the inputs are strings. The plugin release that
+    names ``review-heading`` and ``settled-rollup`` has not shipped, so only
+    the README's examples of those two are read here.
     """
     inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
@@ -2943,6 +4565,10 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
         "subtitle",
         "note",
         "default-branch-head",
+        "label-colors",
+        "sort-labels",
+        "review-heading",
+        "settled-rollup",
         "milestone-default",
     ]
     for block in declared.values():
@@ -2955,6 +4581,10 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     assert "    with:\n      subtitle: " in readme
     assert "\n      note: >-\n" in readme
     assert '\n      default-branch-head: "true"\n' in readme
+    assert '    with:\n      label-colors: "true"\n' in readme
+    assert '    with:\n      sort-labels: "true"\n' in readme
+    assert "    with:\n      review-heading: Review complete\n" in readme
+    assert '    with:\n      settled-rollup: "true"\n' in readme
     assert "    with:\n      milestone-default: MVP <n>\n" in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
@@ -3125,7 +4755,10 @@ def test_each_job_declares_only_the_scopes_it_uses() -> None:
     Declaring any scope sets every unlisted one to none, so the build job
     lists each scope the generator reads. A called workflow can only narrow
     what its caller grants, so the caller's job grants the union of the two
-    and nothing more, and both workflows grant nothing at the top.
+    and nothing more, and both workflows grant nothing at the top. The build
+    job reads ``actions`` because a check run's workflow run, whose file tells
+    the board's own checks apart, belongs to Actions. The query asks for it
+    whatever the inputs, so the scope is granted whatever they are.
     """
     flow = _called()
     assert "\npermissions: {}\n" in flow
@@ -3138,6 +4771,7 @@ def test_each_job_declares_only_the_scopes_it_uses() -> None:
         "pull-requests": "read",
         "checks": "read",
         "statuses": "read",
+        "actions": "read",
     }
     deploy_scopes = {
         "pages": "write",
@@ -3187,10 +4821,18 @@ def test_the_measure_step_holds_the_pages_group_for_a_minute_at_most() -> None:
 
 
 def test_the_page_published_is_the_checked_in_one() -> None:
-    """Protects the one page every board publishes, and the schedule it reads."""
+    """Protects the one page every board publishes, and the schedule it reads.
+
+    The generator names the caller's workflow file a second time, as
+    ``BOARD_WORKFLOW``, to tell the board's own check runs apart. The file the
+    workflow hands it for the schedule has to be that same file, or a settled
+    rollup keeps the board's checks it was asked to leave out.
+    """
     flow = _called()
     assert "cp template/.claude/skills/update-build-board/board.html _site/index.html" in flow
     assert "--workflow caller/.github/workflows/board.yml" in flow
+    assert f"--workflow caller/{bb.BOARD_WORKFLOW}" in flow
+    assert f"            {bb.BOARD_WORKFLOW}\n" in flow.split("sparse-checkout: |\n", 1)[1]
 
 
 def _add_the_page(

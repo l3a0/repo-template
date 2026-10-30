@@ -27,6 +27,15 @@ name: Build board
 # 3. `default-branch-head`, set to `true`, names the commit the default branch
 #    stands at in the footer and the "Live updates stopped" banner.
 #
+# Two on-or-off inputs, `label-colors` and `sort-labels`, added by the pull
+# request that closes l3a0/repo-template#41, fill each label chip with the
+# colour GitHub stores for the label and sort each card's labels by name.
+#
+# The `review-heading` and `settled-rollup` inputs, added by the pull request
+# that closes l3a0/repo-template#47, count a review only when the owner posts
+# the named heading after the head commit, and leave the board's own checks
+# out of a pull request's rollup.
+#
 # A `milestone-default` input, added by the pull request that closes
 # l3a0/repo-template#45, draws a milestone selector on the page and names the
 # milestone it opens on.
@@ -102,6 +111,39 @@ on:
           the run.
         type: string
         default: ""
+      label-colors:
+        description: >-
+          "true" fills each label chip with the colour GitHub stores for that
+          label. Empty draws the page's own colours, where a label the page
+          does not know draws faint.
+        type: string
+        default: ""
+      sort-labels:
+        description: >-
+          "true" sorts each card's labels by name. Empty keeps the order
+          GitHub returns, which is the order the labels were added.
+        type: string
+        default: ""
+      review-heading:
+        description: >-
+          The heading, without its "## ", that closes a review, such as
+          Review complete. A pull request reads as reviewed only when the
+          owner posts a comment or a review whose whole first line is that
+          heading after its head commit. A review counts only when it names
+          the head commit, and it reaches the board on the next run of any
+          other kind, because no event the board listens to fires when a
+          review is submitted. Empty counts any owner comment opening with
+          "## Review", posted at any time.
+        type: string
+        default: ""
+      settled-rollup:
+        description: >-
+          "true" leaves the board's own checks out of a pull request's
+          rollup, reads a skipped check as settled, reads a cancelled one as
+          neither way, and sorts the checks by name. Empty keeps the rollup
+          as GitHub lists it.
+        type: string
+        default: ""
       milestone-default:
         description: >-
           The milestone the page opens on, where <n> stands for a number, such
@@ -119,12 +161,15 @@ jobs:
     timeout-minutes: 10
     # Declaring any scope sets every unlisted one to none, so each scope the
     # generator reads is named. The caller's job grants at least these.
+    # `actions: read` covers the workflow run behind each check run, whose
+    # file tells the board's own checks apart.
     permissions:
       contents: read
       issues: read
       pull-requests: read
       checks: read
       statuses: read
+      actions: read
     outputs:
       updated_at: ${{ steps.board.outputs.updated_at }}
     steps:
@@ -157,6 +202,10 @@ jobs:
           SUBTITLE: ${{ inputs.subtitle }}
           NOTE: ${{ inputs.note }}
           DEFAULT_BRANCH_HEAD: ${{ inputs.default-branch-head }}
+          LABEL_COLORS: ${{ inputs.label-colors }}
+          SORT_LABELS: ${{ inputs.sort-labels }}
+          REVIEW_HEADING: ${{ inputs.review-heading }}
+          SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
           MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
         run: >-
           python3 template/scripts/build_board.py build
@@ -167,6 +216,10 @@ jobs:
           --subtitle="$SUBTITLE"
           --note="$NOTE"
           --default-branch-head="$DEFAULT_BRANCH_HEAD"
+          --label-colors="$LABEL_COLORS"
+          --sort-labels="$SORT_LABELS"
+          --review-heading="$REVIEW_HEADING"
+          --settled-rollup="$SETTLED_ROLLUP"
           --milestone-default="$MILESTONE_DEFAULT"
           --out _site
 

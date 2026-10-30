@@ -83,21 +83,23 @@ HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
 # this commit, the head of the l3a0/claude-plugins pull request that releases
-# 0.6.2, which merges together with the pull request that set this pin.
+# 0.6.3, which merges together with the pull request that set this pin.
 # GitHub keeps a pull request's head fetchable after it merges, and a later
 # pull request moves the pin to the release's merge commit. A change here to a
 # marker, a label or a string these tests compare with the skill fails them
 # until the plugin releases a skill that matches and this pin moves to it. Any
 # other format change rests on the plugin's own rule that a generator's format
 # change ships with a plugin release in the same step.
-PLUGIN_COMMIT = "7083c21dd20a73585a858a3da1033d574cfbfb93"
+PLUGIN_COMMIT = "82b40213293d8f0b7abe9b13a78b16d106a84b64"
 PLUGIN_SKILLS = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.
 # That list alone would satisfy most of the assertions, so the tests read the
 # skill with it removed. The removal runs to the next heading, so the text it
-# removes has to be the opener and the numbered items alone, or a sentence
-# added after the list would go unread.
+# removes has to be the opener and the numbered items alone, with paragraphs
+# indented under them, or a sentence added after the list would go unread.
+# Removing it can only hide text, so the checks that text must never appear
+# read the whole file instead.
 PINNED_OPENER = "One repository has tests that read this skill's text."
 PINNED_LIST = re.compile(rf"\n{re.escape(PINNED_OPENER)}.*?\n(?=## )", re.S)
 
@@ -109,42 +111,66 @@ def _fetch(path: str) -> tuple[str, OSError | None]:
     The failure is cached with the text, so a network that drops packets
     costs one timeout per run rather than one per test.
     """
+    return _fetch_url(PLUGIN_SKILLS + path)
+
+
+@functools.cache
+def _fetch_url(url: str) -> tuple[str, OSError | None]:
+    """The text at ``url``, or why it failed, cached as ``_fetch`` says."""
     try:
-        with urllib.request.urlopen(PLUGIN_SKILLS + path, timeout=30) as response:
+        with urllib.request.urlopen(url, timeout=30) as response:
             return response.read().decode("utf-8"), None
     except OSError as error:
         return "", error
 
 
-def _plugin(name: str, skill: str = "update-build-board") -> str:
-    """One file of one of the plugin's skills, or a skip on an offline local run.
+def _online(fetched: tuple[str, OSError | None], what: str) -> str:
+    """A fetched text, or a skip on an offline local run.
 
     CI sets ``CI=true``, and there a failed fetch fails the test, so the check
     cannot vanish from the run that gates a merge. An answer from GitHub that
     is not the file, such as a 404 for a pin naming no such commit or path,
     fails everywhere.
     """
-    text, error = _fetch(f"{skill}/{name}")
+    text, error = fetched
     if error is None:
         return text
     if isinstance(error, urllib.error.HTTPError):
         raise error
     if os.environ.get("CI", "").lower() in {"true", "1"}:
         raise error
-    pytest.skip(f"cannot fetch the plugin's {name}: {error}")
+    pytest.skip(f"cannot fetch {what}: {error}")
+
+
+def _plugin(name: str, skill: str = "update-build-board") -> str:
+    """One file of one of the plugin's skills, the whole file, as ``_online`` reads it."""
+    return _online(_fetch(f"{skill}/{name}"), f"the plugin's {name}")
+
+
+# The template's own files at a commit, as GitHub serves them.
+TEMPLATE_RAW = "https://raw.githubusercontent.com/l3a0/repo-template/"
+
+
+def _template_at(sha: str, path: str) -> str:
+    """One file of l3a0/repo-template at ``sha``, as ``_online`` reads it."""
+    return _online(_fetch_url(f"{TEMPLATE_RAW}{sha}/{path}"), f"{path} at {sha}")
 
 
 def _pinned_list_problems(listed: str) -> list[str]:
-    """Each line of the removed list that is neither its opener nor a numbered item."""
+    """Each line of the removed list that is neither its opener nor in a numbered item.
+
+    A line in an item starts with its number, or is indented at least three
+    spaces, as a continuation or a nested paragraph after a blank line is.
+    """
     opener, _, items = listed.strip("\n").partition("\n\n")
     problems = []
     if not opener.startswith(PINNED_OPENER) or "\n" in opener:
         problems.append(f"the opener is not one paragraph: {opener[:80]!r}")
     lines = items.split("\n")
-    if not lines or not re.match(r"1\. ", lines[0]):
+    if not re.match(r"1\. ", lines[0]):
         problems.append("the list does not start at item 1")
     for line in lines:
-        if not re.match(r"\d+\. |   \S", line):
+        if line.strip() and not re.match(r"\d+\. | {3,}\S", line):
             problems.append(f"text in the list that is no numbered item: {line[:80]!r}")
     return problems
 
@@ -5609,11 +5635,16 @@ def _called() -> str:
     return CALLED.read_text(encoding="utf-8")
 
 
-def _inputs() -> dict[str, str]:
-    """Each input the reusable workflow declares, in order, with its block."""
-    inputs = _called().split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+def _declared(called: str) -> dict[str, str]:
+    """Each input a text of the reusable workflow declares, in order, with its block."""
+    inputs = called.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
     blocks = re.split(r"^      ([\w-]+):\n", inputs, flags=re.M)[1:]
     return dict(zip(blocks[::2], blocks[1::2], strict=True))
+
+
+def _inputs() -> dict[str, str]:
+    """Each input the reusable workflow declares, in order, with its block."""
+    return _declared(_called())
 
 
 def _scopes(block: str) -> dict[str, str]:
@@ -6334,17 +6365,55 @@ PAGE_WITH = (
 WITH_FORM = re.compile(r"`with:\s+([\w-]+):")
 
 
+FENCE = re.compile(r"^ *(```|~~~)[^\n]*\n(.*?)^ *\1", re.S | re.M)
+SHARED_USES = re.compile(r"uses:\s*l3a0/repo-template/\.github/workflows/build-board\.yml@")
+WITH_LINE = re.compile(r"( *)with:\s*(?:\{(.*)\})?\s*(?:#.*)?")
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _siblings(lines: list[str], k: int) -> list[str]:
+    """The lines of the YAML mapping that holds ``lines[k]``, at its indent."""
+    indent, found = _indent(lines[k]), []
+    for step in (-1, 1):
+        j = k + step
+        while 0 <= j < len(lines) and (not lines[j].strip() or _indent(lines[j]) >= indent):
+            if lines[j].strip() and _indent(lines[j]) == indent:
+                found.append(lines[j])
+            j += step
+    return found
+
+
 def _fenced_with(text: str) -> set[str]:
-    """Each key under a ``with:`` line inside a fenced block of ``text``."""
+    """Each input under a ``with:`` of the shared workflow inside a fenced block.
+
+    Only a ``with:`` whose sibling ``uses:`` names the reusable workflow here
+    is read, so an action's own inputs, such as ``actions/checkout``'s
+    ``fetch-depth``, are not. A fence is backticks or tildes, line endings may
+    be CRLF, the ``with:`` may carry a comment, its block may hold blank lines
+    and comment lines, and the flow form ``with: {a: x}`` is read too.
+    """
     names = set()
-    for fence in re.findall(r"^ *```[^\n]*\n(.*?)^ *```", text, re.S | re.M):
-        for _indent, block in re.findall(r"^( *)with:\n((?:\1 +\S.*\n?)+)", fence, re.M):
-            inner = min(len(x) - len(x.lstrip()) for x in block.splitlines())
-            names |= {
-                line.strip().split(":", 1)[0]
-                for line in block.splitlines()
-                if len(line) - len(line.lstrip()) == inner and ":" in line
-            }
+    for _, fence in FENCE.findall(text.replace("\r\n", "\n")):
+        lines = fence.split("\n")
+        for k, line in enumerate(lines):
+            m = WITH_LINE.fullmatch(line)
+            if not m or not any(SHARED_USES.match(s.strip()) for s in _siblings(lines, k)):
+                continue
+            if m.group(2) is not None:
+                names |= {p.split(":", 1)[0].strip() for p in m.group(2).split(",") if p.strip()}
+                continue
+            inner = None
+            for below in lines[k + 1 :]:
+                if not below.strip() or below.strip().startswith("#"):
+                    continue
+                if _indent(below) <= len(m.group(1)):
+                    break
+                inner = _indent(below) if inner is None else inner
+                if _indent(below) == inner and ":" in below:
+                    names.add(below.strip().split(":", 1)[0])
     return names
 
 
@@ -6355,8 +6424,10 @@ def test_the_plugin_names_every_input_in_its_with_form() -> None:
     every input the workflow declares, so a new input fails here until the
     plugin says how to pass it. Every other ``with:`` form in either file has
     to name a declared input too, so a misspelt one fails, and so does every
-    key under a ``with:`` line inside a fence. ``page.md`` also names the key
-    the milestone selector stores its choice under.
+    input under the shared workflow's ``with:`` inside a fence. Those are read
+    in the whole file, the list of pinned strings included, so no text can
+    hide there. ``page.md`` also names the key the milestone selector stores
+    its choice under.
     """
     skill = _skill()
     page = _plugin("page.md")
@@ -6367,8 +6438,9 @@ def test_the_plugin_names_every_input_in_its_with_form() -> None:
     assert "`board-ms:<owner/repo>`" in page
     named = {WITH_FORM.match(t).group(1) for t in SKILL_WITH + PAGE_WITH}
     assert named == set(_inputs())
-    written = set(WITH_FORM.findall(skill)) | set(WITH_FORM.findall(page))
-    written |= _fenced_with(skill) | _fenced_with(page)
+    raw = _plugin("SKILL.md")
+    written = set(WITH_FORM.findall(raw)) | set(WITH_FORM.findall(page))
+    written |= _fenced_with(raw) | _fenced_with(page)
     assert written <= set(_inputs()), written - set(_inputs())
 
 
@@ -6389,8 +6461,8 @@ def test_the_skill_names_the_first_commit_for_every_input() -> None:
 
     The table of first declarations names each input the workflow declares
     once, in code spans, so a new input fails here until the table carries
-    it, and a deleted row fails too. The commit the skill calls the pin to use
-    is never ``4c546fc``, at which GitHub refuses the reusable workflow.
+    it, and a deleted row fails too. The rows' commits are not checked, since
+    that needs each commit's parent as well.
     """
     skill = _skill()
     assert skill.count(MINIMUM_PINS) == 1, "the skill carries no single table of first pins"
@@ -6398,14 +6470,56 @@ def test_the_skill_names_the_first_commit_for_every_input() -> None:
     rows = [line for line in table.splitlines() if line.startswith("| ")]
     named = [n for row in rows for n in re.findall(r"`([\w-]+)`", row.split(" | ")[0])]
     assert sorted(named) == sorted(_inputs())
-    pins = PIN_TO_USE.findall(skill)
+
+
+def test_the_pin_to_use_declares_every_input() -> None:
+    """Protects a caller from copying a pin GitHub refuses or that lacks an input.
+
+    The whole file names exactly one commit as the pin to use, so a second
+    one hidden in the list of pinned strings fails too. The reusable workflow
+    at that commit, read from GitHub, has to declare every input declared
+    here, each typed as a string. At ``4c546fc`` the ``default-branch-head``
+    input carries no type, and GitHub refuses the workflow. Any later commit
+    that declares every input passes, so this cannot tell the pin the plugin
+    should name from an older one that also works.
+    """
+    pins = PIN_TO_USE.findall(_plugin("SKILL.md"))
     assert len(pins) == 1, pins
     assert not "4c546fc".startswith(pins[0][:7]), pins[0]
+    declared = _declared(_template_at(pins[0], ".github/workflows/build-board.yml"))
+    for name in _inputs():
+        assert name in declared, f"{name} is not declared at {pins[0]}"
+        assert re.findall(r"^ {8}type:.*$", declared[name], re.M) == ["        type: string"], name
+
+
+# The table of each repository's pin and inputs.
+BOARD_ROWS = "| Repository | Pin | Inputs |\n| --- | --- | --- |\n"
+
+
+def test_the_board_table_names_declared_inputs_and_no_refused_pin() -> None:
+    """Protects a session from copying a repository's row that GitHub would refuse.
+
+    Every input a row names in a code span has to be one the workflow
+    declares, and no row pins ``4c546fc``. The whole file is read.
+    """
+    raw = _plugin("SKILL.md")
+    assert raw.count(BOARD_ROWS) == 1, "the skill carries no single table of boards"
+    rows = raw.split(BOARD_ROWS, 1)[1].split("\n\n", 1)[0].splitlines()
+    assert rows
+    for row in rows:
+        _, pin, inputs = row.strip("| ").split(" | ")
+        assert not any(p.startswith("4c546fc") for p in re.findall(r"`([^`]+)`", pin)), row
+        assert set(re.findall(r"`([\w-]+)`", inputs)) <= set(_inputs()), row
 
 
 def test_the_skill_states_the_digit_limit_once() -> None:
-    """Protects the skill from a second copy of ``MAX_DIGITS`` that drifts."""
-    assert _skill().count(f"at most {bb.MAX_DIGITS} digits") == 1
+    """Protects the skill from a second copy of ``MAX_DIGITS`` that drifts.
+
+    The whole file is read too, so a copy in the list of pinned strings fails.
+    """
+    phrase = f"at most {bb.MAX_DIGITS} digits"
+    assert _skill().count(phrase) == 1
+    assert _plugin("SKILL.md").count(phrase) == 1
 
 
 def _tool(name: str) -> str:
@@ -6421,9 +6535,12 @@ def _tool(name: str) -> str:
 # A caller that passes every input the workflow declares, each as YAML text
 # and the value the generator should receive. A bare ``true`` or ``false`` is
 # a YAML boolean, which the build command has to pass as the string ``true``
-# or ``false``. A literal block keeps its newline, a folded one, which
-# l3a0/marketlake's caller writes, joins its lines with spaces, and an input
-# written with no value is empty.
+# or ``false``. The real generator refuses ``false``, since an on-or-off input
+# takes only empty or ``true``, but the recording generator below stops before
+# that check, so ``false`` here tests only that the command passes what the
+# caller wrote. A literal block keeps its newline, a folded one, the form
+# l3a0/marketlake's caller writes for ``note``, joins its lines with spaces,
+# and an input written with no value is empty.
 CALLER_WITH = {
     "title": ("", ""),
     "icon": (".github/board/favicon.ico", None),
@@ -6603,8 +6720,9 @@ def test_the_skill_template_line_fetches_at_the_pin(tmp_path: Path) -> None:
     """Protects every command that reads the template from reading another commit.
 
     The setup block's ``template`` runs ``gh api`` for a file of the template.
-    A stand-in ``gh`` prints what it was asked for, so the test sees the path
-    the line builds, which has to name the commit ``$PIN`` holds.
+    A stand-in ``gh`` prints what it was asked for, so the test sees the whole
+    call, whose path has to name the commit ``$PIN`` holds and whose header
+    asks for the file's raw text.
     """
     bash = _tool("bash")
     lines = [x for x in _skill().splitlines() if x.startswith("template() {")]
@@ -6622,9 +6740,11 @@ def test_the_skill_template_line_fetches_at_the_pin(tmp_path: Path) -> None:
     )
     assert done.returncode == 0, done.stderr
     asked = done.stdout.splitlines()
-    assert asked[:2] == [
+    assert asked == [
         "api",
         f"repos/l3a0/repo-template/contents/scripts/build_board.py?ref={pin}",
+        "-H",
+        "Accept: application/vnd.github.raw",
     ]
 
 
@@ -6695,25 +6815,54 @@ def test_the_build_command_check_fails_a_broken_command(mutant: str, tmp_path: P
 # and the file it reads. ``--jq``, which reads gh's output rather than a
 # board, is not one.
 JQ_CALL = re.compile(r"(?<![-\w])jq(?: -[a-z]+)* (?:'([^']+)'|(\.[\w.]+))(?: ([^\s`]+))?")
+# Any jq command at all, which the count of calls above has to equal, so a
+# call the pattern cannot read, such as a double-quoted filter, fails.
+LOOSE_JQ = re.compile(r"(?<![-\w`])jq\s")
 # Where every jq call reads the board, the file the build command writes.
 JQ_FILE = "<scratch>/board.json"
+# The review read moment 5 gives, which the fallback in sync-prune-next reuses.
+REVIEWED_READ = ".prs.items[] | select(.pr == <n>) | .reviewed"
 # The pull request the review read asks about, which the golden holds.
 JQ_PR = 30
 
 
-def _jq_expected(board: dict) -> dict[str, list]:
-    """What each filter the skills carry should print for ``board``, read in Python."""
+def _jq_expected(board: dict) -> dict[str, dict[str, list]]:
+    """What each filter of each skill should print for ``board``, read in Python."""
 
     def items(section: str) -> list:
         return board[section]["items"]
 
+    reviewed = [p["reviewed"] for p in items("prs") if p["pr"] == JQ_PR]
     return {
-        ".working.items[]": items("working"),
-        ".prs.items[] | select(.pr == <n>) | .reviewed": [
-            p["reviewed"] for p in items("prs") if p["pr"] == JQ_PR
-        ],
-        ".state.updatedAt": [board["state"]["updatedAt"]],
+        "update-build-board": {REVIEWED_READ: reviewed},
+        "sync-prune-next": {
+            ".working.items[]": items("working"),
+            REVIEWED_READ: reviewed,
+            ".state.updatedAt": [board["state"]["updatedAt"]],
+        },
     }
+
+
+def _jq_file(file: str) -> str:
+    """The file a jq call reads, less a trailing ``)`` and one pair of quotes."""
+    file = file.removesuffix(")")
+    if len(file) > 1 and file[0] == file[-1] and file[0] in "\"'":
+        file = file[1:-1]
+    return file
+
+
+def _wide_board() -> dict:
+    """The golden with a second working label and a second entry for ``JQ_PR``.
+
+    The golden holds one of each, so a filter reading only the first item
+    prints the same there. The second entry is reviewed, and the golden's is
+    not, so a filter that prints false whatever it reads differs too.
+    """
+    board = json.loads(MARKERS_GOLDEN.read_text(encoding="utf-8"))
+    board["working"]["items"].append({"n": 99, "kind": "build"})
+    first = next(p for p in board["prs"]["items"] if p["pr"] == JQ_PR)
+    board["prs"]["items"].append({**first, "issue": 99, "reviewed": True})
+    return board
 
 
 def _collapse(f: str) -> str:
@@ -6735,36 +6884,36 @@ def _jq(jq: str, f: str, path: Path) -> list:
 def test_each_jq_filter_in_the_skills_reads_a_board(tmp_path: Path) -> None:
     """Protects a status round from a filter that reads the wrong thing.
 
-    Every filter in either skill runs against a board the generator wrote, a
-    golden here, and has to print what the board holds, read in Python. Every
-    golden pull request is unreviewed, so each ``.reviewed`` read also runs on
-    a copy whose pull request ``JQ_PR`` is reviewed, where a filter printing
-    false whatever it reads fails. Each call reads the file the build command
-    writes. Filters compare with whitespace collapsed, so a plugin release
+    Each skill's filters are compared on their own, so a read dropped from
+    one skill fails even while the other carries the same filter. Every jq
+    command in a skill has to be a call the pattern reads, and every call
+    reads the file the build command writes. Each filter runs against a board
+    the generator wrote, a golden here, and against a wider copy that
+    ``_wide_board`` describes, and has to print what each holds, read in
+    Python. Filters compare with whitespace collapsed, so a plugin release
     that only re-spaces one passes, while one that rewords a filter needs an
     ``_jq_expected`` edit when ``PLUGIN_COMMIT`` moves.
     """
     jq = _tool("jq")
-    texts = [_plugin("SKILL.md", "update-build-board"), _plugin("SKILL.md", "sync-prune-next")]
-    calls = [call for text in texts for call in JQ_CALL.findall(text)]
-    assert calls, "neither skill carries a jq call"
-    for quoted, bare, file in calls:
-        assert file == JQ_FILE, (quoted or bare, file)
-    filters = {_collapse(quoted or bare) for quoted, bare, _ in calls}
-    board = json.loads(MARKERS_GOLDEN.read_text(encoding="utf-8"))
-    expected = {_collapse(f): want for f, want in _jq_expected(board).items()}
-    assert filters == set(expected), (
-        f"add each new filter's expected output to _jq_expected: {filters ^ set(expected)}"
-    )
-    reviewed = [f for f in expected if f.endswith(".reviewed")]
-    assert reviewed and all(expected[f] == [False] for f in reviewed)
-    flipped = json.loads(MARKERS_GOLDEN.read_text(encoding="utf-8"))
-    for p in flipped["prs"]["items"]:
-        if p["pr"] == JQ_PR:
-            p["reviewed"] = True
-    copy = tmp_path / "reviewed.json"
-    copy.write_text(json.dumps(flipped), encoding="utf-8")
-    for f, want in expected.items():
-        assert _jq(jq, f, MARKERS_GOLDEN) == want, f
-    for f in reviewed:
-        assert _jq(jq, f, copy) == [True], f
+    golden = json.loads(MARKERS_GOLDEN.read_text(encoding="utf-8"))
+    wide = _wide_board()
+    assert _jq_expected(wide)["update-build-board"][REVIEWED_READ] == [False, True]
+    assert len(_jq_expected(wide)["sync-prune-next"][".working.items[]"]) == 2
+    wide_path = tmp_path / "wide.json"
+    wide_path.write_text(json.dumps(wide), encoding="utf-8")
+    for skill, outputs in _jq_expected(golden).items():
+        text = _plugin("SKILL.md", skill)
+        calls = JQ_CALL.findall(text)
+        assert len(LOOSE_JQ.findall(text)) == len(calls), f"{skill} has a jq command not read"
+        for quoted, bare, file in calls:
+            assert _jq_file(file) == JQ_FILE, (skill, quoted or bare, file)
+        filters = {_collapse(quoted or bare) for quoted, bare, _ in calls}
+        want = {_collapse(f): v for f, v in outputs.items()}
+        assert filters == set(want), (
+            f"add each new filter's expected output to _jq_expected[{skill!r}]: "
+            f"{filters ^ set(want)}"
+        )
+        wider = {_collapse(f): v for f, v in _jq_expected(wide)[skill].items()}
+        for f in filters:
+            assert _jq(jq, f, MARKERS_GOLDEN) == want[f], (skill, f)
+            assert _jq(jq, f, wide_path) == wider[f], (skill, f)

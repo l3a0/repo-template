@@ -33,7 +33,9 @@ It writes the six sections the page reads.
    age after which the page calls the board stale. Three more fields appear
    only when the caller sets the matching input: ``subtitle`` from
    ``--subtitle``, ``note`` from ``--note``, and ``main``, the default
-   branch's head, from ``--default-branch-head``.
+   branch's head, from ``--default-branch-head``. Under ``--label-colors``
+   it also carries ``labelColors``, the colour GitHub stores for each label a
+   card draws.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
    from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
    native "blocked by" links, and ``after`` from a ``Board after:`` line in the
@@ -63,6 +65,18 @@ Two labels can disagree, such as two ``band:N`` labels on one issue. The run
 takes the lowest band, or ``build`` for both ``working:`` labels, and lists the
 conflict in the job summary rather than failing, because one stray label would
 otherwise freeze the whole board.
+
+A marker line the board does not use is listed in the job summary too, since
+the summary is the only place a mistyped or misplaced marker surfaces. Each
+listing is a phrase in the generator's own words, held by ``Notes``.
+
+1. ``Marker lines not read``, for a line in the owner's text that looks meant
+   as a marker and is not read, such as ``Board order: first``.
+2. ``Marker lines refused``, for a line read and then refused, such as a
+   verdict in a comment the owner did not write.
+3. ``Markers dropped``, for a marker read and then not used.
+4. ``Finished plans with no verdict after them``, for an issue whose newest
+   ``## Plan audit, pass N`` heading came after its newest verdict.
 
 Two of its rules exist because the repository is public.
 
@@ -214,13 +228,6 @@ def review_complete(
 BOARD_WORKFLOW = ".github/workflows/board.yml"
 
 
-def settled(settled_rollup: str) -> bool:
-    """Whether the caller asked for a settled rollup, refusing any other value."""
-    if settled_rollup not in ("", "true"):
-        raise BoardError(f"settled-rollup takes true or nothing, not {settled_rollup!r}")
-    return settled_rollup == "true"
-
-
 # The lines and labels a session sets for the judgement the page draws. Each
 # line is anchored at the start of a line, so prose quoting one mid-sentence is
 # not one. A verdict reads "Board verdict: build after 5 passes", or "decide"
@@ -232,6 +239,37 @@ ORDER = re.compile(r"^[ \t]*Board order: (-?\d+(?:\.\d+)?)[ \t]*$", re.MULTILINE
 AFTER = re.compile(r"^[ \t]*Board after:(.*)$", re.MULTILINE)
 BAND = re.compile(r"^band:(\d+)$")
 WORKING = {"working:build": "build", "working:decompose": "decompose"}
+
+# A line that looks meant as a marker. It starts, after whitespace, any of
+# `>*_+-` and any list number such as `1.` or `1)`, with "board" and the
+# marker's kind in any case. The kind must then end the line, or be followed by
+# optional `*` or `_`, optional whitespace, and a `:`, a digit or a `#`. So
+# `Board order 3`, `Board Order: 3` and `**Board order**: 3` are near misses,
+# while prose such as "Board orders form one sequence" or "Board after the
+# merge" is not a marker at all. Every line `VERDICT`, `ORDER` or `AFTER`
+# matches also matches this one, so the reads walk these lines and list each
+# one they do not use, rather than a second scan deciding what was read.
+# Matching anywhere on a line instead would list prose about the markers on
+# every run. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+MARKER_LINE = re.compile(
+    r"^(?:[^\S\n]|[>*_+-]|\d{1,9}[.)])*board[^\S\n]+(order|verdict|after)"
+    r"(?:[*_]*[^\S\n]*[:#\d]|[*_]*[^\S\n]*$)",
+    re.MULTILINE | re.IGNORECASE,
+)
+MARKER_NAME = {"order": "Board order", "verdict": "Board verdict", "after": "Board after"}
+# A marker line's kind, read from its first letter. Under `re.IGNORECASE` a
+# Turkish dotted or dotless i matches the `i` in "verdict", and lowering the
+# whole word turns `İ` into two characters, which names no kind. None of the
+# three kinds starts with an i.
+MARKER_KIND = {"o": "order", "v": "verdict", "a": "after"}
+
+# The heading each plan-audit pass opens with, per the update-build-board
+# skill. A pass newer than an issue's newest verdict is a plan that finished
+# with no verdict.
+PASS_HEADING = re.compile(r"^[ \t]*## Plan audit, pass \d+", re.MULTILINE)
+
+# An issue a `Board after:` line names. A bare number is not one.
+AFTER_REF = re.compile(r"#(\d+)\b")
 
 # A fenced code block, opened by three or more backticks or tildes and closed
 # by the same run, or left open to the end of the text. A comment quoting the
@@ -357,14 +395,23 @@ def note_segments(note: str) -> list[dict] | None:
     return pieces
 
 
-def wants_head(default_branch_head: str) -> bool:
-    """Whether the caller asked for the default branch's head, which is empty or ``true``."""
-    if default_branch_head not in ("", "true"):
-        raise BoardError(
-            f"default-branch-head is {default_branch_head!r}, and it takes only an empty value "
-            "or true"
-        )
-    return default_branch_head == "true"
+def switch(name: str, value: str) -> bool:
+    """An on-or-off input, which is empty for off and ``true`` for on.
+
+    Any other value stops the run rather than guessing, because a caller who
+    wrote ``yes`` or ``name`` meant something, and reading it as off would
+    publish a board that silently ignores the caller's file.
+    """
+    if value not in ("", "true"):
+        raise BoardError(f"the {name} input {value!r} is neither empty nor true")
+    return value == "true"
+
+
+# A label's colour as GitHub stores it, once lower-cased. The page writes it
+# into a style attribute, so anything else is left out of the board. It is
+# matched whole with ``fullmatch``, because ``$`` also matches before a
+# trailing newline. The page checks the same pattern.
+HEX_COLOUR = re.compile(r"[0-9a-f]{6}")
 
 
 # GitHub reports a check as an uppercase enum, and the page knows five
@@ -444,9 +491,9 @@ query($owner:String!, $name:String!, $after:String) {{
     issues(states:OPEN, first:100, after:$after, orderBy:{{field:CREATED_AT, direction:ASC}}) {{
       totalCount {PAGE_INFO}
       nodes {{
-        id number title body
+        id number title body authorAssociation
         milestone{{title}}
-        labels(first:100){{{PAGE_INFO} nodes{{name}}}}
+        labels(first:100){{{PAGE_INFO} nodes{{name color}}}}
         blockedBy(first:100){{{PAGE_INFO} nodes{{number state repository{{nameWithOwner}}}}}}
         subIssues{{totalCount}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
@@ -501,7 +548,7 @@ BATCH = 50
 # a pull request's are both `comments` on GitHub, so the issue's go under an
 # alias to keep the two apart.
 NESTED = {
-    "labels": ("Issue", "labels", "", "name"),
+    "labels": ("Issue", "labels", "", "name color"),
     "blockedBy": ("Issue", "blockedBy", "", "number state repository{nameWithOwner}"),
     "issueComments": ("Issue", "comments", "", "authorAssociation body"),
     "closedByPullRequestsReferences": (
@@ -860,7 +907,7 @@ def pr_items(
             reviews, rule, "submittedAt", head_date
         )
     state = {"OPEN": "open", "MERGED": "merged", "CLOSED": "closed"}[pr["state"]]
-    rollup = _rollup(gql, pr, unknown, settled(settled_rollup))
+    rollup = _rollup(gql, pr, unknown, switch("settled-rollup", settled_rollup))
     items = []
     for issue in named:
         if rule is not None:
@@ -927,6 +974,66 @@ def _prs_by_number(
     return found
 
 
+class Notes:
+    """What the job summary lists about the markers, each as ``(issue, phrase)``.
+
+    ``unread`` holds a line that looks meant as a marker and is not read,
+    ``refused`` a line read and then refused, and ``dropped`` a marker read and
+    then not used. Every phrase is the generator's own words. None carries a
+    line's text, because a refused line is a stranger's, and a ``|`` in it
+    would break the summary's table.
+    """
+
+    def __init__(self) -> None:
+        self.unread: set[tuple[int, str]] = set()
+        self.refused: set[tuple[int, str]] = set()
+        self.dropped: set[tuple[int, str]] = set()
+
+
+def _marker_lines(text: str) -> list[tuple[str, str, int]]:
+    """Each line of already unfenced text that looks meant as a marker, with its
+    kind and the offset where the line starts."""
+    found = []
+    offset = 0
+    for line in text.split("\n"):
+        m = MARKER_LINE.match(line)
+        if m:
+            found.append((MARKER_KIND[m.group(1)[0].lower()], line, offset))
+        offset += len(line) + 1
+    return found
+
+
+def read_body(n: int, body: str, owner: bool, *, notes: Notes) -> tuple[list[str], list[str]]:
+    """The ``Board order:`` values and the text after each ``Board after:`` in a body.
+
+    Each is read as ``ORDER`` and ``AFTER`` read it, from the body with its
+    fenced blocks removed. A body anyone wrote sets both, as it always has.
+
+    In a body the owner wrote, which ``owner`` says, a line that looks meant as
+    a marker and is not read is listed as unread. That covers an order or after
+    line the grammar fails, an after line naming no ``#N``, and a verdict line,
+    which counts only in a comment. A stranger's near misses are not listed, so
+    a stranger cannot fill the summary.
+    """
+    orders: list[str] = []
+    after: list[str] = []
+    for kind, line, _ in _marker_lines(unfenced(body)):
+        if kind == "order":
+            m = ORDER.match(line)
+            if m:
+                orders.append(m.group(1))
+                continue
+        elif kind == "after":
+            m = AFTER.match(line)
+            if m:
+                after.append(m.group(1))
+                if AFTER_REF.search(m.group(1)):
+                    continue
+        if owner:
+            notes.unread.add((n, MARKER_NAME[kind]))
+    return orders, after
+
+
 def tracker_card(
     gql: Gql,
     issue: dict,
@@ -935,6 +1042,9 @@ def tracker_card(
     repo: str,
     conflicts: list[str],
     kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
+    sort_labels: bool = False,
+    *,
+    after_texts: list[str],
 ) -> dict:
     """One open issue as the card the page draws.
 
@@ -944,7 +1054,10 @@ def tracker_card(
     number means nothing here, so it is dropped too. ``after`` is left out when
     it names none, as the page reads it as optional. The board's own labels are
     drawn as the rank chip and the busy stripe, so they are left off the card's
-    label chips. An issue claiming two kinds takes the first and is reported.
+    label chips. Those chips keep the order GitHub returns, which is the order
+    the labels were added, unless ``sort_labels`` asks for name order. An issue
+    claiming two kinds takes the first and is reported. ``after_texts`` is the
+    text after each ``Board after:`` line, which ``read_body`` reads.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
@@ -962,33 +1075,60 @@ def tracker_card(
         ),
         "labels": [x for x in names if not BAND.match(x) and x not in WORKING],
     }
-    lines = AFTER.findall(unfenced(issue.get("body") or ""))
-    after = {int(m) for line in lines for m in re.findall(r"#(\d+)\b", line)}
+    if sort_labels:
+        card["labels"] = sorted(card["labels"])
+    after = {int(m) for line in after_texts for m in AFTER_REF.findall(line)}
     after = sorted((after & open_issues) - {n})
     if after:
         card["after"] = after
     return card
 
 
-def latest_verdict(comments: list[dict]) -> tuple[str, int] | None:
-    """The newest decompose verdict among the owner's comments on an issue.
+def latest_verdict(
+    comments: list[dict], *, n: int, notes: Notes
+) -> tuple[tuple[str, int] | None, bool]:
+    """The newest decompose verdict among the owner's comments on an issue, and
+    whether a plan-audit pass came after it.
 
     A loop run again on the same issue writes a new verdict, so the last one
-    wins. GitHub lists comments oldest first.
+    wins. GitHub lists comments oldest first. Only a comment whose
+    ``authorAssociation`` is ``OWNER`` counts, for a verdict and for a pass
+    heading alike. A stranger's line that ``VERDICT`` reads is listed as
+    refused, while a stranger's near miss is not listed at all, so a stranger
+    cannot fill the summary. A stranger's pass heading counts for nothing. In
+    an owner's comment, a line
+    that looks meant as a marker and is not read is listed as unread, which
+    includes an order or after line, since those count only in a body.
+
+    A plan finished with no verdict when the owner's newest ``## Plan audit,
+    pass N`` heading comes after the newest verdict, or when a heading exists
+    and no verdict does. Positions are (comment index, offset in the comment),
+    so an exit comment headed as the last pass and ending with the verdict is
+    not one.
     """
     found = None
-    for c in comments:
+    verdict_at = last_pass = (-1, -1)
+    for i, c in enumerate(comments):
+        text = unfenced(c.get("body") or "")
         if c.get("authorAssociation") != "OWNER":
+            if VERDICT.search(text):
+                notes.refused.add((n, "Board verdict, not the owner's"))
             continue
-        for ready, passes in VERDICT.findall(unfenced(c.get("body") or "")):
-            found = (ready, int(passes))
-    return found
+        for heading in PASS_HEADING.finditer(text):
+            last_pass = (i, heading.start())
+        for kind, line, offset in _marker_lines(text):
+            m = VERDICT.match(line) if kind == "verdict" else None
+            if m:
+                found, verdict_at = (m.group(1), int(m.group(2))), (i, offset)
+            else:
+                notes.unread.add((n, MARKER_NAME[kind]))
+    return found, last_pass > verdict_at
 
 
 def rank_entry(
     n: int,
     names: list[str],
-    body: str,
+    orders: list[str],
     kind: str,
     verdict: tuple[str, int] | None,
     conflicts: list[str],
@@ -997,7 +1137,10 @@ def rank_entry(
 
     ``ready`` has no home of its own. A finished plan says whether it is ready
     to build or waits on the owner, a card whose kind is a decision waits on
-    the owner, and any other card still needs a plan.
+    the owner, and any other card still needs a plan. ``orders`` holds the
+    values of the body's ``Board order:`` lines, which ``read_body`` reads. The
+    first one counts, and more than one is a conflict even when they are equal,
+    because an edit to the second copy would move nothing.
     """
     bands = sorted(int(m.group(1)) for x in names if (m := BAND.match(x)))
     if not bands:
@@ -1009,9 +1152,8 @@ def rank_entry(
         "band": bands[0],
         "ready": verdict[0] if verdict else ("decide" if kind == "decision" else "plan"),
     }
-    orders = ORDER.findall(unfenced(body))
     if orders:
-        if len(set(orders)) > 1:
+        if len(orders) > 1:
             conflicts.append(f"#{n} carries {len(orders)} order lines, read as {orders[0]}")
         value = float(orders[0])
         entry["order"] = int(value) if value.is_integer() else value
@@ -1077,6 +1219,8 @@ def build(
     subtitle: str = "",
     note: str = "",
     default_branch_head: str = "",
+    label_colors: str = "",
+    sort_labels: str = "",
     *,
     review_heading: str = "",
     settled_rollup: str = "",
@@ -1096,16 +1240,25 @@ def build(
     ``default_branch_head`` set to ``true`` reads the default branch's head
     for the footer, at the price of one more request. Each lands in ``state``
     only when it is set, so a caller setting none gets the board it got
-    before. ``review_heading`` names the heading that closes a review, and
+    before.
+
+    ``default_branch_head``, ``label_colors``, ``sort_labels`` and
+    ``settled_rollup`` are each empty or ``true``, read by ``switch``.
+    ``label_colors`` writes ``state.labelColors``, each card label's colour as
+    GitHub stores it, and ``sort_labels`` sorts each card's labels by name.
+    ``review_heading`` names the heading that closes a review, and
     ``settled_rollup`` set to ``true`` settles the rollup, as ``pr_items``
     says. An empty one keeps the rule from before either existed. The data
-    label, the note, ``default_branch_head``, ``review_heading`` and
-    ``settled_rollup`` are checked before anything is read from GitHub.
+    label, the note, the four on-or-off inputs and the review heading are
+    checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
     pieces = note_segments(note)
-    head = wants_head(default_branch_head)
-    fields = pr_fields(review_rule(review_heading) is not None, settled(settled_rollup))
+    head = switch("default-branch-head", default_branch_head)
+    colours_wanted = switch("label-colors", label_colors)
+    by_name = switch("sort-labels", sort_labels)
+    settle = switch("settled-rollup", settled_rollup)
+    fields = pr_fields(review_rule(review_heading) is not None, settle)
     owner, name = repo.split("/", 1)
     main = head_commit(gql, owner, name) if head else None
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
@@ -1116,14 +1269,42 @@ def build(
     planned = []
     ranked = []
     conflicts: list[str] = []
+    notes = Notes()
+    unfinished: list[tuple[int, str, list[str]]] = []
     data_carried = 0
+    colours: dict[str, str] = {}
     referenced: set[int] = set()
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
-        names = [lb["name"] for lb in _all_nodes(gql, issue["id"], "labels", issue["labels"])]
-        card = tracker_card(gql, issue, names, open_issues, repo, conflicts, kinds_read)
+        nodes = _all_nodes(gql, issue["id"], "labels", issue["labels"])
+        names = [lb["name"] for lb in nodes]
+        body = issue.get("body") or ""
+        by_owner = issue.get("authorAssociation") == "OWNER"
+        orders, after_texts = read_body(n, body, by_owner, notes=notes)
+        card = tracker_card(
+            gql,
+            issue,
+            names,
+            open_issues,
+            repo,
+            conflicts,
+            kinds_read,
+            by_name,
+            after_texts=after_texts,
+        )
+        # A card cannot wait on itself, so `tracker_card` leaves a line naming
+        # only the card itself with nothing to set.
+        for text in after_texts:
+            refs = AFTER_REF.findall(text)
+            if refs and all(int(r) == n for r in refs):
+                notes.dropped.add((n, "Board after, naming itself"))
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
+        if colours_wanted:
+            for lb in nodes:
+                colour = str(lb.get("color") or "").lower()
+                if lb["name"] in card["labels"] and HEX_COLOUR.fullmatch(colour):
+                    colours[lb["name"]] = colour
 
         held = [WORKING[x] for x in names if x in WORKING]
         if held:
@@ -1132,13 +1313,18 @@ def build(
             working.append({"n": n, "kind": "build" if "build" in held else held[0]})
 
         comments = _all_nodes(gql, issue["id"], "issueComments", issue["issueComments"])
-        verdict = latest_verdict(comments)
+        verdict, finished = latest_verdict(comments, n=n, notes=notes)
+        if finished:
+            unfinished.append((n, card["kind"], names))
         if verdict:
             planned.append({"n": n, "passes": verdict[1], "ready": verdict[0]})
 
-        entry = rank_entry(n, names, issue.get("body") or "", card["kind"], verdict, conflicts)
+        entry = rank_entry(n, names, orders, card["kind"], verdict, conflicts)
         if entry:
             ranked.append(entry)
+        elif orders:
+            # Only a banded card has a place in the priority order.
+            notes.dropped.add((n, "Board order on a card with no band"))
 
         referenced |= _referenced_prs(gql, issue, repo)
 
@@ -1165,6 +1351,21 @@ def build(
             left_out.append(pr["number"])
         prs += items
     prs.sort(key=lambda p: (p["issue"], p["pr"]))
+    # A plan with an open pull request is being carried out, and one a decompose
+    # loop holds is still being written, so neither owes a verdict. A parent
+    # builds nothing, and a deferred card is one nobody should take. The kind
+    # is tested for a parent and the label for `deferred`, because a data label
+    # takes the kind ahead of `deferred`. The check needs `prs`, which is read
+    # after the issues.
+    building = {p["issue"] for p in prs if p["state"] == "open"}
+    no_verdict = [
+        n
+        for n, kind, names in unfinished
+        if kind != "parent"
+        and "deferred" not in names
+        and "working:decompose" not in names
+        and n not in building
+    ]
 
     state = {
         "schema": SCHEMA,
@@ -1190,6 +1391,10 @@ def build(
         "next": {"schema": SCHEMA, "items": ranked},
         "tracker": {"schema": SCHEMA, "items": tracker},
     }
+    # Written only when the caller asks, so a board without the input is the
+    # same document it was before the input existed.
+    if colours_wanted:
+        board["state"]["labelColors"] = dict(sorted(colours.items()))
     report = {
         "open_issues": len(issues),
         "open_prs": len(open_prs),
@@ -1198,12 +1403,21 @@ def build(
         "open_prs_left_out": sorted(left_out),
         "unknown_check_states": sorted(unknown),
         "label_conflicts": conflicts,
+        "unread": sorted(notes.unread),
+        "refused": sorted(notes.refused),
+        "dropped": sorted(notes.dropped),
+        "no_verdict": sorted(no_verdict),
         "data_label": data_label,
         "data_carried": data_carried,
         "review_heading": review_heading,
         "reviewed_items": sum(p["reviewed"] for p in prs),
     }
     return board, report
+
+
+def _listed(items: list[tuple[int, str]]) -> str:
+    """A summary row's items as ``#N phrase``, or ``none``."""
+    return "; ".join(f"#{n} {phrase}" for n, phrase in items) or "none"
 
 
 def _summary(lines: list[str]) -> None:
@@ -1236,6 +1450,8 @@ def cmd_build(args: argparse.Namespace) -> None:
         subtitle=args.subtitle,
         note=args.note,
         default_branch_head=args.default_branch_head,
+        label_colors=args.label_colors,
+        sort_labels=args.sort_labels,
         review_heading=args.review_heading,
         settled_rollup=args.settled_rollup,
     )
@@ -1265,6 +1481,13 @@ def cmd_build(args: argparse.Namespace) -> None:
             "| Check states mapped to neither way | "
             f"{', '.join(report['unknown_check_states']) or 'none'} |",
             f"| Labels or lines that disagree | {'; '.join(report['label_conflicts']) or 'none'} |",
+            # The l3a0 plugin's sync-prune-next skill reads these four rows by
+            # name, so a renamed row drops out of every status round.
+            f"| Marker lines not read | {_listed(report['unread'])} |",
+            f"| Marker lines refused | {_listed(report['refused'])} |",
+            f"| Markers dropped | {_listed(report['dropped'])} |",
+            "| Finished plans with no verdict after them | "
+            f"{', '.join(f'#{n}' for n in report['no_verdict']) or 'none'} |",
             # A misspelt data label matches nothing and fails no read, so the
             # count is what shows the caller's input reached the issues.
             "| Data label | "
@@ -1377,6 +1600,12 @@ def main(argv: list[str] | None = None) -> int:
         "--default-branch-head",
         default="",
         help="true to name the default branch's head in the footer, nothing if empty",
+    )
+    b.add_argument(
+        "--label-colors", default="", help="true to colour label chips from GitHub, empty not to"
+    )
+    b.add_argument(
+        "--sort-labels", default="", help="true to sort each card's labels by name, empty not to"
     )
     b.add_argument(
         "--review-heading",

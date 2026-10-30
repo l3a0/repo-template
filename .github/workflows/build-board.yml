@@ -27,6 +27,10 @@ name: Build board
 # 3. `default-branch-head`, set to `true`, names the commit the default branch
 #    stands at in the footer and the "Live updates stopped" banner.
 #
+# Two on-or-off inputs, `label-colors` and `sort-labels`, added by the pull
+# request that closes l3a0/repo-template#41, fill each label chip with the
+# colour GitHub stores for the label and sort each card's labels by name.
+#
 # The `review-heading` and `settled-rollup` inputs, added by the pull request
 # that closes l3a0/repo-template#47, count a review only when the owner posts
 # the named heading after the head commit, and leave the board's own checks
@@ -103,6 +107,19 @@ on:
           the run.
         type: string
         default: ""
+      label-colors:
+        description: >-
+          "true" fills each label chip with the colour GitHub stores for that
+          label. Empty draws the page's own colours, where a label the page
+          does not know draws faint.
+        type: string
+        default: ""
+      sort-labels:
+        description: >-
+          "true" sorts each card's labels by name. Empty keeps the order
+          GitHub returns, which is the order the labels were added.
+        type: string
+        default: ""
       review-heading:
         description: >-
           The heading, without its "## ", that closes a review, such as
@@ -173,6 +190,8 @@ jobs:
           SUBTITLE: ${{ inputs.subtitle }}
           NOTE: ${{ inputs.note }}
           DEFAULT_BRANCH_HEAD: ${{ inputs.default-branch-head }}
+          LABEL_COLORS: ${{ inputs.label-colors }}
+          SORT_LABELS: ${{ inputs.sort-labels }}
           REVIEW_HEADING: ${{ inputs.review-heading }}
           SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
         run: >-
@@ -184,6 +203,8 @@ jobs:
           --subtitle="$SUBTITLE"
           --note="$NOTE"
           --default-branch-head="$DEFAULT_BRANCH_HEAD"
+          --label-colors="$LABEL_COLORS"
+          --sort-labels="$SORT_LABELS"
           --review-heading="$REVIEW_HEADING"
           --settled-rollup="$SETTLED_ROLLUP"
           --out _site

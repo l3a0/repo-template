@@ -82,15 +82,13 @@ HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
-# this commit, the head of the l3a0/claude-plugins pull request that releases
-# 0.6.3, which merges together with the pull request that set this pin.
-# GitHub keeps a pull request's head fetchable after it merges, and a later
-# pull request moves the pin to the release's merge commit. A change here to a
-# marker, a label or a string these tests compare with the skill fails them
-# until the plugin releases a skill that matches and this pin moves to it. Any
-# other format change rests on the plugin's own rule that a generator's format
-# change ships with a plugin release in the same step.
-PLUGIN_COMMIT = "7f392da18a227df8ce6c1f34b2bc57ade278d8aa"
+# this commit, the merge commit of the l3a0/claude-plugins pull request that
+# released 0.6.3. A change here to a marker, a label or a string these tests
+# compare with the skill fails them until the plugin releases a skill that
+# matches and this pin moves to it. Any other format change rests on the
+# plugin's own rule that a generator's format change ships with a plugin
+# release in the same step.
+PLUGIN_COMMIT = "2b3acad31972c02283db998553a34084949bfab1"
 PLUGIN_SKILLS = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.

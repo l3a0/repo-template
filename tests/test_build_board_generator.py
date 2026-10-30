@@ -641,7 +641,7 @@ def test_a_caller_setting_no_line_gets_the_board_it_got_before() -> None:
 # with `git show cf2959a3:scripts/build_board.py`, through its own `main()`.
 # The file is never rewritten from the code under test, because a golden
 # written by the head would compare the head with itself.
-LINES_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "lines.json"
+GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "lines.json"
 GOLDEN_CRON = 'on:\n  schedule:\n    - cron: "8,38 * * * *"\n'
 
 
@@ -663,7 +663,7 @@ def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
 ) -> None:
     """Protects every current caller's board.json, byte for byte.
 
-    The generator at cf2959a3 wrote ``LINES_GOLDEN`` from the same tracker before the
+    The generator at cf2959a3 wrote ``GOLDEN`` from the same tracker before the
     three inputs existed. The head, with none of them set, has to write the
     same bytes to the file it publishes. The workflow passes every flag
     whether or not the caller set it, so passing them empty counts too.
@@ -679,7 +679,7 @@ def test_a_caller_setting_no_line_writes_the_bytes_cf2959a3_wrote(
     out = tmp_path / "site"
     argv = ["build", "--repo", REPO, "--workflow", str(workflow), "--out", str(out)]
     assert bb.main([*argv, *lines]) == 0
-    assert (out / "board.json").read_bytes() == LINES_GOLDEN.read_bytes()
+    assert (out / "board.json").read_bytes() == GOLDEN.read_bytes()
 
 
 def test_the_subtitle_reaches_the_state() -> None:
@@ -2154,7 +2154,7 @@ def test_every_marker_shape_reaches_its_row() -> None:
     assert "#6 carries 2 order lines, read as 4" in report["label_conflicts"]
 
 
-GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
+MARKERS_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
 
 
 class FrozenNow(datetime):
@@ -2171,7 +2171,7 @@ def test_the_marker_rows_change_nothing_in_the_board(
     """Protects every caller that sets no input from a board that moves.
 
     The rows list what the board did not use, so the board itself has to stay
-    as it was. ``GOLDEN`` is the ``board.json`` that the command line at
+    as it was. ``MARKERS_GOLDEN`` is the ``board.json`` that the command line at
     l3a0/repo-template commit cf2959a3 wrote for ``marker_tracker``, and this
     run has to write the same bytes but one. The file is read as the command
     line writes it, so a change to how it is written fails here too. #2's body
@@ -2182,7 +2182,7 @@ def test_the_marker_rows_change_nothing_in_the_board(
     monkeypatch.setattr(bb, "datetime", FrozenNow)
     summary_of(monkeypatch, tmp_path, marker_tracker(), "--data-label", DATA_LABEL)
     written = (tmp_path / "site" / "board.json").read_bytes()
-    golden = GOLDEN.read_bytes().removesuffix(b"\n")
+    golden = MARKERS_GOLDEN.read_bytes().removesuffix(b"\n")
     lost = b'{"issue":2,"band":2,"ready":"plan"}'
     assert golden.count(lost) == 1
     assert written == golden.replace(lost, b'{"issue":2,"band":2,"ready":"plan","order":5}')
@@ -4535,13 +4535,11 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
         ("subtitle", "SUBTITLE"),
         ("note", "NOTE"),
         ("default-branch-head", "DEFAULT_BRANCH_HEAD"),
+        ("owner-body-lines", "OWNER_BODY_LINES"),
     ):
         uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
         assert [(before.strip(), after) for before, after in uses] == [(f"{var}:", "")]
         assert f'--{key}="${var}"' in _called()
-    owner = re.findall(r"^(.*)\$\{\{\s*inputs\.owner-body-lines\s*\}\}(.*)$", _called(), re.M)
-    assert [(before.strip(), after) for before, after in owner] == [("OWNER_BODY_LINES:", "")]
-    assert '--owner-body-lines="$OWNER_BODY_LINES"' in _called()
     default = re.findall(r"^(.*)\$\{\{\s*inputs\.milestone-default\s*\}\}(.*)$", _called(), re.M)
     assert [(before.strip(), after) for before, after in default] == [("MILESTONE_DEFAULT:", "")]
     assert '--milestone-default="$MILESTONE_DEFAULT"' in _called()

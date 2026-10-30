@@ -344,7 +344,7 @@ def build(
     milestone_default: str = "",
     **inputs: str,
 ) -> tuple[dict, dict]:
-    """The board and report for ``gh``, with any of ``review_heading`` and ``settled_rollup``."""
+    """The board and report for ``gh``, with any of the keyword-only inputs."""
     return bb.build(
         gh,
         REPO,

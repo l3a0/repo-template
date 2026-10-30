@@ -1279,10 +1279,10 @@ def tracker_card(
     repo: str,
     conflicts: list[str],
     kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
-    cut: bool = False,
     sort_labels: bool = False,
     *,
     after: set[int],
+    cut: bool = False,
     by_order: bool = False,
 ) -> dict:
     """One open issue as the card the page draws.

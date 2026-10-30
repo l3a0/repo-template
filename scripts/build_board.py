@@ -20,7 +20,11 @@ the kind back behind ``--data-label``, which names the label a repository
 marks such issues with, so a repository that never names one reads no ``data``
 kind at all. The pull request that closes l3a0/repo-template#44 added
 ``--subtitle``, ``--note`` and ``--default-branch-head``, for the lines a
-repository's own page carried under its title and in its footer.
+repository's own page carried under its title and in its footer. The pull
+request that closes l3a0/repo-template#47 ported l3a0/marketlake's review rule
+and its rollup from ``.claude/skills/sync-prune-next/build_board.py`` at
+commit ``cc9d3432``, behind ``--review-heading`` and ``--settled-rollup``, so
+a repository that names neither reads pull requests as before.
 
 It writes the six sections the page reads.
 
@@ -29,7 +33,9 @@ It writes the six sections the page reads.
    age after which the page calls the board stale. Three more fields appear
    only when the caller sets the matching input: ``subtitle`` from
    ``--subtitle``, ``note`` from ``--note``, and ``main``, the default
-   branch's head, from ``--default-branch-head``.
+   branch's head, from ``--default-branch-head``. Under ``--label-colors``
+   it also carries ``labelColors``, the colour GitHub stores for each label a
+   card draws.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
    from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
    native "blocked by" links, and ``after`` from a ``Board after:`` line in the
@@ -37,7 +43,9 @@ It writes the six sections the page reads.
 3. ``prs``, one item per pull request and each issue in this repository it
    names, with its state, its checks at the current head, whether GitHub
    registered a closing link to that issue, and whether the owner posted a
-   review.
+   review. A caller that names a review heading counts only that heading
+   posted since the head commit, and a caller that asks for a settled rollup
+   leaves the board's own checks out of it.
 4. ``working``, one item per issue carrying a ``working:build`` or
    ``working:decompose`` label, which a session sets while it holds the card.
 5. ``planned``, one item per issue with an owner comment carrying a
@@ -72,11 +80,12 @@ listing is a phrase in the generator's own words, held by ``Notes``.
 
 Four of its rules exist because the repository is public.
 
-1. ``reviewed`` reads a comment opening with ``## Review``, and ``planned`` a
-   comment carrying a ``Board verdict:`` line, only when its author
-   association is ``OWNER``. Anyone can comment, and a stranger's comment would
-   otherwise move a card. Labels and links need triage access, so they need no
-   such filter.
+1. ``reviewed`` reads a comment opening with ``## Review``, or under a
+   caller's review heading a comment or a submitted review opening with it,
+   and ``planned`` a comment carrying a ``Board verdict:`` line, only when its
+   author association is ``OWNER``. Anyone
+   can comment, and a stranger's comment would otherwise move a card. Labels
+   and links need triage access, so they need no such filter.
 2. With ``--owner-body-lines=true``, a ``Board order:`` or ``Board after:``
    line counts only in the body of an issue the owner opened, and a
    stranger's is listed as refused. Anyone can open an issue. The input is off
@@ -150,6 +159,96 @@ PART_OF = re.compile(rf"\bPart of #{REF_NUMBER}")
 # A review comment opens with a line reading `## Review`, which the l3a0
 # plugin's update-build-board skill states as the convention. "## Reviewer" is not one.
 REVIEW = re.compile(r"## Review\b")
+# The same heading as the rule with no caller's heading reads it: after any
+# leading whitespace, posted at any time.
+ANY_REVIEW = re.compile(r"\s*" + REVIEW.pattern)
+
+
+def review_rule(heading: str) -> re.Pattern[str] | None:
+    """The first line that closes a review under the caller's heading, or None for none.
+
+    A caller that names a heading, such as ``Review complete``, counts a review
+    only when the whole first line of an owner's comment or submitted review is
+    ``## Review complete``. So ``## Review round 1, lenses running``, posted
+    before the lenses report, and ``## Review completeness check`` are not
+    one. The input takes the heading's text rather than the line, because YAML
+    reads an unquoted ``## Review complete`` as a comment and the input would
+    then be empty with nothing saying so. A heading that spans lines, or that
+    starts with ``#`` and so writes a deeper heading, could never match the
+    way its caller meant, so the run refuses it before reading anything.
+    """
+    if not heading:
+        return None
+    if "\n" in heading or "\r" in heading:
+        raise BoardError(f"the review heading {heading!r} spans more than one line")
+    if heading.startswith("#"):
+        raise BoardError(f"the review heading {heading!r} starts with #, so name it without its ##")
+    return re.compile(r"\A## " + re.escape(heading) + r"\r?(?:\n|\Z)")
+
+
+def review_words(heading: str) -> tuple[str, str]:
+    """What the card's line prints for a pull request reviewed and not, under a heading.
+
+    ``Review complete`` gives ``review complete`` and ``no Review complete
+    marker since the head commit``. There is no in-progress wording, because a
+    review that has not posted its heading reads the same whoever holds the
+    card.
+    """
+    return heading[:1].lower() + heading[1:], f"no {heading} marker since the head commit"
+
+
+def _when(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def review_complete(
+    entries: list[dict],
+    rule: re.Pattern[str],
+    stamp_field: str | None = None,
+    head_date: datetime | None = None,
+) -> bool:
+    """Whether the owner posted an entry opening with ``rule``, after the head when timed.
+
+    Every review rule reads only the owner's entries, because anyone can
+    comment on a public repository. With no ``stamp_field`` the entry counts
+    whenever it was posted, which is the rule with no caller's heading. With
+    one, it counts only when posted after ``head_date``. A comment's time is
+    its ``createdAt`` and a submitted review's its ``submittedAt``. A review
+    still pending has no ``submittedAt``, and a head commit with no
+    ``committedDate`` cannot be compared, so either reads as no review.
+
+    The time check has one gap. ``committedDate`` is when the commit says it
+    was made, which whoever makes it sets, and not when it was pushed. So a
+    commit made before the heading, or dated before it on purpose, and pushed
+    after it reads as reviewed. Sessions post the heading after their last
+    push, which is what closes the gap for a comment. A submitted review names
+    the commit it reviewed, so ``pr_items`` counts only a review of the head.
+    """
+    for entry in entries:
+        if entry.get("authorAssociation") != "OWNER":
+            continue
+        if not rule.match(entry.get("body") or ""):
+            continue
+        if stamp_field is None:
+            return True
+        posted = _when(entry.get(stamp_field))
+        if posted is not None and head_date is not None and posted > head_date:
+            return True
+    return False
+
+
+# The file the board's own runs come from. The shared workflow already reads
+# the caller's board under this path, for its sparse checkout and its cron
+# line. A pull_request_target run attaches its check runs to the pull request's
+# head, so a reviewed branch would read as still running while the board
+# rebuilds, and a failed board run as a failed check. The check runs' names do
+# not say where they came from: the same file's jobs have been named
+# `board / build`, `build` and `board-build`, and a CI job may be named
+# `board / build` too. The workflow file names the source exactly.
+BOARD_WORKFLOW = ".github/workflows/board.yml"
+
 
 # The lines and labels a session sets for the judgement the page draws. Each
 # line is anchored at the start of a line, so prose quoting one mid-sentence is
@@ -353,20 +452,30 @@ def note_segments(note: str) -> list[dict] | None:
     return pieces
 
 
-def wants_head(default_branch_head: str) -> bool:
-    """Whether the caller asked for the default branch's head, which is empty or ``true``."""
-    if default_branch_head not in ("", "true"):
-        raise BoardError(
-            f"default-branch-head is {default_branch_head!r}, and it takes only an empty value "
-            "or true"
-        )
-    return default_branch_head == "true"
+def switch(name: str, value: str) -> bool:
+    """An on-or-off input, which is empty for off and ``true`` for on.
+
+    Any other value stops the run rather than guessing, because a caller who
+    wrote ``yes`` or ``name`` meant something, and reading it as off would
+    publish a board that silently ignores the caller's file.
+    """
+    if value not in ("", "true"):
+        raise BoardError(f"the {name} input {value!r} is neither empty nor true")
+    return value == "true"
 
 
-# GitHub reports a check as an uppercase enum, and the page knows four
-# lowercase words. Passed through as they come, every state reads as green,
-# because the page counted only `failure`, `running` and `neutral`. So each
-# state is mapped, and each failure-like one is `failure`. A check run that has
+# A label's colour as GitHub stores it, once lower-cased. The page writes it
+# into a style attribute, so anything else is left out of the board. It is
+# matched whole with ``fullmatch``, because ``$`` also matches before a
+# trailing newline. The page checks the same pattern.
+HEX_COLOUR = re.compile(r"[0-9a-f]{6}")
+
+
+# GitHub reports a check as an uppercase enum, and the page knows five
+# lowercase words, of which this map writes four. Passed through as they come,
+# every state reads as green, because the page counted only `failure`,
+# `running` and `neutral`. So each state is mapped, and each failure-like one
+# is `failure`. A check run that has
 # not completed is `running` whatever its conclusion field says.
 CHECK_WORD = {
     # Check run conclusions.
@@ -385,19 +494,52 @@ CHECK_WORD = {
     "EXPECTED": "running",
 }
 
+# The words under a settled rollup. A skipped job is one whose condition kept
+# it from running, such as a job that runs only on the default branch, and the
+# page reads `skipped` as settled where it reads `neutral` as neither way. A
+# cancelled run and one waiting on an action read as neither way rather than
+# as failures, as l3a0/marketlake's board read them. Every other state reads
+# as above.
+SETTLED_CHECK_WORD = {
+    **CHECK_WORD,
+    "SKIPPED": "skipped",
+    "CANCELLED": "neutral",
+    "ACTION_REQUIRED": "neutral",
+}
+
 PAGE_INFO = "pageInfo{hasNextPage endCursor}"
 
-PR_FIELDS = f"""
+# What a submitted review is read for, and what a check run adds for the
+# workflow file it came from. Each is selected only for a caller that sets the
+# input reading it. A caller that sets neither sends the query it sent before
+# either input existed, so it pays no point for them, and a field its token
+# cannot read cannot stop its board.
+REVIEW_SELECTION = "authorAssociation body submittedAt commit{oid}"
+RUN_FILE = "checkSuite{workflowRun{file{path}}}"
+
+
+def pr_fields(heading: bool = False, settle: bool = False) -> str:
+    """The pull request fragment, with what ``review-heading`` and ``settled-rollup`` read."""
+    comment = " createdAt" if heading else ""
+    reviews = (
+        f"\n  reviews(first:100){{{PAGE_INFO} nodes{{{REVIEW_SELECTION}}}}}" if heading else ""
+    )
+    head = "oid committedDate " if heading else ""
+    run = f" {RUN_FILE}" if settle else ""
+    return f"""
 fragment pr on PullRequest {{
   id number state body isCrossRepository
   closingIssuesReferences(first:100){{{PAGE_INFO} nodes{{number repository{{nameWithOwner}}}}}}
-  comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
-  commits(last:1){{nodes{{commit{{statusCheckRollup{{id
+  comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body{comment}}}}}{reviews}
+  commits(last:1){{nodes{{commit{{{head}statusCheckRollup{{id
     contexts(first:100){{{PAGE_INFO} nodes{{__typename
-      ... on CheckRun{{name status conclusion}}
+      ... on CheckRun{{name status conclusion{run}}}
       ... on StatusContext{{context state}}}}}}}}}}}}}}
 }}
 """
+
+
+PR_FIELDS = pr_fields()
 
 ISSUES_QUERY = f"""
 query($owner:String!, $name:String!, $after:String) {{
@@ -408,7 +550,7 @@ query($owner:String!, $name:String!, $after:String) {{
       nodes {{
         id number title body authorAssociation
         milestone{{title}}
-        labels(first:100){{{PAGE_INFO} nodes{{name}}}}
+        labels(first:100){{{PAGE_INFO} nodes{{name color}}}}
         blockedBy(first:100){{{PAGE_INFO} nodes{{number state repository{{nameWithOwner}}}}}}
         subIssues{{totalCount}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
@@ -423,7 +565,10 @@ query($owner:String!, $name:String!, $after:String) {{
 }}
 """
 
-OPEN_PRS_QUERY = f"""
+
+def open_prs_query(fields: str = PR_FIELDS) -> str:
+    """The query for the open pull requests, with the fragment ``fields`` gives."""
+    return f"""
 query($owner:String!, $name:String!, $after:String) {{
   rateLimit{{cost}}
   repository(owner:$owner, name:$name) {{
@@ -433,8 +578,11 @@ query($owner:String!, $name:String!, $after:String) {{
     }}
   }}
 }}
-{PR_FIELDS}
+{fields}
 """
+
+
+OPEN_PRS_QUERY = open_prs_query()
 
 # The commit the default branch stands at, read only for a caller that sets
 # `default-branch-head`. It is a request of its own rather than a field of
@@ -457,7 +605,7 @@ BATCH = 50
 # a pull request's are both `comments` on GitHub, so the issue's go under an
 # alias to keep the two apart.
 NESTED = {
-    "labels": ("Issue", "labels", "", "name"),
+    "labels": ("Issue", "labels", "", "name color"),
     "blockedBy": ("Issue", "blockedBy", "", "number state repository{nameWithOwner}"),
     "issueComments": ("Issue", "comments", "", "authorAssociation body"),
     "closedByPullRequestsReferences": (
@@ -479,6 +627,7 @@ NESTED = {
         "number repository{nameWithOwner}",
     ),
     "comments": ("PullRequest", "comments", "", "authorAssociation body"),
+    "reviews": ("PullRequest", "reviews", "", REVIEW_SELECTION),
     "contexts": (
         "StatusCheckRollup",
         "contexts",
@@ -486,6 +635,23 @@ NESTED = {
         "__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}",
     ),
 }
+
+
+def nested(heading: bool = False, settle: bool = False) -> dict:
+    """``NESTED`` with what each input reads on a later page, as ``pr_fields`` selects it."""
+    table = dict(NESTED)
+    if heading:
+        table["comments"] = ("PullRequest", "comments", "", "authorAssociation body createdAt")
+    if settle:
+        table["contexts"] = (
+            "StatusCheckRollup",
+            "contexts",
+            "",
+            f"__typename ... on CheckRun{{name status conclusion {RUN_FILE}}}"
+            " ... on StatusContext{context state}",
+        )
+    return table
+
 
 Gql = Callable[[str, dict], dict]
 
@@ -569,11 +735,11 @@ class GhGraphql:
         return data
 
 
-def _all_nodes(gql: Gql, node_id: str, field: str, conn: dict) -> list:
-    """Every entry of a nested list, reading further pages where there are any."""
+def _all_nodes(gql: Gql, node_id: str, field: str, conn: dict, table: dict = NESTED) -> list:
+    """Every entry of a nested list, reading further pages as ``table`` says."""
     nodes = list(conn["nodes"])
     page = conn["pageInfo"]
-    typename, real, args, selection = NESTED[field]
+    typename, real, args, selection = table[field]
     head = f"{args}, " if args else ""
     while page["hasNextPage"]:
         query = (
@@ -659,15 +825,15 @@ def card_kind(
     return (card_kinds(labels, sub_issues, kinds_read) or ["ready"])[0]
 
 
-def check_word(context: dict, unknown: set[str]) -> str:
-    """The page's word for one check run or status context."""
+def check_word(context: dict, unknown: set[str], words: dict[str, str] = CHECK_WORD) -> str:
+    """The page's word for one check run or status context, from ``words``."""
     if context.get("__typename") == "CheckRun":
         if context.get("status") != "COMPLETED":
             return "running"
         state = context.get("conclusion")
     else:
         state = context.get("state")
-    word = CHECK_WORD.get(state or "")
+    word = words.get(state or "")
     if word is None:
         # A state GitHub adds later is reported neither way rather than as a
         # pass, and the job summary names it so the map can learn it.
@@ -676,17 +842,31 @@ def check_word(context: dict, unknown: set[str]) -> str:
     return word
 
 
-def _rollup(gql: Gql, pr: dict, unknown: set[str]) -> list[list[str]]:
+def is_board_check(context: dict) -> bool:
+    """Whether a check run came from the board's own workflow file."""
+    run = ((context.get("checkSuite") or {}).get("workflowRun") or {}).get("file") or {}
+    return context.get("__typename") == "CheckRun" and run.get("path") == BOARD_WORKFLOW
+
+
+def _rollup(gql: Gql, pr: dict, unknown: set[str], settle: bool = False) -> list[list[str]]:
+    """The head's checks as ``[name, word]`` pairs, in GitHub's order.
+
+    Under ``settle`` the board's own checks are left out, the words come from
+    ``SETTLED_CHECK_WORD``, and the pairs are sorted by name, then word.
+    """
     commits = pr["commits"]["nodes"]
     rollup = commits[0]["commit"]["statusCheckRollup"] if commits else None
     if not rollup:
         return []
-    contexts = _all_nodes(gql, rollup["id"], "contexts", rollup["contexts"])
+    contexts = _all_nodes(gql, rollup["id"], "contexts", rollup["contexts"], nested(settle=settle))
+    words = SETTLED_CHECK_WORD if settle else CHECK_WORD
     out = []
     for c in contexts:
+        if settle and is_board_check(c):
+            continue
         label = c.get("name") if c.get("__typename") == "CheckRun" else c.get("context")
-        out.append([str(label), check_word(c, unknown)])
-    return out
+        out.append([str(label), check_word(c, unknown, words)])
+    return sorted(out) if settle else out
 
 
 def in_repo(node: dict | None, repo: str) -> bool:
@@ -725,6 +905,9 @@ def pr_items(
     repo: str,
     unknown: set[str],
     working: frozenset[int] = frozenset(),
+    *,
+    review_heading: str = "",
+    settled_rollup: str = "",
 ) -> list[dict]:
     """One item per open issue the pull request names, or none at all.
 
@@ -750,6 +933,12 @@ def pr_items(
     ``review`` is the word the card's line prints. With no review posted it
     says one is in progress while a session holds the card, which ``working``
     names, and that none is posted otherwise.
+
+    ``review_heading``, when named, replaces that rule. The pull request is
+    reviewed when an owner's comment or submitted review opens with the whole
+    line ``## <heading>`` and was posted after the head commit, as
+    ``review_complete`` reads it, and ``review`` takes ``review_words``.
+    ``settled_rollup`` set to ``true`` reads the checks as ``_rollup`` says.
     """
     if pr.get("isCrossRepository"):
         return []
@@ -762,15 +951,38 @@ def pr_items(
     named = sorted((closing | part_of) & open_issues)
     if not named:
         return []
-    comments = _all_nodes(gql, pr["id"], "comments", pr["comments"])
-    reviewed = any(
-        c.get("authorAssociation") == "OWNER" and REVIEW.match((c.get("body") or "").lstrip())
-        for c in comments
-    )
+    rule = review_rule(review_heading)
+    table = nested(heading=rule is not None)
+    comments = _all_nodes(gql, pr["id"], "comments", pr["comments"], table)
+    if rule is None:
+        reviewed = review_complete(comments, ANY_REVIEW)
+    else:
+        commits = pr["commits"]["nodes"]
+        head = commits[0]["commit"] if commits else {}
+        head_date = _when(head.get("committedDate"))
+        # A review started on an older commit and submitted after a push
+        # reviewed code the head no longer holds, so only a review of the head
+        # itself counts.
+        oid = head.get("oid")
+        reviews = [
+            r
+            for r in _all_nodes(gql, pr["id"], "reviews", pr["reviews"], table)
+            if oid is not None and (r.get("commit") or {}).get("oid") == oid
+        ]
+        reviewed = review_complete(comments, rule, "createdAt", head_date) or review_complete(
+            reviews, rule, "submittedAt", head_date
+        )
     state = {"OPEN": "open", "MERGED": "merged", "CLOSED": "closed"}[pr["state"]]
-    rollup = _rollup(gql, pr, unknown)
+    rollup = _rollup(gql, pr, unknown, switch("settled-rollup", settled_rollup))
     items = []
     for issue in named:
+        if rule is not None:
+            done, owed = review_words(review_heading)
+            review = done if reviewed else owed
+        elif reviewed:
+            review = "review posted"
+        else:
+            review = "review in progress" if issue in working else "no review posted"
         item = {
             "pr": pr["number"],
             "issue": issue,
@@ -780,9 +992,7 @@ def pr_items(
             # board.json.
             "linked": issue in closing,
             "reviewed": reviewed,
-            "review": "review posted"
-            if reviewed
-            else ("review in progress" if issue in working else "no review posted"),
+            "review": review,
             "rollup": rollup,
         }
         if issue not in closing:
@@ -810,14 +1020,16 @@ def _referenced_prs(gql: Gql, issue: dict, repo: str) -> set[int]:
     return numbers
 
 
-def _prs_by_number(gql: Gql, owner: str, name: str, numbers: list[int]) -> list[dict]:
+def _prs_by_number(
+    gql: Gql, owner: str, name: str, numbers: list[int], fields: str = PR_FIELDS
+) -> list[dict]:
     found = []
     for i in range(0, len(numbers), BATCH):
         chunk = numbers[i : i + BATCH]
-        fields = " ".join(f"p{n}: pullRequest(number:{n}){{...pr}}" for n in chunk)
+        aliases = " ".join(f"p{n}: pullRequest(number:{n}){{...pr}}" for n in chunk)
         query = (
             "query($owner:String!, $name:String!) { rateLimit{cost} "
-            f"repository(owner:$owner, name:$name) {{ {fields} }} }}\n{PR_FIELDS}"
+            f"repository(owner:$owner, name:$name) {{ {aliases} }} }}\n{fields}"
         )
         data = gql(query, {"owner": owner, "name": name})
         for n in chunk:
@@ -981,6 +1193,7 @@ def tracker_card(
     repo: str,
     conflicts: list[str],
     kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
+    sort_labels: bool = False,
     *,
     after: set[int],
 ) -> dict:
@@ -992,9 +1205,10 @@ def tracker_card(
     number means nothing here, so it is dropped too. ``after`` is left out when
     it names none, as the page reads it as optional. The board's own labels are
     drawn as the rank chip and the busy stripe, so they are left off the card's
-    label chips. An issue claiming two kinds takes the first and is reported.
-    ``after`` holds the issues the body's ``Board after:`` lines name, which
-    ``read_body`` reads.
+    label chips. Those chips keep the order GitHub returns, which is the order
+    the labels were added, unless ``sort_labels`` asks for name order. An issue
+    claiming two kinds takes the first and is reported. ``after`` holds the
+    issues the body's ``Board after:`` lines name, which ``read_body`` reads.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
@@ -1012,6 +1226,8 @@ def tracker_card(
         ),
         "labels": [x for x in names if not BAND.match(x) and x not in WORKING],
     }
+    if sort_labels:
+        card["labels"] = sorted(card["labels"])
     later = sorted((after & open_issues) - {n})
     if later:
         card["after"] = later
@@ -1144,19 +1360,6 @@ def stale_after_minutes(longest_gap: int) -> int:
     return longest_gap + SCHEDULE_DELAY_ALLOWANCE
 
 
-def owner_only(owner_body_lines: str) -> bool:
-    """Whether a run reads body lines only from the owner, from its input.
-
-    The input is a string, as every input of the reusable workflow is, and only
-    empty or ``true`` is read. Any other value stops the run before GitHub is
-    read, so a misspelt one cannot leave strangers' lines counting with
-    nothing said.
-    """
-    if owner_body_lines not in {"", "true"}:
-        raise BoardError(f"owner-body-lines is {owner_body_lines!r}, and takes only empty or true")
-    return owner_body_lines == "true"
-
-
 def build(
     gql: Gql,
     repo: str,
@@ -1167,6 +1370,11 @@ def build(
     subtitle: str = "",
     note: str = "",
     default_branch_head: str = "",
+    label_colors: str = "",
+    sort_labels: str = "",
+    *,
+    review_heading: str = "",
+    settled_rollup: str = "",
     owner_body_lines: str = "",
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
@@ -1184,15 +1392,29 @@ def build(
     ``default_branch_head`` set to ``true`` reads the default branch's head
     for the footer, at the price of one more request. Each lands in ``state``
     only when it is set, so a caller setting none gets the board it got
-    before. ``owner_body_lines`` set to ``true`` reads ``Board order:`` and
+    before.
+
+    ``default_branch_head``, ``label_colors``, ``sort_labels``,
+    ``settled_rollup`` and ``owner_body_lines`` are each empty or ``true``,
+    read by ``switch``.
+    ``label_colors`` writes ``state.labelColors``, each card label's colour as
+    GitHub stores it, and ``sort_labels`` sorts each card's labels by name.
+    ``review_heading`` names the heading that closes a review, and
+    ``settled_rollup`` set to ``true`` settles the rollup, as ``pr_items``
+    says. An empty one keeps the rule from before either existed.
+    ``owner_body_lines`` set to ``true`` reads ``Board order:`` and
     ``Board after:`` lines only from an issue the owner opened. The data
-    label, the note, ``default_branch_head`` and ``owner_body_lines`` are
+    label, the note, the five on-or-off inputs and the review heading are
     checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
     pieces = note_segments(note)
-    head = wants_head(default_branch_head)
-    owner_lines = owner_only(owner_body_lines)
+    head = switch("default-branch-head", default_branch_head)
+    colours_wanted = switch("label-colors", label_colors)
+    by_name = switch("sort-labels", sort_labels)
+    settle = switch("settled-rollup", settled_rollup)
+    fields = pr_fields(review_rule(review_heading) is not None, settle)
+    owner_lines = switch("owner-body-lines", owner_body_lines)
     owner, name = repo.split("/", 1)
     main = head_commit(gql, owner, name) if head else None
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
@@ -1206,18 +1428,33 @@ def build(
     notes = Notes()
     unfinished: list[tuple[int, str, list[str]]] = []
     data_carried = 0
+    colours: dict[str, str] = {}
     referenced: set[int] = set()
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
-        names = [lb["name"] for lb in _all_nodes(gql, issue["id"], "labels", issue["labels"])]
+        nodes = _all_nodes(gql, issue["id"], "labels", issue["labels"])
+        names = [lb["name"] for lb in nodes]
         body = issue.get("body") or ""
         by_owner = issue.get("authorAssociation") == "OWNER"
         orders, after = read_body(n, body, by_owner, notes=notes, repo=repo, owner_only=owner_lines)
         card = tracker_card(
-            gql, issue, names, open_issues, repo, conflicts, kinds_read, after=after
+            gql,
+            issue,
+            names,
+            open_issues,
+            repo,
+            conflicts,
+            kinds_read,
+            sort_labels=by_name,
+            after=after,
         )
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
+        if colours_wanted:
+            for lb in nodes:
+                colour = str(lb.get("color") or "").lower()
+                if lb["name"] in card["labels"] and HEX_COLOUR.fullmatch(colour):
+                    colours[lb["name"]] = colour
 
         held = [WORKING[x] for x in names if x in WORKING]
         if held:
@@ -1241,16 +1478,25 @@ def build(
 
         referenced |= _referenced_prs(gql, issue, repo)
 
-    open_prs = _top_pages(gql, OPEN_PRS_QUERY, owner, name, "pullRequests")
+    open_prs = _top_pages(gql, open_prs_query(fields), owner, name, "pullRequests")
     seen = {p["number"] for p in open_prs}
-    others = _prs_by_number(gql, owner, name, sorted(referenced - seen))
+    others = _prs_by_number(gql, owner, name, sorted(referenced - seen), fields)
 
     unknown: set[str] = set()
     prs = []
     left_out = []
     busy = frozenset(w["n"] for w in working)
     for pr in open_prs + others:
-        items = pr_items(gql, pr, open_issues, repo, unknown, busy)
+        items = pr_items(
+            gql,
+            pr,
+            open_issues,
+            repo,
+            unknown,
+            busy,
+            review_heading=review_heading,
+            settled_rollup=settled_rollup,
+        )
         if not items and pr["state"] == "OPEN":
             left_out.append(pr["number"])
         prs += items
@@ -1295,6 +1541,10 @@ def build(
         "next": {"schema": SCHEMA, "items": ranked},
         "tracker": {"schema": SCHEMA, "items": tracker},
     }
+    # Written only when the caller asks, so a board without the input is the
+    # same document it was before the input existed.
+    if colours_wanted:
+        board["state"]["labelColors"] = dict(sorted(colours.items()))
     report = {
         "open_issues": len(issues),
         "open_prs": len(open_prs),
@@ -1309,6 +1559,8 @@ def build(
         "no_verdict": sorted(no_verdict),
         "data_label": data_label,
         "data_carried": data_carried,
+        "review_heading": review_heading,
+        "reviewed_items": sum(p["reviewed"] for p in prs),
     }
     return board, report
 
@@ -1348,6 +1600,10 @@ def cmd_build(args: argparse.Namespace) -> None:
         subtitle=args.subtitle,
         note=args.note,
         default_branch_head=args.default_branch_head,
+        label_colors=args.label_colors,
+        sort_labels=args.sort_labels,
+        review_heading=args.review_heading,
+        settled_rollup=args.settled_rollup,
         owner_body_lines=args.owner_body_lines,
     )
     try:
@@ -1395,6 +1651,16 @@ def cmd_build(args: argparse.Namespace) -> None:
             + (
                 f"`{report['data_label']}` on {report['data_carried']} open issues"
                 if report["data_label"]
+                else "none named"
+            )
+            + " |",
+            # A misspelt heading marks nothing reviewed and fails no read, so
+            # the count is what shows it, as the data label's does.
+            "| Review heading | "
+            + (
+                f"`## {report['review_heading']}` on {report['reviewed_items']} of "
+                f"{report['pr_items']} pull request items"
+                if report["review_heading"]
                 else "none named"
             )
             + " |",
@@ -1491,6 +1757,22 @@ def main(argv: list[str] | None = None) -> int:
         "--default-branch-head",
         default="",
         help="true to name the default branch's head in the footer, nothing if empty",
+    )
+    b.add_argument(
+        "--label-colors", default="", help="true to colour label chips from GitHub, empty not to"
+    )
+    b.add_argument(
+        "--sort-labels", default="", help="true to sort each card's labels by name, empty not to"
+    )
+    b.add_argument(
+        "--review-heading",
+        default="",
+        help="the heading, without its ##, that closes a review since the head commit",
+    )
+    b.add_argument(
+        "--settled-rollup",
+        default="",
+        help="true to leave the board's own checks out and read skipped as settled",
     )
     b.add_argument(
         "--owner-body-lines",

@@ -401,6 +401,133 @@ def test_a_data_card_draws_in_a_fourth_column(tmp_path: Path) -> None:
     )
 
 
+def _chips(tmp_path: Path, labels: list[str], colours: object) -> str:
+    """The raw HTML of every card a board draws, with one card's labels and the state's map.
+
+    Fixture issue 90501 carries ``labels``. ``colours`` is written as
+    ``state.labelColors``, as the generator writes it under the reusable
+    workflow's ``label-colors`` input.
+    """
+    docs = _with_fields(fixture_docs(), 90501, labels=labels)
+    docs["state"]["labelColors"] = colours
+    ids = draw(tmp_path, docs, page=_show_all_page(tmp_path))
+    return ids["flow"]["html"] + ids["board"]["html"]
+
+
+def test_a_label_with_githubs_colour_draws_a_filled_chip(tmp_path: Path) -> None:
+    """Protects the chip a caller setting ``label-colors`` gets.
+
+    GitHub's colour is a chip background, so the chip is filled with it and
+    lettered in black or white, whichever has the higher contrast. The two
+    meet at a relative luminance of 0.179, so ``757575``, at 0.178, letters in
+    white and ``767676``, at 0.181, in black. ``006cff``, at 0.1795, letters in
+    black, so the threshold is 0.179 rather than 0.18. ``0075dc``, at 0.1789,
+    letters in white only because a channel at or below 0.04045 is scaled
+    linearly, as WCAG's formula says, rather than raised to the power 2.4.
+    Three more sit within a millionth of the threshold, so any change to the
+    formula's constants moves one across it. ``488409``, at 0.1789997, and
+    ``018901``, at 0.1789996, letter in white. Each has a channel near the
+    0.04045 cut-off and its 12.92 divisor. ``0a874b``, at 0.1790048, letters in
+    black and moves with red's weight. Pure red, green and blue tell each
+    channel's weight apart. Each colour is drawn exactly as the map holds it,
+    after a ``#``.
+    """
+    colours = {
+        "enhancement": "a2eeef",
+        "bug": "b60205",
+        "grey-dark": "757575",
+        "grey-light": "767676",
+        "just-above": "006cff",
+        "low-channel": "0075dc",
+        "red": "ff0000",
+        "green": "00ff00",
+        "blue": "0000ff",
+        "near-cut-off": "488409",
+        "near-divisor": "018901",
+        "near-red-weight": "0a874b",
+    }
+    drawn = _chips(tmp_path, list(colours), colours)
+    ink = {
+        "enhancement": "#000",
+        "bug": "#fff",
+        "grey-dark": "#fff",
+        "grey-light": "#000",
+        "just-above": "#000",
+        "low-channel": "#fff",
+        "red": "#000",
+        "green": "#000",
+        "blue": "#fff",
+        "near-cut-off": "#fff",
+        "near-divisor": "#fff",
+        "near-red-weight": "#000",
+    }
+    for label, hex_ in colours.items():
+        chip = f'<b style="background:#{hex_};border-color:#{hex_};color:{ink[label]}">{label}</b>'
+        assert chip in drawn
+
+
+@pytest.mark.parametrize(
+    ("label", "colours", "before"),
+    [
+        ("test", {"test": "000;background:url(x)"}, "#5319e7"),
+        ("test", {"test": "5319E7"}, "#5319e7"),
+        ("test", {"test": "fff"}, "#5319e7"),
+        ("test", {"test": 5319}, "#5319e7"),
+        ("test", {"test": 123456}, "#5319e7"),
+        ("test", {"test": "a2eeef;background:url(x)"}, "#5319e7"),
+        ("test", {"test": "url(x);a2eeef"}, "#5319e7"),
+        ("test", {"other": "a2eeef"}, "#5319e7"),
+        ("test", None, "#5319e7"),
+        ("0", ["a2eeef"], "var(--faint)"),
+        ("0", "a2eeef", "var(--faint)"),
+    ],
+    ids=[
+        "style",
+        "upper-case",
+        "three-digits",
+        "number",
+        "six-digit-number",
+        "colour-then-style",
+        "style-then-colour",
+        "no-entry",
+        "null",
+        "list",
+        "string",
+    ],
+)
+def test_a_colour_the_page_cannot_use_draws_the_chip_it_drew_before(
+    tmp_path: Path, label: str, colours: object, before: str
+) -> None:
+    """Protects the style attribute from a value the document should not hold.
+
+    The page writes the colour into a style attribute, so it checks each value
+    itself rather than trusting the generator. A value that is not six
+    lower-case hex digits, a label the map has no entry for, or a map that is
+    null or not an object draws the ``LABEL_HUE`` chip, and the board is not
+    refused. Six good digits with style text before or after them fail too,
+    because the pattern is anchored at both ends, and so does a number,
+    because only a string is a colour. A list or a string has an own key
+    ``0``, so the label ``0`` tells a map that is not an object from one that
+    is.
+    """
+    drawn = _chips(tmp_path, [label], colours)
+    assert f'<b style="color:{before}">{label}</b>' in drawn
+    assert '<b style="background:' not in drawn
+
+
+@pytest.mark.parametrize("colours", [{"a<b&c": "a2eeef"}, {}], ids=["filled", "fallback"])
+def test_a_chip_escapes_its_label(tmp_path: Path, colours: dict) -> None:
+    """Protects the page from a label name written as markup.
+
+    Anyone with triage access names a label, and the page writes the name
+    into its HTML. Both kinds of chip, filled with GitHub's colour or drawn
+    from ``LABEL_HUE``, escape it.
+    """
+    drawn = _chips(tmp_path, ["a<b&c"], colours)
+    assert "a&lt;b&amp;c</b>" in drawn
+    assert "a<b&c" not in drawn
+
+
 @pytest.mark.parametrize("where", ["hidden", "in flight"])
 def test_the_fourth_column_follows_the_tracker_rather_than_the_view(
     tmp_path: Path, where: str
@@ -1741,6 +1868,34 @@ def test_the_owner_sentence_names_what_the_card_waits_on(
         assert "waiting on nothing else" not in flownote
 
 
+@pytest.mark.parametrize(
+    ("rollup", "yours"),
+    [
+        ([["deploy", "skipped"], ["test", "success"]], True),
+        ([["deploy", "skipped"]], False),
+        ([["deploy", "neutral"], ["test", "success"]], False),
+    ],
+    ids=["skipped-beside-a-pass", "only-skipped", "neutral-beside-a-pass"],
+)
+def test_a_skipped_check_beside_a_pass_hands_the_branch_over(
+    tmp_path: Path, rollup: list[list[str]], yours: bool
+) -> None:
+    """Protects a reviewed branch from being held back by a job that never runs on it.
+
+    A job that runs only on the default branch is skipped on every pull
+    request. Read as neither way, it kept every reviewed, green branch out of
+    the owner's column. Read as settled, it hands the branch over once
+    another check passed, and a branch where every check stood aside stays,
+    because nothing built it.
+    """
+    docs = _owner_card()
+    docs["prs"]["items"][0]["rollup"] = rollup
+    ids = draw(tmp_path, docs)
+    assert ("#90501 is yours" in text(ids, "flownote")) is yours
+    if not yours:
+        assert "its checks have not settled green" in text(ids, "flownote")
+
+
 def test_the_owner_sentence_joins_a_free_card_and_a_waiting_one(tmp_path: Path) -> None:
     """Protects the join when the owner's column holds both kinds of card.
 
@@ -2461,7 +2616,12 @@ def test_a_first_board_the_page_refuses_draws_nothing(
         (["success", "success"], "checks green"),
         (["success", "neutral"], "1 check reported neither way"),
         (["success", "SUCCESS"], "1 check reported neither way"),
-        (["success", "skipped"], "1 check reported neither way"),
+        (["success", "skipped"], "checks green"),
+        (["skipped"], "1 check skipped and none ran"),
+        (["skipped", "skipped"], "2 checks skipped and none ran"),
+        (["skipped", "neutral"], "1 check reported neither way"),
+        (["skipped", "running"], "1 check still running"),
+        (["skipped", "failure"], "1 check failing"),
         (["FAILURE", "success"], "1 check reported neither way"),
         (["failure", "running"], "1 check failing, 1 check still running"),
     ],
@@ -2471,8 +2631,14 @@ def test_only_success_reads_as_green(tmp_path: Path, words: list[str], says: str
 
     The page used to count three words and call every other one green, so a
     state passed through in GitHub's own spelling, such as ``FAILURE``, read as
-    a pass. The generator maps every state into the page's four words, and a
+    a pass. The generator maps every state into the page's five words, and a
     word the page does not know now reads as reported neither way.
+
+    ``skipped`` is settled, so a skipped job beside a passing one reads green.
+    A rollup of nothing but skipped jobs is not green, because nothing built
+    the branch, as an empty rollup is not. The generator writes ``skipped``
+    only for a caller that asks for a settled rollup, so no other caller's
+    page changes.
     """
     docs = fixture_docs()
     docs["prs"]["items"][0]["rollup"] = [[f"check {i}", w] for i, w in enumerate(words)]

@@ -27,6 +27,10 @@ name: Build board
 # 3. `default-branch-head`, set to `true`, names the commit the default branch
 #    stands at in the footer and the "Live updates stopped" banner.
 #
+# Two on-or-off inputs, `label-colors` and `sort-labels`, added by the pull
+# request that closes l3a0/repo-template#41, fill each label chip with the
+# colour GitHub stores for the label and sort each card's labels by name.
+#
 # Every input is a string that defaults to empty, and an empty one leaves the
 # board as it was.
 #
@@ -98,6 +102,19 @@ on:
           the run.
         type: string
         default: ""
+      label-colors:
+        description: >-
+          "true" fills each label chip with the colour GitHub stores for that
+          label. Empty draws the page's own colours, where a label the page
+          does not know draws faint.
+        type: string
+        default: ""
+      sort-labels:
+        description: >-
+          "true" sorts each card's labels by name. Empty keeps the order
+          GitHub returns, which is the order the labels were added.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -145,6 +162,8 @@ jobs:
           SUBTITLE: ${{ inputs.subtitle }}
           NOTE: ${{ inputs.note }}
           DEFAULT_BRANCH_HEAD: ${{ inputs.default-branch-head }}
+          LABEL_COLORS: ${{ inputs.label-colors }}
+          SORT_LABELS: ${{ inputs.sort-labels }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
@@ -154,6 +173,8 @@ jobs:
           --subtitle="$SUBTITLE"
           --note="$NOTE"
           --default-branch-head="$DEFAULT_BRANCH_HEAD"
+          --label-colors="$LABEL_COLORS"
+          --sort-labels="$SORT_LABELS"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

@@ -198,6 +198,16 @@
   .more button { font: inherit; font-family: var(--mono); font-size: 0.6875rem;
                  color: var(--accent); background: none; border: 1px solid var(--accent);
                  border-radius: 3px; padding: 2px 8px; cursor: pointer; }
+  /* The milestone selector under the strip. It filters both card sections at
+     once, so it sits above them rather than in one. */
+  .msbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+           margin: 4px 0 12px; font-size: 0.8125rem; color: var(--muted); }
+  .msbar label { font-family: var(--mono); font-size: 0.75rem; font-weight: 600;
+                 text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink); }
+  .msbar select { font: inherit; font-family: var(--mono); font-size: 0.75rem; color: var(--ink);
+                  background: var(--panel); border: 1px solid var(--rule); border-radius: 4px;
+                  padding: 4px 8px; max-width: 100%; }
+  .msbar .cnt { font-family: var(--mono); font-size: 0.75rem; color: var(--faint); }
   .key { display: flex; flex-wrap: wrap; gap: 9px 16px; margin-top: 12px;
          font-size: 0.75rem; color: var(--muted); align-items: center; }
   .key span { display: inline-flex; align-items: center; gap: 6px; }
@@ -253,6 +263,8 @@
     <span class="sub" id="sub"></span>
   </div>
   <div class="strip" id="strip"></div>
+  <div class="msbar" id="msbar" hidden><label for="mssel">Milestone</label><select id="mssel"></select>
+    <span class="cnt" id="mscount"></span></div>
   <div class="caveat warn" id="source" hidden></div>
   <p class="repnote" id="repnote" hidden></p>
 
@@ -298,7 +310,9 @@ let ISS = "", PRU = "";
    cut or restated as the rules they record. The pull request that closes
    l3a0/repo-template#40 brought the column back for a board whose tracker
    holds a card of the kind `data`, which only a repository naming a data
-   label to the reusable workflow gets.
+   label to the reusable workflow gets. The pull request that closes
+   l3a0/repo-template#45 added the milestone selector, which only a board
+   whose state carries `milestoneDefault` draws.
 
    The board's data is one file, board.json, beside this page on GitHub Pages.
    The reusable workflow .github/workflows/build-board.yml in
@@ -313,8 +327,8 @@ let ISS = "", PRU = "";
    { schema: 1, repo, title, updatedAt, issues: { open }, source,
    longestGapMinutes, staleAfterMinutes }, plus subtitle, note and main when
    the caller sets the reusable workflow's subtitle, note and
-   default-branch-head inputs, and labelColors when it sets the
-   `label-colors` input.
+   default-branch-head inputs, labelColors when it sets the `label-colors`
+   input, and milestoneDefault when the repository names a milestone default.
 
    FALLBACK carries no board data. A copy of the six sections in the page goes
    stale silently, because nothing refreshes it once the page is checked in.
@@ -706,9 +720,14 @@ function stamped() {
      written, that a session ends without telling anyone, and a comment renders
      nowhere. This is the surface that says what the page cannot know, so the
      sentence belongs here. */
-  const open = PRS.filter(p => p.state === "open");
+  /* Under one milestone the In flight section draws that milestone alone, so
+     the warning reads only its pull requests and sessions. */
+  const byN = new Map(TRACKER.map(c => [c.n, c]));
+  const shown = n => inMs(byN.get(n));
+  const open = PRS.filter(p => p.state === "open" && shown(p.issue));
+  const working = WORKING.filter(w => shown(w.n));
   const decay = [];
-  if (WORKING.length) decay.push("a session that has ended since then still reads as running");
+  if (working.length) decay.push("a session that has ended since then still reads as running");
   if (open.length) decay.push("a check that has gone green or red since then still reads here as it read then");
   if (open.some(p => !p.reviewed)) decay.push("a review posted since then still reads as owed");
   /* The board is no longer measured by hand, so the footer says how it is
@@ -843,7 +862,74 @@ function readShowAll() {
   SHOW_ALL_READ = true;
   try { SHOW_ALL = localStorage.getItem(showAllKey()) === "1"; } catch (e) { SHOW_ALL = false; }
 }
-let SHOWN = 0, HIDDEN = 0;
+let SHOWN = 0, HIDDEN = 0, SHOWN_RANKED = 0;
+
+/* The milestone selector. A repository that works toward one milestone at a
+   time names a milestone default to the reusable workflow, and the generator
+   resolves it to a milestone and writes it as `state.milestoneDefault`, null
+   when nothing matches. The selector is drawn exactly when that key is
+   present, so a board that names none draws what it drew before.
+
+   MS_PREF is what the reader chose, kept per browser under a key naming the
+   repository, as the Show all choice is. MS is what the page draws. It falls
+   back to the default whenever the choice names a milestone no open card
+   carries, without forgetting the choice, so a stored milestone comes back if
+   a card returns to it. The All option's value carries a comma, which no
+   milestone's short name can, so a milestone titled "All" cannot collide
+   with it. The empty name is a card with no milestone.
+
+   The filter decides only what is drawn. Depth, blockers, the chain walk,
+   the In flight split, the strip and the footer still read the whole board,
+   so a card keeps its column and its "waits on" line when its blocker sits
+   in another milestone. */
+const MS_ALL = ",all";
+let MS = MS_ALL, MS_PREF = null, MS_READ = false, MS_OPTS = "";
+const msKey = () => "board-ms:" + STATE.repo;
+function readMs() {
+  if (MS_READ) return;
+  MS_READ = true;
+  try { MS_PREF = localStorage.getItem(msKey()); } catch (e) { MS_PREF = null; }
+}
+const inMs = c => MS === MS_ALL || (!!c && c.ms === MS);
+const msName = ms => ms === "" ? "no milestone" : ms;
+/* The words a sentence adds when it is about the chosen milestone only. */
+const msWhere = () => MS === MS_ALL ? "" : MS === "" ? " with no milestone" : ` in ${esc(MS)}`;
+
+/* Resolves MS and draws the selector. `render()` runs it before the cards,
+   because every section reads MS. The options are rebuilt only when the set
+   of milestones changes, so a live redraw does not close a select the reader
+   has open. */
+function msbar() {
+  const sel = document.getElementById("mssel");
+  const cnt = document.getElementById("mscount");
+  if (!("milestoneDefault" in STATE)) {
+    MS = MS_ALL; MS_OPTS = "";
+    if (sel) { sel.innerHTML = ""; sel.onchange = null; }
+    if (cnt) cnt.innerHTML = "";
+    return;
+  }
+  readMs();
+  const counts = new Map();
+  TRACKER.forEach(c => counts.set(c.ms, (counts.get(c.ms) || 0) + 1));
+  const names = [...counts.keys()].sort((a, b) =>
+    (a === "") - (b === "") || String(a).localeCompare(String(b)));
+  const def = STATE.milestoneDefault;
+  MS = MS_PREF === MS_ALL || (isStr(MS_PREF) && counts.has(MS_PREF)) ? MS_PREF
+    : isStr(def) && counts.has(def) ? def : MS_ALL;
+  const shown = MS === MS_ALL ? TRACKER.length : counts.get(MS);
+  if (sel) {
+    const opts = [[MS_ALL, "All", TRACKER.length], ...names.map(n => [n, msName(n), counts.get(n)])]
+      .map(([v, w, k]) => `<option value="${esc(v)}">${esc(w)} (${k})</option>`).join("");
+    if (opts !== MS_OPTS) { sel.innerHTML = opts; MS_OPTS = opts; }
+    sel.value = MS;
+    sel.onchange = () => {
+      MS_PREF = sel.value;
+      try { localStorage.setItem(msKey(), MS_PREF); } catch (err) { /* per-browser only */ }
+      render();
+    };
+  }
+  if (cnt) cnt.innerHTML = `${shown} of ${TRACKER.length} open`;
+}
 
 /* The button sits above the board, so it shows before the reader scrolls past
    every card. */
@@ -851,12 +937,18 @@ function more() {
   const el = document.getElementById("more");
   if (!el) return;
   if (!HIDDEN && !SHOW_ALL) { el.innerHTML = ""; return; }
+  /* Both counts are within the chosen milestone, so the line says so. A parent
+     shown beside the ranked cards under one milestone is not one of them, so
+     it is counted apart. */
+  const where = msWhere();
+  const parents = SHOWN - SHOWN_RANKED;
   el.innerHTML = SHOW_ALL
-    ? `<span>Showing all ${SHOWN} open issues not in flight.</span>` +
+    ? `<span>Showing all ${SHOWN} open issues${where} not in flight.</span>` +
       `<button type="button" data-toggle>Show only the ranked cards</button>`
-    : `<span>Showing the ${SHOWN} ranked ${SHOWN === 1 ? "card" : "cards"}. ` +
-      `${HIDDEN} other open ${HIDDEN === 1 ? "issue is" : "issues are"} not in the ` +
-      `priority order.</span>` +
+    : `<span>Showing the ${SHOWN_RANKED} ranked ${SHOWN_RANKED === 1 ? "card" : "cards"}` +
+      `${parents ? ` and ${plu(parents, "parent")}` : ""}${where}. ` +
+      `${HIDDEN} other open ${HIDDEN === 1 ? "issue" : "issues"}${where} ` +
+      `${HIDDEN === 1 ? "is" : "are"} not in the priority order.</span>` +
       `<button type="button" data-toggle>Show all ${SHOWN + HIDDEN}</button>`;
   el.onclick = e => {
     if (!e.target.matches("[data-toggle]")) return;
@@ -1029,10 +1121,17 @@ function buildOrder() {
      leaves out a deferred card, so a deferral written on an issue keeps it off
      the default view too. The column counts and the free-card sentence count
      what was drawn. The depth and freeing sentences count every open issue, and
-     each says so when that includes cards this view hides. */
-  const open = TRACKER.filter(c => !flight.has(c.n));
-  const rest = open.filter(c => SHOW_ALL || rankMark(c));
+     each says so when that includes cards this view hides.
+
+     And only the chosen milestone, so the build order, the line above it, the
+     depth sentence and the free list read that milestone alone. Under one
+     milestone a parent in it shows too. A parent builds nothing, so it is never
+     ranked, and the ranked-only view would otherwise always hide the card its
+     children name as what they serve. */
+  const open = TRACKER.filter(c => !flight.has(c.n) && inMs(c));
+  const rest = open.filter(c => SHOW_ALL || rankMark(c) || (MS !== MS_ALL && c.kind === "parent"));
   SHOWN = rest.length; HIDDEN = open.length - rest.length;
+  SHOWN_RANKED = rest.filter(c => rankMark(c)).length;
   /* Relaxed to a fixed point rather than resolved in one walk, so a card ends up
      right of everything it waits on however the list happens to be ordered. */
   const depth = new Map(TRACKER.map(c => [c.n, 0]));
@@ -1240,7 +1339,10 @@ function buildOrder() {
     return seen;
   };
   const needsMap = new Map(TRACKER.map(c => [c.n, c.needs.filter(b => by.has(b))]));
-  const drawn = new Set([...rest.map(c => c.n), ...flight]);
+  /* The In flight section draws only the chosen milestone too, so a card in
+     flight elsewhere is not drawn, and the chain bar must not count it as
+     drawn. */
+  const drawn = new Set([...rest.map(c => c.n), ...[...flight].filter(n => inMs(by.get(n)))]);
   const clear = () => {
     unpick();
     say(`<span class="hint">Pick a card to trace what it waits on and what waits on it.</span>`);
@@ -1293,8 +1395,16 @@ function buildOrder() {
     /* The short view leaves cards out, and a chain through them lights nothing,
        so the line says how many it could not show rather than leaving the reader
        to wonder where they went. */
-    const unseen = [...up, ...down].filter(v => !drawn.has(v)).length;
-    if (unseen) bits.push(`${unseen} of them hidden, so press Show all to see ${unseen === 1 ? "it" : "them"}`);
+    /* A card in another milestone is hidden by the milestone filter, which
+       Show all does not lift, so it is named with its milestone rather than
+       counted in the Show all clause. */
+    const unseen = [...up, ...down].filter(v => !drawn.has(v));
+    const away = unseen.filter(v => !inMs(by.get(v))).sort((a, b) => a - b);
+    const short = unseen.length - away.length;
+    if (short) bits.push(`${short} of them hidden, so press Show all to see ${short === 1 ? "it" : "them"}`);
+    if (away.length) bits.push(`${andlist(away.map(v => `#${v} (${esc(msName(by.get(v).ms))})`))} ` +
+      `${away.length === 1 ? "is" : "are"} in another milestone, so the milestone filter hides ` +
+      `${away.length === 1 ? "it" : "them"}`);
     say(`<span><b>#${n}</b> &middot; ${bits.join(" &middot; ")}</span>` +
       `<button type="button" data-clear>Clear</button>`);
   };
@@ -1419,7 +1529,7 @@ function buildOrder() {
     ...(drew(rest, c => workOn.has(c.n))
       ? [["busy", "a session is on it now, so nobody should start it again"]] : [])
   ]);
-  const flown = TRACKER.filter(c => flight.has(c.n));
+  const flown = TRACKER.filter(c => flight.has(c.n) && inMs(c));
   /* Both legends call the same `planMarker` the cards do, so neither can
      advertise a marker none of them drew. This one once did, offering "ready to
      hand to a builder" for a card whose pull request had retired that line,
@@ -1478,6 +1588,23 @@ function buildOrder() {
      second word for it. */
   const rankedBehind = ranked.filter(c => c.needs.some(b => by.has(b)))
     .sort((a, b) => rankPos.get(a.n) - rankPos.get(b.n));
+  /* Why no card below carries a position. Under one milestone whose ranked
+     cards all sit in another, nothing ranked is out of reach, so the sentence
+     says nothing in the milestone is ranked. Under one whose ranked cards are
+     all deferred or in flight beside a ranked card elsewhere, it says that of
+     the milestone alone. A deferred card is read through `rankMark`, so the
+     rule that drops its position lives once. Every other case keeps the
+     sentence the page drew before, All included, since `inMs` holds for every
+     card there and neither test can pass. */
+  const unkeyed = () => {
+    const anybody = "nothing left in the ranking is a card anybody can take";
+    const onTracker = NEXT_SORTED.map(it => by.get(it.issue)).filter(Boolean);
+    const here = onTracker.filter(inMs);
+    if (!here.length && onTracker.length) return `nothing${msWhere()} is ranked`;
+    if (here.length < onTracker.length && here.every(c => !rankMark(c) || flight.has(c.n)))
+      return `nothing${msWhere()} left in the ranking is a card anybody can take`;
+    return anybody;
+  };
   const keys = [];
   if (inRest(c => planOf.has(c.n))) keys.push("how finished the plan is");
   if (ranked.length) keys.push("priority");
@@ -1497,8 +1624,7 @@ function buildOrder() {
       : ``) +
     (inRest(c => c.kind === "deferred")
       ? `Anything deferred on purpose sorts last whatever the rest of that says. ` : ``) +
-    (ranked.length ? `` : `Priority is not a key today, because nothing left in the ranking ` +
-      `is a card anybody can take. `) +
+    (ranked.length ? `` : `Priority is not a key today, because ${unkeyed()}. `) +
     `Pick a card to trace its chain.`;
 
   /* Counted rather than written down, because both numbers move whenever a card
@@ -1555,7 +1681,9 @@ function buildOrder() {
      or hidden. A card waiting on
      two open issues makes each of them free at least one, so `several` is
      always empty at zero and the pointer loses nothing it should name. */
-  const reachable = TRACKER.map(c => ({ n: c.n, k: reach(c.n, feeds).size }));
+  /* Only the chosen milestone's cards are named, though each still counts
+     everything it frees across the whole tracker. */
+  const reachable = TRACKER.filter(inMs).map(c => ({ n: c.n, k: reach(c.n, feeds).size }));
   const most = Math.max(0, ...reachable.map(x => x.k));
   const unblocks = most ? reachable.filter(x => x.k === most) : [];
   /* The card that frees the most can be one the In flight section drew rather
@@ -1574,7 +1702,16 @@ function buildOrder() {
      the same pointer rather than getting a second sentence saying so. */
   const hiddenNamed = [...new Set([...unblocks, ...several].map(x => x.n))]
     .filter(n => !drawn.has(n)).sort((a, b) => a - b).map(n => ({ n }));
-  const freesHidden = unblocks.some(x => [...reach(x.n, feeds)].some(v => !drawn.has(v)));
+  /* A freed card can be hidden two ways. The short view hides one Show all
+     can reveal, and the milestone filter hides one it cannot, so the sentence
+     names them apart, as the chain bar does. */
+  const freedHidden = unblocks.flatMap(x => [...reach(x.n, feeds)].filter(v => !drawn.has(v)));
+  const freesHidden = freedHidden.some(v => inMs(by.get(v)));
+  const freesAway = freedHidden.some(v => !inMs(by.get(v)));
+  const counting = [
+    ...(freesHidden ? ["the hidden issues"] : []),
+    ...(freesAway ? ["cards in other milestones"] : [])
+  ];
   /* The plan markers and the pull requests moved to the In flight section, which
      is the single authority for both. This note keeps only what the depth graph
      itself knows, so the two cannot say different things about one card. */
@@ -1615,12 +1752,18 @@ function buildOrder() {
       : several.length
         ? `${andlist(several.map(x => "#" + x.n))} each wait on more than one open issue. `
         : ``) +
+    /* Under one milestone the sentence ranks that milestone's cards alone, so
+       it says so, and a card there can wait on a card elsewhere while nothing
+       waits on any card there. */
     (most
-      ? (freesHidden ? (depthHidden ? "Counting the hidden issues too, " : "Counting the hidden issues, ") : "") +
+      ? (counting.length
+          ? `Counting ${andlist(counting)}${freesHidden && depthHidden ? " too" : ""}, ` : "") +
         (unblocks.length === 1
-          ? `<b>#${unblocks[0].n} is the single card whose landing frees the most</b>, at ${plu(most, "other")}. `
-          : `<b>${andlist(unblocks.map(x => "#" + x.n))} each free ${plu(most, "other")}</b>, and nothing frees more. `)
-      : `No card here is waiting on another, so nothing is freed by landing anything. `) +
+          ? `<b>#${unblocks[0].n} is the single card${msWhere()} whose landing frees the most</b>, at ${plu(most, "other")}. `
+          : `<b>${andlist(unblocks.map(x => "#" + x.n))} each free ${plu(most, "other")}</b>, and nothing${msWhere()} frees more. `)
+      : MS === MS_ALL
+        ? `No card here is waiting on another, so nothing is freed by landing anything. `
+        : `Nothing waits on a card${msWhere()}, so landing one frees nothing. `) +
     (flownTop.length
       ? `${andlist(flownTop.map(x => "#" + x.n))} ${flownTop.length === 1 ? "is" : "are"} in the ` +
         `In flight section above rather than in a column here. `
@@ -1802,7 +1945,9 @@ function flightOf(ctx) {
 
 function inFlight(ctx) {
   const { card } = ctx;
-  const cols = flightCols(ctx);
+  /* Drawn for the chosen milestone only. `flightOf` still reads the whole
+     tracker, so a card in flight never falls into the board below. */
+  const cols = flightCols(ctx).map(col => col.filter(inMs));
 
   document.getElementById("flow").innerHTML = cols.map((col, k) => `
     <div class="col f-${FLOW[k].tone}">
@@ -1936,10 +2081,13 @@ function inFlight(ctx) {
   const hiddenNote = HIDDEN
     ? ` ${HIDDEN} of them ${HIDDEN === 1 ? "shows" : "show"} only with Show all.`
     : ``;
+  /* Under one milestone the board below draws that milestone alone, so both
+     forms name it rather than claiming cards the filter hides. */
+  const where = msWhere();
   document.getElementById("flownote").innerHTML = bits.length
-    ? bits.join(". ") + `. Every other card belongs to the board below, where the question is what is ` +
-      `behind what rather than whose move it is.` + hiddenNote
-    : `Nothing is in flight. Every card belongs to the board below.` + hiddenNote;
+    ? bits.join(". ") + `. Every other card${where} belongs to the board below, where the question ` +
+      `is what is behind what rather than whose move it is.` + hiddenNote
+    : `Nothing${where} is in flight. Every card${where} belongs to the board below.` + hiddenNote;
 }
 
 /* With no board data only the banner is drawn, and both card sections, the
@@ -1957,12 +2105,17 @@ function render() {
     const el = document.getElementById(id);
     if (el) el.hidden = NONE;
   });
+  /* The selector is drawn only over a board whose state names a milestone
+     default, and set on every draw, so a board that stops naming one drops
+     it. */
+  const bar = document.getElementById("msbar");
+  if (bar) bar.hidden = NONE || !("milestoneDefault" in STATE);
   if (NONE) {
     document.getElementById("strip").innerHTML = "";
     document.getElementById("sub").innerHTML = esc(SUBTITLE);
     source(); return;
   }
-  readShowAll(); strip(); source(); buildOrder(); more(); stamped();
+  readShowAll(); strip(); source(); msbar(); buildOrder(); more(); stamped();
 }
 adopt(FALLBACK);
 render();

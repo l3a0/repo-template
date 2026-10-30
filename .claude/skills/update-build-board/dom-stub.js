@@ -22,7 +22,11 @@
 // l3a0/repo-template#24. favicon.ico beside it came across unchanged too.
 // The pull request that closes l3a0/repo-template#40 made `classList` keep
 // its names, because the page sets the build order's four-column grid with a
-// class, and a class nothing records is a layout no test can see.
+// class, and a class nothing records is a layout no test can see. The pull
+// request that closes l3a0/repo-template#45 gave each element a `value` and an
+// `onchange`, so every element has the fields of the page's milestone
+// selector. They are only defaults: the page sets both on the selector before
+// anything reads them, and no test depends on them.
 var store = {};
 function mkClassList() {
   var names = [];
@@ -35,10 +39,10 @@ function mkClassList() {
       drop(n); if (on) names.push(n); return on; } };
 }
 function mkEl(id) {
-  return { id: id, innerHTML: "", textContent: "",
+  return { id: id, innerHTML: "", textContent: "", value: "",
     classList: mkClassList(),
     querySelectorAll: function(){ return []; },
-    onclick: null, onkeydown: null };
+    onclick: null, onkeydown: null, onchange: null };
 }
 var document = {
   getElementById: function(id){ if(!store[id]) store[id]=mkEl(id); return store[id]; },

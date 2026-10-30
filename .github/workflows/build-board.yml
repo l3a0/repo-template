@@ -36,6 +36,10 @@ name: Build board
 # the named heading after the head commit, and leave the board's own checks
 # out of a pull request's rollup.
 #
+# A `milestone-default` input, added by the pull request that closes
+# l3a0/repo-template#45, draws a milestone selector on the page and names the
+# milestone it opens on.
+#
 # An `owner-body-lines` input, added by the pull request that closes
 # l3a0/repo-template#48, reads order and after lines only from issues the
 # owner opened.
@@ -144,6 +148,14 @@ on:
           as GitHub lists it.
         type: string
         default: ""
+      milestone-default:
+        description: >-
+          The milestone the page opens on, where <n> stands for a number, such
+          as MVP <n> for the lowest-numbered open "MVP" milestone. Setting it
+          draws a milestone selector and cuts each milestone's title at its
+          first comma. Empty draws no selector and keeps whole titles.
+        type: string
+        default: ""
       owner-body-lines:
         description: >-
           "true" reads a "Board order:" or "Board after:" line only in the
@@ -206,6 +218,7 @@ jobs:
           SORT_LABELS: ${{ inputs.sort-labels }}
           REVIEW_HEADING: ${{ inputs.review-heading }}
           SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
+          MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
           OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
         run: >-
           python3 template/scripts/build_board.py build
@@ -220,6 +233,7 @@ jobs:
           --sort-labels="$SORT_LABELS"
           --review-heading="$REVIEW_HEADING"
           --settled-rollup="$SETTLED_ROLLUP"
+          --milestone-default="$MILESTONE_DEFAULT"
           --owner-body-lines="$OWNER_BODY_LINES"
           --out _site
 

@@ -113,8 +113,8 @@ on:
           true names the commit the default branch stands at in the footer
           and the "Live updates stopped" banner, for one more request a run. Empty names none. Any other value fails
           the run.
-          type: string
-          default: ""
+        type: string
+        default: ""
       label-colors:
         description: >-
           "true" fills each label chip with the colour GitHub stores for that

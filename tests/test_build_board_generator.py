@@ -5117,9 +5117,11 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
         "milestone-default",
         "owner-body-lines",
     ]
-    for block in declared.values():
-        assert "        type: string\n" in block
-        assert '        default: ""' in block
+    for name, block in declared.items():
+        # Anchored to the line's start, so a ``type`` indented into the folded
+        # description above it, which YAML reads as description text, fails.
+        assert re.search(r"^ {8}type: string$", block, re.M), name
+        assert re.search(r'^ {8}default: ""$', block, re.M), name
         assert "required" not in block
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme

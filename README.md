@@ -303,6 +303,24 @@ gives.
       owner-body-lines: "true"
 ```
 
+A repository that ranks its work by `Board order:` lines and keeps no
+`band:N` labels sets `ranking` to `order`. A card then ranks by its order
+line alone, and a card is a parent only while one of its sub-issues is open.
+An order on a parent is dropped, and so is a verdict on a parent or on a
+deferred card, and the job summary lists each drop. When nothing in view is
+ranked, the page draws every card and says why, rather than an empty build
+order. Since the order line alone ranks a card there, a stranger's issue
+could put itself first, so `order` also reads those lines only from issues
+the owner opened, whatever `owner-body-lines` says. The input takes `order`
+or nothing, and any other value fails the run. The pin has to be at or after
+the template commit that added the input, for the reason the icon gives.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      ranking: order
+```
+
 To take a later fix, move the SHA in the caller. The skills and the generator
 share the label names and line formats, so a skill newer or older than the
 pinned generator tells a session to set something the board does not read.

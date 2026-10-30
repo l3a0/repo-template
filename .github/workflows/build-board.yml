@@ -38,11 +38,11 @@ name: Build board
 #
 # A `milestone-default` input, added by the pull request that closes
 # l3a0/repo-template#45, draws a milestone selector on the page and names the
-# milestone it opens on.
-#
-# An `owner-body-lines` input, added by the pull request that closes
-# l3a0/repo-template#48, reads order and after lines only from issues the
-# owner opened.
+# milestone it opens on. An `owner-body-lines` input, added by the pull request
+# that closes l3a0/repo-template#48, reads order and after lines only from
+# issues the owner opened. A `ranking` input, added by the pull request that
+# closes l3a0/repo-template#46, ranks a card by its order line alone when set
+# to `order`.
 #
 # Every input is a string that defaults to empty, and an empty one leaves the
 # board as it was.
@@ -113,8 +113,8 @@ on:
           true names the commit the default branch stands at in the footer
           and the "Live updates stopped" banner, for one more request a run. Empty names none. Any other value fails
           the run.
-          type: string
-          default: ""
+        type: string
+        default: ""
       label-colors:
         description: >-
           "true" fills each label chip with the colour GitHub stores for that
@@ -160,8 +160,17 @@ on:
         description: >-
           "true" reads a "Board order:" or "Board after:" line only in the
           body of an issue the owner opened, and lists a stranger's as
-          refused in the job summary. Empty reads them from anyone's issue.
-          Any other value fails the run.
+          refused in the job summary. Empty reads them from anyone's issue,
+          unless ranking is "order". Any other value fails the run.
+        type: string
+        default: ""
+      ranking:
+        description: >-
+          "order" ranks a card by its "Board order:" line alone rather than by
+          a band:N label, counts a card as a parent only while a sub-issue of
+          it is open, reads order and after lines only from the owner's
+          issues, and draws every card when none is ranked. Empty keeps the
+          band rule. Any other value fails the run.
         type: string
         default: ""
 
@@ -220,6 +229,7 @@ jobs:
           SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
           MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
           OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
+          RANKING: ${{ inputs.ranking }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
@@ -235,6 +245,7 @@ jobs:
           --settled-rollup="$SETTLED_ROLLUP"
           --milestone-default="$MILESTONE_DEFAULT"
           --owner-body-lines="$OWNER_BODY_LINES"
+          --ranking="$RANKING"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

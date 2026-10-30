@@ -82,23 +82,24 @@ HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"
 
 # The update-build-board skill shares formats with the generator and the
 # workflows here, and it lives in l3a0/claude-plugins. The tests read it at
-# this commit, the head of l3a0/claude-plugins pull request 38, the 0.6.1
-# release, which merges together with the pull request that set this pin.
+# this commit, the head of the l3a0/claude-plugins pull request that releases
+# 0.6.2, which merges together with the pull request that set this pin.
 # GitHub keeps a pull request's head fetchable after it merges, and a later
 # pull request moves the pin to the release's merge commit. A change here to a
 # marker, a label or a string these tests compare with the skill fails them
 # until the plugin releases a skill that matches and this pin moves to it. Any
 # other format change rests on the plugin's own rule that a generator's format
 # change ships with a plugin release in the same step.
-PLUGIN_COMMIT = "b86117075f3cc27cda1af9138e86d3dd3c290270"
+PLUGIN_COMMIT = "7083c21dd20a73585a858a3da1033d574cfbfb93"
 PLUGIN_SKILLS = f"https://raw.githubusercontent.com/l3a0/claude-plugins/{PLUGIN_COMMIT}/skills/"
 
 # The skill lists the strings these tests pin, so that a release keeps them.
 # That list alone would satisfy most of the assertions, so the tests read the
-# skill with it removed.
-PINNED_LIST = re.compile(
-    r"\nOne repository has tests that read this skill's text.*?\n(?=## )", re.S
-)
+# skill with it removed. The removal runs to the next heading, so the text it
+# removes has to be the opener and the numbered items alone, or a sentence
+# added after the list would go unread.
+PINNED_OPENER = "One repository has tests that read this skill's text."
+PINNED_LIST = re.compile(rf"\n{re.escape(PINNED_OPENER)}.*?\n(?=## )", re.S)
 
 
 @functools.cache
@@ -133,11 +134,28 @@ def _plugin(name: str, skill: str = "update-build-board") -> str:
     pytest.skip(f"cannot fetch the plugin's {name}: {error}")
 
 
+def _pinned_list_problems(listed: str) -> list[str]:
+    """Each line of the removed list that is neither its opener nor a numbered item."""
+    opener, _, items = listed.strip("\n").partition("\n\n")
+    problems = []
+    if not opener.startswith(PINNED_OPENER) or "\n" in opener:
+        problems.append(f"the opener is not one paragraph: {opener[:80]!r}")
+    lines = items.split("\n")
+    if not lines or not re.match(r"1\. ", lines[0]):
+        problems.append("the list does not start at item 1")
+    for line in lines:
+        if not re.match(r"\d+\. |   \S", line):
+            problems.append(f"text in the list that is no numbered item: {line[:80]!r}")
+    return problems
+
+
 def _skill() -> str:
     """The plugin's ``SKILL.md``, without its list of the strings pinned here."""
-    skill, removed = PINNED_LIST.subn("\n", _plugin("SKILL.md"))
-    assert removed == 1, "the skill's list of pinned strings moved, so it would match itself"
-    return skill
+    text = _plugin("SKILL.md")
+    found = PINNED_LIST.findall(text)
+    assert len(found) == 1, "the skill's list of pinned strings moved, so it would match itself"
+    assert _pinned_list_problems(found[0]) == [], "the removal would hide text after the list"
+    return PINNED_LIST.sub("\n", text)
 
 
 _spec = importlib.util.spec_from_file_location("build_board", SCRIPT)
@@ -6313,7 +6331,21 @@ PAGE_WITH = (
     '`with: label-colors: "true"`',
     '`with: sort-labels: "true"`',
 )
-WITH_FORM = re.compile(r"`with: ([\w-]+):")
+WITH_FORM = re.compile(r"`with:\s+([\w-]+):")
+
+
+def _fenced_with(text: str) -> set[str]:
+    """Each key under a ``with:`` line inside a fenced block of ``text``."""
+    names = set()
+    for fence in re.findall(r"^ *```[^\n]*\n(.*?)^ *```", text, re.S | re.M):
+        for _indent, block in re.findall(r"^( *)with:\n((?:\1 +\S.*\n?)+)", fence, re.M):
+            inner = min(len(x) - len(x.lstrip()) for x in block.splitlines())
+            names |= {
+                line.strip().split(":", 1)[0]
+                for line in block.splitlines()
+                if len(line) - len(line.lstrip()) == inner and ":" in line
+            }
+    return names
 
 
 def test_the_plugin_names_every_input_in_its_with_form() -> None:
@@ -6322,8 +6354,9 @@ def test_the_plugin_names_every_input_in_its_with_form() -> None:
     Each form is read where the plugin writes it, and between them they name
     every input the workflow declares, so a new input fails here until the
     plugin says how to pass it. Every other ``with:`` form in either file has
-    to name a declared input too, so a misspelt one fails. ``page.md`` also
-    names the key the milestone selector stores its choice under.
+    to name a declared input too, so a misspelt one fails, and so does every
+    key under a ``with:`` line inside a fence. ``page.md`` also names the key
+    the milestone selector stores its choice under.
     """
     skill = _skill()
     page = _plugin("page.md")
@@ -6335,6 +6368,7 @@ def test_the_plugin_names_every_input_in_its_with_form() -> None:
     named = {WITH_FORM.match(t).group(1) for t in SKILL_WITH + PAGE_WITH}
     assert named == set(_inputs())
     written = set(WITH_FORM.findall(skill)) | set(WITH_FORM.findall(page))
+    written |= _fenced_with(skill) | _fenced_with(page)
     assert written <= set(_inputs()), written - set(_inputs())
 
 
@@ -6344,6 +6378,29 @@ def test_the_skill_table_lists_every_input_the_workflow_declares() -> None:
     rows = [line for line in section.splitlines() if line.startswith("| `")]
     listed = [name.strip("` ") for row in rows for name in row.split(" | ")[0][2:].split(", ")]
     assert sorted(listed) == sorted(_inputs())
+
+
+MINIMUM_PINS = "| Input | First declared at |\n| --- | --- |\n"
+PIN_TO_USE = re.compile(r"`([0-9a-f]{7,40})` is the pin to use")
+
+
+def test_the_skill_names_the_first_commit_for_every_input() -> None:
+    """Protects a caller from pinning a commit that lacks an input it passes.
+
+    The table of first declarations names each input the workflow declares
+    once, in code spans, so a new input fails here until the table carries
+    it, and a deleted row fails too. The commit the skill calls the pin to use
+    is never ``4c546fc``, at which GitHub refuses the reusable workflow.
+    """
+    skill = _skill()
+    assert skill.count(MINIMUM_PINS) == 1, "the skill carries no single table of first pins"
+    table = skill.split(MINIMUM_PINS, 1)[1].split("\n\n", 1)[0]
+    rows = [line for line in table.splitlines() if line.startswith("| ")]
+    named = [n for row in rows for n in re.findall(r"`([\w-]+)`", row.split(" | ")[0])]
+    assert sorted(named) == sorted(_inputs())
+    pins = PIN_TO_USE.findall(skill)
+    assert len(pins) == 1, pins
+    assert not "4c546fc".startswith(pins[0][:7]), pins[0]
 
 
 def test_the_skill_states_the_digit_limit_once() -> None:
@@ -6362,15 +6419,19 @@ def _tool(name: str) -> str:
 
 
 # A caller that passes every input the workflow declares, each as YAML text
-# and the value the generator should receive. A bare ``true`` is a YAML
-# boolean, which the build command has to pass as the string ``true``. A
-# literal block keeps its newline, and an input written with no value is
-# empty.
+# and the value the generator should receive. A bare ``true`` or ``false`` is
+# a YAML boolean, which the build command has to pass as the string ``true``
+# or ``false``. A literal block keeps its newline, a folded one, which
+# l3a0/marketlake's caller writes, joins its lines with spaces, and an input
+# written with no value is empty.
 CALLER_WITH = {
     "title": ("", ""),
     "icon": (".github/board/favicon.ico", None),
     "data-label": (DATA_LABEL, DATA_LABEL),
-    "subtitle": ("the order of work", "the order of work"),
+    "subtitle": (
+        ">-\n        the order of work\n        on the lake",
+        "the order of work on the lake",
+    ),
     "note": (
         "|\n        Read [the design](https://example.com/design).\n        Then the plan.",
         "Read [the design](https://example.com/design).\nThen the plan.\n",
@@ -6379,7 +6440,7 @@ CALLER_WITH = {
     "label-colors": ('"true"', "true"),
     "sort-labels": ("true", "true"),
     "review-heading": ("Review complete", "Review complete"),
-    "settled-rollup": ('"true"', "true"),
+    "settled-rollup": ("false", "false"),
     "milestone-default": ("MVP <n>", "MVP <n>"),
     "owner-body-lines": ('"true"', "true"),
     "ranking": ("order", "order"),
@@ -6525,10 +6586,64 @@ def test_the_skill_build_command_passes_the_generators_failure_on(tmp_path: Path
     assert done.returncode != 0, done.stderr
 
 
+def test_the_build_command_names_an_exact_version_of_each_package() -> None:
+    """Protects every round from reading the caller with a different parser.
+
+    The command fetches PyYAML for the run, and a version left open lets each
+    machine resolve its own, so a round and these tests could parse the same
+    caller differently.
+    """
+    withs = re.findall(r"--with\s+\S+", _build_block())
+    assert withs, "the build command fetches no package"
+    for w in withs:
+        assert re.fullmatch(r"--with [\w.-]+==\d+(\.\d+)*", w), w
+
+
+def test_the_skill_template_line_fetches_at_the_pin(tmp_path: Path) -> None:
+    """Protects every command that reads the template from reading another commit.
+
+    The setup block's ``template`` runs ``gh api`` for a file of the template.
+    A stand-in ``gh`` prints what it was asked for, so the test sees the path
+    the line builds, which has to name the commit ``$PIN`` holds.
+    """
+    bash = _tool("bash")
+    lines = [x for x in _skill().splitlines() if x.startswith("template() {")]
+    assert len(lines) == 1, "the skill carries no single template() line"
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "gh").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+    (stub / "gh").chmod(0o755)
+    pin = "0123abcd" * 5
+    done = subprocess.run(
+        [bash, "-c", f"PIN={pin}\n{lines[0]}\ntemplate scripts/build_board.py"],
+        env={**os.environ, "PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+    asked = done.stdout.splitlines()
+    assert asked[:2] == [
+        "api",
+        f"repos/l3a0/repo-template/contents/scripts/build_board.py?ref={pin}",
+    ]
+
+
+def _setup_sed_line() -> str | None:
+    """The setup block's line printing the caller's ``with:`` block, found by what it reads."""
+    return next(
+        (
+            x
+            for x in _skill().splitlines()
+            if x.startswith("sed ") and "/^    with:$/" in x and "board.yml" in x
+        ),
+        None,
+    )
+
+
 def test_the_skill_setup_block_prints_every_input(tmp_path: Path) -> None:
     """Protects the setup block's list of the caller's inputs from missing one."""
     bash = _tool("bash")
-    line = next((x for x in _skill().splitlines() if x.startswith("sed -n '/^    with:$/")), None)
+    line = _setup_sed_line()
     assert line, "the skill's setup block prints no with: block"
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
     (tmp_path / ".github" / "workflows" / "board.yml").write_text(
@@ -6576,9 +6691,12 @@ def test_the_build_command_check_fails_a_broken_command(mutant: str, tmp_path: P
     assert _input_problems(*_run_build_block(block.replace(old, new), broken), _every_input())
 
 
-# A jq call on a board, with its options and either a quoted or a bare filter.
-# ``--jq``, which reads gh's output rather than a board, is not one.
-JQ_CALL = re.compile(r"(?<![-\w])jq(?: -[a-z]+)* (?:'([^']+)'|(\.[\w.]+))")
+# A jq call on a board, with its options, either a quoted or a bare filter,
+# and the file it reads. ``--jq``, which reads gh's output rather than a
+# board, is not one.
+JQ_CALL = re.compile(r"(?<![-\w])jq(?: -[a-z]+)* (?:'([^']+)'|(\.[\w.]+))(?: ([^\s`]+))?")
+# Where every jq call reads the board, the file the build command writes.
+JQ_FILE = "<scratch>/board.json"
 # The pull request the review read asks about, which the golden holds.
 JQ_PR = 30
 
@@ -6590,12 +6708,17 @@ def _jq_expected(board: dict) -> dict[str, list]:
         return board[section]["items"]
 
     return {
-        '(.working | if type=="object" then .items else . end)[]': items("working"),
-        '(.prs | if type=="object" then .items else . end)[] | select(.pr == <n>) | .reviewed': [
+        ".working.items[]": items("working"),
+        ".prs.items[] | select(.pr == <n>) | .reviewed": [
             p["reviewed"] for p in items("prs") if p["pr"] == JQ_PR
         ],
         ".state.updatedAt": [board["state"]["updatedAt"]],
     }
+
+
+def _collapse(f: str) -> str:
+    """A filter with each run of whitespace read as one space."""
+    return " ".join(f.split())
 
 
 def _jq(jq: str, f: str, path: Path) -> list:
@@ -6613,27 +6736,35 @@ def test_each_jq_filter_in_the_skills_reads_a_board(tmp_path: Path) -> None:
     """Protects a status round from a filter that reads the wrong thing.
 
     Every filter in either skill runs against a board the generator wrote, a
-    golden here, and has to print what the board holds, read in Python. A
-    filter on a section has to print the same from a board whose sections are
-    bare lists, as l3a0/marketlake's own generator writes until it retires.
+    golden here, and has to print what the board holds, read in Python. Every
+    golden pull request is unreviewed, so each ``.reviewed`` read also runs on
+    a copy whose pull request ``JQ_PR`` is reviewed, where a filter printing
+    false whatever it reads fails. Each call reads the file the build command
+    writes. Filters compare with whitespace collapsed, so a plugin release
+    that only re-spaces one passes, while one that rewords a filter needs an
+    ``_jq_expected`` edit when ``PLUGIN_COMMIT`` moves.
     """
     jq = _tool("jq")
     texts = [_plugin("SKILL.md", "update-build-board"), _plugin("SKILL.md", "sync-prune-next")]
-    filters = {quoted or bare for text in texts for quoted, bare in JQ_CALL.findall(text)}
+    calls = [call for text in texts for call in JQ_CALL.findall(text)]
+    assert calls, "neither skill carries a jq call"
+    for quoted, bare, file in calls:
+        assert file == JQ_FILE, (quoted or bare, file)
+    filters = {_collapse(quoted or bare) for quoted, bare, _ in calls}
     board = json.loads(MARKERS_GOLDEN.read_text(encoding="utf-8"))
-    expected = _jq_expected(board)
+    expected = {_collapse(f): want for f, want in _jq_expected(board).items()}
     assert filters == set(expected), (
         f"add each new filter's expected output to _jq_expected: {filters ^ set(expected)}"
     )
-    assert expected[
-        '(.prs | if type=="object" then .items else . end)[] | select(.pr == <n>) | .reviewed'
-    ]
-    bare = tmp_path / "bare.json"
-    bare.write_text(
-        json.dumps({k: v if k == "state" else v["items"] for k, v in board.items()}),
-        encoding="utf-8",
-    )
+    reviewed = [f for f in expected if f.endswith(".reviewed")]
+    assert reviewed and all(expected[f] == [False] for f in reviewed)
+    flipped = json.loads(MARKERS_GOLDEN.read_text(encoding="utf-8"))
+    for p in flipped["prs"]["items"]:
+        if p["pr"] == JQ_PR:
+            p["reviewed"] = True
+    copy = tmp_path / "reviewed.json"
+    copy.write_text(json.dumps(flipped), encoding="utf-8")
     for f, want in expected.items():
         assert _jq(jq, f, MARKERS_GOLDEN) == want, f
-        if not f.startswith(".state"):
-            assert _jq(jq, f, bare) == want, f
+    for f in reviewed:
+        assert _jq(jq, f, copy) == [True], f

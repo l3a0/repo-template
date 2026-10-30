@@ -27,6 +27,10 @@ name: Build board
 # 3. `default-branch-head`, set to `true`, names the commit the default branch
 #    stands at in the footer and the "Live updates stopped" banner.
 #
+# Two on-or-off inputs, `label-colors` and `sort-labels`, added by the pull
+# request that closes l3a0/repo-template#41, fill each label chip with the
+# colour GitHub stores for the label and sort each card's labels by name.
+#
 # An `owner-body-lines` input, added by the pull request that closes
 # l3a0/repo-template#48, reads order and after lines only from issues the
 # owner opened. A `milestone-default` input, added by the pull request that
@@ -106,6 +110,19 @@ on:
           the run.
         type: string
         default: ""
+      label-colors:
+        description: >-
+          "true" fills each label chip with the colour GitHub stores for that
+          label. Empty draws the page's own colours, where a label the page
+          does not know draws faint.
+        type: string
+        default: ""
+      sort-labels:
+        description: >-
+          "true" sorts each card's labels by name. Empty keeps the order
+          GitHub returns, which is the order the labels were added.
+        type: string
+        default: ""
       owner-body-lines:
         description: >-
           "true" reads a "Board order:" or "Board after:" line only in the
@@ -178,6 +195,8 @@ jobs:
           SUBTITLE: ${{ inputs.subtitle }}
           NOTE: ${{ inputs.note }}
           DEFAULT_BRANCH_HEAD: ${{ inputs.default-branch-head }}
+          LABEL_COLORS: ${{ inputs.label-colors }}
+          SORT_LABELS: ${{ inputs.sort-labels }}
           OWNER_BODY_LINES: ${{ inputs.owner-body-lines }}
           MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
           RANKING: ${{ inputs.ranking }}
@@ -190,6 +209,8 @@ jobs:
           --subtitle="$SUBTITLE"
           --note="$NOTE"
           --default-branch-head="$DEFAULT_BRANCH_HEAD"
+          --label-colors="$LABEL_COLORS"
+          --sort-labels="$SORT_LABELS"
           --owner-body-lines="$OWNER_BODY_LINES"
           --milestone-default="$MILESTONE_DEFAULT"
           --ranking="$RANKING"

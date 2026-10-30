@@ -192,6 +192,32 @@ icon gives.
 To move the pin back before that commit, remove those lines in the same
 change.
 
+The page draws each label chip in a colour of its own, and a label it does not
+know draws faint. A repository with labels of its own can have each chip
+filled with the colour GitHub stores for that label instead, lettered in black
+or white, whichever reads better on it. A recoloured label shows at the
+board's next run, because editing a label starts none. The value is quoted
+because a bare `true` in YAML is a boolean, and the input is a string.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      label-colors: "true"
+```
+
+GitHub returns an issue's labels in the order they were added. A repository
+that wants each card's chips in name order can ask for it.
+
+```yaml
+    uses: l3a0/repo-template/.github/workflows/build-board.yml@<sha>
+    with:
+      sort-labels: "true"
+```
+
+Each of the two takes empty or `"true"`, and any other value fails the run
+with its reason in the job summary. Both need a pin at or after the template
+commit that added them, for the reason the icon gives.
+
 Anyone can open an issue on a public repository, and by default a
 `Board order:` or `Board after:` line in any issue's body counts. Such a line
 places only the stranger's own card, because a card ranks only with a

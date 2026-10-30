@@ -36,10 +36,12 @@ It writes the six sections the page reads.
    age after which the page calls the board stale. Three more fields appear
    only when the caller sets the matching input: ``subtitle`` from
    ``--subtitle``, ``note`` from ``--note``, and ``main``, the default
-   branch's head, from ``--default-branch-head``. With a milestone default
-   named, it also carries ``milestoneDefault``, the milestone the page opens
-   on, or null for every milestone. With ``--ranking=order`` it carries
-   ``ranking``, which the page reads to draw every card when none is ranked.
+   branch's head, from ``--default-branch-head``. Under ``--label-colors``
+   it also carries ``labelColors``, the colour GitHub stores for each label a
+   card draws. With a milestone default named, it also carries
+   ``milestoneDefault``, the milestone the page opens on, or null for every
+   milestone. With ``--ranking=order`` it carries ``ranking``, which the page
+   reads to draw every card when none is ranked.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
    from the issue. With a milestone default named, the milestone is its title
    up to the first comma, which ``milestone_short`` cuts. ``kind`` comes from
@@ -370,14 +372,23 @@ def note_segments(note: str) -> list[dict] | None:
     return pieces
 
 
-def wants_head(default_branch_head: str) -> bool:
-    """Whether the caller asked for the default branch's head, which is empty or ``true``."""
-    if default_branch_head not in ("", "true"):
-        raise BoardError(
-            f"default-branch-head is {default_branch_head!r}, and it takes only an empty value "
-            "or true"
-        )
-    return default_branch_head == "true"
+def switch(name: str, value: str) -> bool:
+    """An on-or-off input, which is empty for off and ``true`` for on.
+
+    Any other value stops the run rather than guessing, because a caller who
+    wrote ``yes`` or ``name`` meant something, and reading it as off would
+    publish a board that silently ignores the caller's file.
+    """
+    if value not in ("", "true"):
+        raise BoardError(f"the {name} input {value!r} is neither empty nor true")
+    return value == "true"
+
+
+# A label's colour as GitHub stores it, once lower-cased. The page writes it
+# into a style attribute, so anything else is left out of the board. It is
+# matched whole with ``fullmatch``, because ``$`` also matches before a
+# trailing newline. The page checks the same pattern.
+HEX_COLOUR = re.compile(r"[0-9a-f]{6}")
 
 
 # The placeholder a milestone default writes for a number, as in "MVP <n>".
@@ -491,7 +502,7 @@ query($owner:String!, $name:String!, $after:String) {{
       nodes {{
         id number title body authorAssociation
         milestone{{title}}
-        labels(first:100){{{PAGE_INFO} nodes{{name}}}}
+        labels(first:100){{{PAGE_INFO} nodes{{name color}}}}
         blockedBy(first:100){{{PAGE_INFO} nodes{{number state repository{{nameWithOwner}}}}}}
         subIssuesSummary{{total completed}}
         issueComments: comments(first:100){{{PAGE_INFO} nodes{{authorAssociation body}}}}
@@ -540,7 +551,7 @@ BATCH = 50
 # a pull request's are both `comments` on GitHub, so the issue's go under an
 # alias to keep the two apart.
 NESTED = {
-    "labels": ("Issue", "labels", "", "name"),
+    "labels": ("Issue", "labels", "", "name color"),
     "blockedBy": ("Issue", "blockedBy", "", "number state repository{nameWithOwner}"),
     "issueComments": ("Issue", "comments", "", "authorAssociation body"),
     "closedByPullRequestsReferences": (
@@ -1068,6 +1079,7 @@ def tracker_card(
     conflicts: list[str],
     kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
     cut: bool = False,
+    sort_labels: bool = False,
     *,
     after: set[int],
     by_order: bool = False,
@@ -1080,9 +1092,10 @@ def tracker_card(
     number means nothing here, so it is dropped too. ``after`` is left out when
     it names none, as the page reads it as optional. The board's own labels are
     drawn as the rank chip and the busy stripe, so they are left off the card's
-    label chips. An issue claiming two kinds takes the first and is reported.
-    ``after`` holds the issues the body's ``Board after:`` lines name, which
-    ``read_body`` reads.
+    label chips. Those chips keep the order GitHub returns, which is the order
+    the labels were added, unless ``sort_labels`` asks for name order. An issue
+    claiming two kinds takes the first and is reported. ``after`` holds the
+    issues the body's ``Board after:`` lines name, which ``read_body`` reads.
     ``cut`` writes the milestone's short name in place of its whole title.
     ``by_order`` counts only the open sub-issues toward a parent, which
     ``--ranking=order`` asks for. ``subIssuesSummary`` counts closed ones in
@@ -1107,6 +1120,8 @@ def tracker_card(
         ),
         "labels": [x for x in names if not BAND.match(x) and x not in WORKING],
     }
+    if sort_labels:
+        card["labels"] = sorted(card["labels"])
     later = sorted((after & open_issues) - {n})
     if later:
         card["after"] = later
@@ -1252,19 +1267,6 @@ def stale_after_minutes(longest_gap: int) -> int:
     return longest_gap + SCHEDULE_DELAY_ALLOWANCE
 
 
-def owner_only(owner_body_lines: str) -> bool:
-    """Whether a run reads body lines only from the owner, from its input.
-
-    The input is a string, as every input of the reusable workflow is, and only
-    empty or ``true`` is read. Any other value stops the run before GitHub is
-    read, so a misspelt one cannot leave strangers' lines counting with
-    nothing said.
-    """
-    if owner_body_lines not in {"", "true"}:
-        raise BoardError(f"owner-body-lines is {owner_body_lines!r}, and takes only empty or true")
-    return owner_body_lines == "true"
-
-
 def by_order(ranking: str) -> bool:
     """Whether a run ranks cards by their order lines alone, from its input.
 
@@ -1288,6 +1290,8 @@ def build(
     subtitle: str = "",
     note: str = "",
     default_branch_head: str = "",
+    label_colors: str = "",
+    sort_labels: str = "",
     owner_body_lines: str = "",
     milestone_default: str = "",
     ranking: str = "",
@@ -1309,8 +1313,14 @@ def build(
     ``default_branch_head`` set to ``true`` reads the default branch's head
     for the footer, at the price of one more request. Each lands in ``state``
     only when it is set, so a caller setting none gets the board it got
-    before. The note and ``default_branch_head`` are checked before anything
-    is read too.
+    before.
+
+    ``default_branch_head``, ``label_colors``, ``sort_labels`` and
+    ``owner_body_lines`` are each empty or ``true``, read by ``switch``.
+    ``label_colors`` writes ``state.labelColors``, each card label's colour as
+    GitHub stores it, and ``sort_labels`` sorts each card's labels by name. The
+    data label, the note and the on-or-off inputs are checked before anything
+    is read from GitHub.
 
     ``milestone_default`` names the milestone the page opens on, such as
     ``MVP <n>``, and an empty one draws no milestone selector. Only a named one
@@ -1330,9 +1340,11 @@ def build(
     """
     kinds_read = kind_labels(data_label)
     pieces = note_segments(note)
-    head = wants_head(default_branch_head)
+    head = switch("default-branch-head", default_branch_head)
+    colours_wanted = switch("label-colors", label_colors)
+    by_name = switch("sort-labels", sort_labels)
     ordered = by_order(ranking)
-    owner_lines = owner_only(owner_body_lines) or ordered
+    owner_lines = switch("owner-body-lines", owner_body_lines) or ordered
     milestone_pattern(milestone_default)
     owner, name = repo.split("/", 1)
     main = head_commit(gql, owner, name) if head else None
@@ -1347,10 +1359,12 @@ def build(
     notes = Notes()
     unfinished: list[tuple[int, str, list[str]]] = []
     data_carried = 0
+    colours: dict[str, str] = {}
     referenced: set[int] = set()
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
-        names = [lb["name"] for lb in _all_nodes(gql, issue["id"], "labels", issue["labels"])]
+        nodes = _all_nodes(gql, issue["id"], "labels", issue["labels"])
+        names = [lb["name"] for lb in nodes]
         body = issue.get("body") or ""
         by_owner = issue.get("authorAssociation") == "OWNER"
         orders, after = read_body(n, body, by_owner, notes=notes, repo=repo, owner_only=owner_lines)
@@ -1362,12 +1376,18 @@ def build(
             repo,
             conflicts,
             kinds_read,
-            bool(milestone_default),
+            cut=bool(milestone_default),
+            sort_labels=by_name,
             after=after,
             by_order=ordered,
         )
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
+        if colours_wanted:
+            for lb in nodes:
+                colour = str(lb.get("color") or "").lower()
+                if lb["name"] in card["labels"] and HEX_COLOUR.fullmatch(colour):
+                    colours[lb["name"]] = colour
 
         held = [WORKING[x] for x in names if x in WORKING]
         if held:
@@ -1475,6 +1495,10 @@ def build(
         "next": {"schema": SCHEMA, "items": ranked},
         "tracker": {"schema": SCHEMA, "items": tracker},
     }
+    # Written only when the caller asks, so a board without the input is the
+    # same document it was before the input existed.
+    if colours_wanted:
+        board["state"]["labelColors"] = dict(sorted(colours.items()))
     if milestone_default:
         board["state"]["milestoneDefault"] = opens_on
     if ordered:
@@ -1534,6 +1558,8 @@ def cmd_build(args: argparse.Namespace) -> None:
         subtitle=args.subtitle,
         note=args.note,
         default_branch_head=args.default_branch_head,
+        label_colors=args.label_colors,
+        sort_labels=args.sort_labels,
         owner_body_lines=args.owner_body_lines,
         milestone_default=args.milestone_default,
         ranking=args.ranking,
@@ -1696,6 +1722,12 @@ def main(argv: list[str] | None = None) -> int:
         "--default-branch-head",
         default="",
         help="true to name the default branch's head in the footer, nothing if empty",
+    )
+    b.add_argument(
+        "--label-colors", default="", help="true to colour label chips from GitHub, empty not to"
+    )
+    b.add_argument(
+        "--sort-labels", default="", help="true to sort each card's labels by name, empty not to"
     )
     b.add_argument(
         "--owner-body-lines",

@@ -120,8 +120,10 @@
             border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
   /* The tracker's own labels, carried across rather than re-invented, because a
      second vocabulary for the same thing is a second thing to keep in step.
-     Each takes its colour from the hue GitHub stores for that label, so a
-     reader moving between the two surfaces is looking at the same chip. */
+     Under the reusable workflow's `label-colors` input, each chip is filled
+     with the colour GitHub stores for that label, so a reader moving between
+     the two surfaces is looking at the same chip. Without it, each takes its
+     text colour from `LABEL_HUE` below. */
   .tk .lbs { display: flex; flex-wrap: wrap; gap: 4px; }
   .tk .lbs b { font-family: var(--mono); font-size: 0.5625rem; font-weight: 600;
                text-transform: uppercase; letter-spacing: 0.06em; border-radius: 3px;
@@ -325,8 +327,8 @@ let ISS = "", PRU = "";
    { schema: 1, repo, title, updatedAt, issues: { open }, source,
    longestGapMinutes, staleAfterMinutes }, plus subtitle, note and main when
    the caller sets the reusable workflow's subtitle, note and
-   default-branch-head inputs, and milestoneDefault when the repository names
-   a milestone default.
+   default-branch-head inputs, labelColors when it sets the `label-colors`
+   input, and milestoneDefault when the repository names a milestone default.
 
    FALLBACK carries no board data. A copy of the six sections in the page goes
    stale silently, because nothing refreshes it once the page is checked in.
@@ -753,9 +755,13 @@ const COLS = [
      measures. */
   ["Waiting on data", "not a backlog, a purchase"]
 ];
-/* One colour per tracker label, so the page and GitHub show the same chip.
-   Two diverge on purpose, and the rule is readability rather than fidelity: a
-   label colour on GitHub is a chip background, while here it is text. GitHub's
+/* One colour per tracker label, for a board whose caller does not set the
+   reusable workflow's `label-colors` input. Under that input every chip takes
+   GitHub's own colour instead, through `chip` below, and this table serves
+   only a label the board carries no usable colour for. Without the input, two
+   entries diverge from GitHub on purpose, and the rule is readability rather
+   than fidelity: a label colour on GitHub is a chip background, while here it
+   is text. GitHub's
    `enhancement` is `a2eeef` and its `deferred` is `ededed`, both too pale to
    read as text on white, so each is darkened here. `question` is the third and
    newest of them: GitHub stores `d876e3`, which reaches 2.3 to 1 against white
@@ -770,6 +776,43 @@ const LABEL_HUE = {
   test: "#5319e7", deferred: "#6E7A85", question: "#9B3BA8", decision: "#8A5A00",
   "blocked-on-data": "#B60205"
 };
+
+/* GitHub's colour for a label, from `state.labelColors`, or null when the
+   board carries none for it. The generator writes the map only under the
+   `label-colors` input. The colour lands in a style attribute, so the page
+   checks each value itself rather than trusting the document. A value that is
+   not six lower-case hex digits, or a key the map does not hold as its own,
+   falls back to `LABEL_HUE` rather than refusing the board, as for any field
+   the page treats as optional. */
+const HEX_COLOUR = /^[0-9a-f]{6}$/;
+function githubColour(label) {
+  const map = STATE && STATE.labelColors;
+  if (!map || typeof map !== "object" || Array.isArray(map) ||
+      !Object.prototype.hasOwnProperty.call(map, label)) return null;
+  const hex = map[label];
+  return isStr(hex) && HEX_COLOUR.test(hex) ? hex : null;
+}
+/* WCAG's relative luminance of a six-digit hex colour. */
+function luminance(hex) {
+  const lin = i => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
+}
+/* One label chip. GitHub's colour is a chip background, not text ink, so a
+   chip with GitHub's colour is filled with it and lettered in black or white.
+   At a luminance of 0.179 black and white text have equal contrast, so at or
+   below it white wins and above it black does. Whichever wins reaches at
+   least 4.58 to 1 for any colour, and the chip carries its own background, so
+   the rule holds in both themes. The price is that a chip's edge can vanish
+   into the card, as `ededed` does on the light panel. */
+function chip(label) {
+  const hex = githubColour(label);
+  if (!hex) return `<b style="color:${LABEL_HUE[label] || "var(--faint)"}">${esc(label)}</b>`;
+  const ink = luminance(hex) <= 0.179 ? "#fff" : "#000";
+  return `<b style="background:#${hex};border-color:#${hex};color:${ink}">${esc(label)}</b>`;
+}
 
 /* A parent is a kind of its own. An issue split into sub-issues builds nothing
    itself and keeps only the rules its children obey. That is neither work, nor
@@ -1302,7 +1345,7 @@ function buildOrder() {
         </div>
         <div class="lb">${esc(c.label)}</div>
         ${(c.labels || []).length ? `<div class="lbs">${c.labels
-          .map(l => `<b style="color:${LABEL_HUE[l] || "var(--faint)"}">${esc(l)}</b>`)
+          .map(chip)
           .join("")}</div>` : ""}
         ${note ? `<div class="wo">${note}</div>` : ""}
         ${softnote}

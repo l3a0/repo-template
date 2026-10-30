@@ -36,6 +36,10 @@ name: Build board
 # the named heading after the head commit, and leave the board's own checks
 # out of a pull request's rollup.
 #
+# A `milestone-default` input, added by the pull request that closes
+# l3a0/repo-template#45, draws a milestone selector on the page and names the
+# milestone it opens on.
+#
 # Every input is a string that defaults to empty, and an empty one leaves the
 # board as it was.
 #
@@ -140,6 +144,14 @@ on:
           as GitHub lists it.
         type: string
         default: ""
+      milestone-default:
+        description: >-
+          The milestone the page opens on, where <n> stands for a number, such
+          as MVP <n> for the lowest-numbered open "MVP" milestone. Setting it
+          draws a milestone selector and cuts each milestone's title at its
+          first comma. Empty draws no selector and keeps whole titles.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -194,6 +206,7 @@ jobs:
           SORT_LABELS: ${{ inputs.sort-labels }}
           REVIEW_HEADING: ${{ inputs.review-heading }}
           SETTLED_ROLLUP: ${{ inputs.settled-rollup }}
+          MILESTONE_DEFAULT: ${{ inputs.milestone-default }}
         run: >-
           python3 template/scripts/build_board.py build
           --repo "$GITHUB_REPOSITORY"
@@ -207,6 +220,7 @@ jobs:
           --sort-labels="$SORT_LABELS"
           --review-heading="$REVIEW_HEADING"
           --settled-rollup="$SETTLED_ROLLUP"
+          --milestone-default="$MILESTONE_DEFAULT"
           --out _site
 
       # Pages serves index.html at the site's root. The page links its icon

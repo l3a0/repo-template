@@ -24,22 +24,27 @@ repository's own page carried under its title and in its footer. The pull
 request that closes l3a0/repo-template#47 ported l3a0/marketlake's review rule
 and its rollup from ``.claude/skills/sync-prune-next/build_board.py`` at
 commit ``cc9d3432``, behind ``--review-heading`` and ``--settled-rollup``, so
-a repository that names neither reads pull requests as before.
+a repository that names neither reads pull requests as before. The pull
+request that closes l3a0/repo-template#45 added ``--milestone-default``, which
+turns on the page's milestone selector and names the milestone it opens on,
+so a repository that never names one gets the board it had before.
 
 It writes the six sections the page reads.
 
 1. ``state``, with the repository, the board's title, the open issue count, the
    time GitHub was read, the longest gap between two scheduled runs, and the
-   age after which the page calls the board stale. Three more fields appear
+   age after which the page calls the board stale. Four more fields appear
    only when the caller sets the matching input: ``subtitle`` from
-   ``--subtitle``, ``note`` from ``--note``, and ``main``, the default
-   branch's head, from ``--default-branch-head``. Under ``--label-colors``
-   it also carries ``labelColors``, the colour GitHub stores for each label a
-   card draws.
+   ``--subtitle``, ``note`` from ``--note``, ``main``, the default branch's
+   head, from ``--default-branch-head``, and ``milestoneDefault``, the
+   milestone the page opens on or null for every milestone, from
+   ``--milestone-default``. Under ``--label-colors`` it also carries
+   ``labelColors``, the colour GitHub stores for each label a card draws.
 2. ``tracker``, one card per open issue. Its title, milestone and labels come
-   from the issue. ``kind`` comes from labels and sub-issues, ``needs`` from
-   native "blocked by" links, and ``after`` from a ``Board after:`` line in the
-   body.
+   from the issue. With a milestone default named, the milestone is its title
+   up to the first comma, which ``milestone_short`` cuts. ``kind`` comes from
+   labels and sub-issues, ``needs`` from native "blocked by" links, and
+   ``after`` from a ``Board after:`` line in the body.
 3. ``prs``, one item per pull request and each issue in this repository it
    names, with its state, its checks at the current head, whether GitHub
    registered a closing link to that issue, and whether the owner posted a
@@ -405,6 +410,72 @@ def switch(name: str, value: str) -> bool:
     if value not in ("", "true"):
         raise BoardError(f"the {name} input {value!r} is neither empty nor true")
     return value == "true"
+
+
+# The placeholder a milestone default writes for a number, as in "MVP <n>".
+MILESTONE_NUMBER = "<n>"
+
+
+def milestone_title(issue: dict) -> str:
+    """An issue's whole milestone title, or the empty string for none."""
+    return (issue.get("milestone") or {}).get("title") or ""
+
+
+def milestone_short(title: str) -> str:
+    """A milestone's title up to its first comma, stripped.
+
+    A repository names its milestones with a short name and then what each is
+    for, as in "MVP 4, serve the bars", and the selector lists the short name.
+    No milestone stays the empty string, which the page names "no milestone".
+    """
+    return title.split(",", 1)[0].strip()
+
+
+def milestone_pattern(pattern: str) -> re.Pattern[str] | None:
+    """The name a milestone default matches, or None when the input is empty.
+
+    ``<n>`` stands for a number of at most 18 digits and every other character
+    for itself, so ``v1.<n>`` does not match ``v1x2``. The bound keeps
+    ``int()`` well short of Python's limit on the digits it converts, which a
+    milestone named with thousands of digits would otherwise pass. A pattern
+    with no ``<n>`` matches one name exactly. Two patterns are refused before
+    GitHub is read, because the run would otherwise publish a board that
+    silently opens on every milestone. One with two ``<n>`` has no single
+    number to compare, and one with a comma can match no name, since
+    ``milestone_short`` cuts every name at its first comma.
+    """
+    if not pattern:
+        return None
+    if pattern.count(MILESTONE_NUMBER) > 1:
+        raise BoardError(
+            f"the milestone default {pattern!r} names {MILESTONE_NUMBER} more than once"
+        )
+    if "," in pattern:
+        raise BoardError(
+            f"the milestone default {pattern!r} has a comma, and no milestone's short name can"
+        )
+    head, number, tail = pattern.partition(MILESTONE_NUMBER)
+    body = re.escape(head) + ("([0-9]{1,18})" if number else "") + re.escape(tail)
+    return re.compile(body)
+
+
+def default_milestone(pattern: str, names: list[str]) -> str | None:
+    """The milestone the page opens on, or None to open on every milestone.
+
+    ``names`` are the open cards' short milestone names. The match with the
+    lowest number wins, compared as a number so ``MVP 10`` comes after
+    ``MVP 9``, and a tie such as ``MVP 04`` beside ``MVP 4`` goes to the name
+    that sorts first, so two runs over the same issues open on the same one.
+    """
+    rule = milestone_pattern(pattern)
+    if rule is None:
+        return None
+    found = []
+    for name in set(names):
+        m = rule.fullmatch(name)
+        if m:
+            found.append((int(m.group(1)) if m.groups() else 0, name))
+    return min(found)[1] if found else None
 
 
 # A label's colour as GitHub stores it, once lower-cased. The page writes it
@@ -1045,6 +1116,7 @@ def tracker_card(
     sort_labels: bool = False,
     *,
     after_texts: list[str],
+    cut: bool = False,
 ) -> dict:
     """One open issue as the card the page draws.
 
@@ -1057,16 +1129,18 @@ def tracker_card(
     label chips. Those chips keep the order GitHub returns, which is the order
     the labels were added, unless ``sort_labels`` asks for name order. An issue
     claiming two kinds takes the first and is reported. ``after_texts`` is the
-    text after each ``Board after:`` line, which ``read_body`` reads.
+    text after each ``Board after:`` line, which ``read_body`` reads. ``cut``
+    writes the milestone's short name in place of its whole title.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
     kinds = card_kinds(names, issue["subIssues"]["totalCount"], kinds_read)
     if len(kinds) > 1:
         conflicts.append(f"#{n} reads as {' and '.join(kinds)}, read as {kinds[0]}")
+    ms = milestone_title(issue)
     card = {
         "n": n,
-        "ms": (issue.get("milestone") or {}).get("title") or "",
+        "ms": milestone_short(ms) if cut else ms,
         "label": issue["title"],
         "kind": (kinds or ["ready"])[0],
         "needs": sorted(
@@ -1224,6 +1298,7 @@ def build(
     *,
     review_heading: str = "",
     settled_rollup: str = "",
+    milestone_default: str = "",
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
 
@@ -1248,9 +1323,17 @@ def build(
     GitHub stores it, and ``sort_labels`` sorts each card's labels by name.
     ``review_heading`` names the heading that closes a review, and
     ``settled_rollup`` set to ``true`` settles the rollup, as ``pr_items``
-    says. An empty one keeps the rule from before either existed. The data
-    label, the note, the four on-or-off inputs and the review heading are
-    checked before anything is read from GitHub.
+    says. An empty one keeps the rule from before either existed.
+
+    ``milestone_default`` names the milestone the page opens on, such as
+    ``MVP <n>``, and an empty one draws no milestone selector. Only a named one
+    cuts each card's milestone to its short name and writes
+    ``state.milestoneDefault``, so a board that names none is the board it was
+    before the input existed. It takes a pattern rather than empty or
+    ``true``, so ``milestone_pattern`` reads it rather than ``switch``.
+
+    The data label, the note, the four on-or-off inputs, the review heading
+    and the milestone default are checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
     pieces = note_segments(note)
@@ -1259,6 +1342,7 @@ def build(
     by_name = switch("sort-labels", sort_labels)
     settle = switch("settled-rollup", settled_rollup)
     fields = pr_fields(review_rule(review_heading) is not None, settle)
+    milestone_pattern(milestone_default)
     owner, name = repo.split("/", 1)
     main = head_commit(gql, owner, name) if head else None
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
@@ -1291,6 +1375,7 @@ def build(
             kinds_read,
             by_name,
             after_texts=after_texts,
+            cut=bool(milestone_default),
         )
         # A card cannot wait on itself, so `tracker_card` leaves a line naming
         # only the card itself with nothing to set.
@@ -1327,6 +1412,23 @@ def build(
             notes.dropped.add((n, "Board order on a card with no band"))
 
         referenced |= _referenced_prs(gql, issue, repo)
+
+    opens_on = None
+    if milestone_default:
+        opens_on = default_milestone(milestone_default, [c["ms"] for c in tracker])
+        # Two titles cut to one short name would merge into one entry in the
+        # selector, so the run says which.
+        titles: dict[str, set[str]] = {}
+        for issue in issues:
+            full = milestone_title(issue)
+            titles.setdefault(milestone_short(full), set()).add(full)
+        for short, fulls in sorted(titles.items()):
+            if len(fulls) > 1:
+                named = sorted(fulls)
+                listed = ", ".join(f'"{t}"' for t in named[:-1]) + f' and "{named[-1]}"'
+                conflicts.append(
+                    f'milestones {listed} {"both" if len(named) == 2 else "all"} cut to "{short}"'
+                )
 
     open_prs = _top_pages(gql, open_prs_query(fields), owner, name, "pullRequests")
     seen = {p["number"] for p in open_prs}
@@ -1395,6 +1497,8 @@ def build(
     # same document it was before the input existed.
     if colours_wanted:
         board["state"]["labelColors"] = dict(sorted(colours.items()))
+    if milestone_default:
+        board["state"]["milestoneDefault"] = opens_on
     report = {
         "open_issues": len(issues),
         "open_prs": len(open_prs),
@@ -1411,6 +1515,8 @@ def build(
         "data_carried": data_carried,
         "review_heading": review_heading,
         "reviewed_items": sum(p["reviewed"] for p in prs),
+        "milestone_default": milestone_default,
+        "milestone_opens_on": opens_on,
     }
     return board, report
 
@@ -1454,6 +1560,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         sort_labels=args.sort_labels,
         review_heading=args.review_heading,
         settled_rollup=args.settled_rollup,
+        milestone_default=args.milestone_default,
     )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -1462,6 +1569,22 @@ def cmd_build(args: argparse.Namespace) -> None:
     )
     updated = board["state"]["updatedAt"]
     _output("updated_at", updated)
+    # A misspelt pattern matches nothing and fails no read, so the row says what
+    # it matched. It is written only while the input is set, so the rows of a
+    # caller naming none do not move. The pattern goes in a code span, or
+    # GitHub's renderer would read <n> as a tag.
+    milestone_row = (
+        [
+            f"| Milestone default | `{report['milestone_default']}` "
+            + (
+                f"opens on {report['milestone_opens_on']} |"
+                if report["milestone_opens_on"] is not None
+                else "matches no open milestone |"
+            )
+        ]
+        if report["milestone_default"]
+        else []
+    )
     _summary(
         [
             "## Board build",
@@ -1507,6 +1630,7 @@ def cmd_build(args: argparse.Namespace) -> None:
                 else "none named"
             )
             + " |",
+            *milestone_row,
         ]
     )
 
@@ -1616,6 +1740,11 @@ def main(argv: list[str] | None = None) -> int:
         "--settled-rollup",
         default="",
         help="true to leave the board's own checks out and read skipped as settled",
+    )
+    b.add_argument(
+        "--milestone-default",
+        default="",
+        help="the milestone the page opens on, such as 'MVP <n>', no selector if empty",
     )
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("measure", help="time how long a deployed board takes to be served")

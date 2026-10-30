@@ -905,7 +905,7 @@ function readMs() {
 const inMs = c => MS === MS_ALL || (!!c && c.ms === MS);
 const msName = ms => ms === "" ? "no milestone" : ms;
 /* The words a sentence adds when it is about the chosen milestone only. */
-const msWhere = () => MS === MS_ALL ? "" : MS === "" ? " with no milestone" : ` in ${esc(MS)}`;
+const msWhere = () => MS === MS_ALL ? "" : MS === "" ? ` with ${msName(MS)}` : ` in ${esc(MS)}`;
 
 /* Resolves MS and draws the selector. `render()` runs it before the cards,
    because every section reads MS. The options are rebuilt only when the set
@@ -1355,7 +1355,7 @@ function buildOrder() {
         }${rank ? ` It is number ${rankPos.get(c.n) + 1} in the priority order.` : ""} Show what this connects to.">
         <div class="r1">
           <a class="id" href="${ISS}${c.n}" target="_blank" rel="noopener">#${c.n}</a>
-          <span class="sl">${esc(c.ms)}</span>
+          <span class="sl">${esc(msName(c.ms))}</span>
           ${rank ? `<span class="rk" title="priority order">${rankPos.get(c.n) + 1}</span>` : ""}
         </div>
         <div class="lb">${esc(c.label)}</div>

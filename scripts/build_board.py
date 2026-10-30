@@ -83,7 +83,7 @@ listing is a phrase in the generator's own words, held by ``Notes``.
 4. ``Finished plans with no verdict after them``, for an issue whose newest
    ``## Plan audit, pass N`` heading came after its newest verdict.
 
-Two of its rules exist because the repository is public.
+Four of its rules exist because the repository is public.
 
 1. ``reviewed`` reads a comment opening with ``## Review``, or under a
    caller's review heading a comment or a submitted review opening with it,
@@ -91,7 +91,18 @@ Two of its rules exist because the repository is public.
    author association is ``OWNER``. Anyone
    can comment, and a stranger's comment would otherwise move a card. Labels
    and links need triage access, so they need no such filter.
-2. Nothing here reads the event that started the run. Every fact comes from
+2. With ``--owner-body-lines=true``, a ``Board order:`` or ``Board after:``
+   line counts only in the body of an issue the owner opened, and a
+   stranger's is listed as refused. Anyone can open an issue. The input is off
+   by default, because a card ranks only with a ``band:N`` label, which needs
+   triage access, so a stranger's line moves only the stranger's own card.
+3. A number read from a marker line or a ``Part of`` reference carries at
+   most ``MAX_DIGITS`` digits. Anyone can write a ``Board after:`` line, and a
+   longer number there would otherwise stop every run until someone edited
+   the issue, because Python refuses to turn more than 4,300 digits into an
+   ``int``. A longer order would be written as ``Infinity``, which the page
+   cannot read.
+4. Nothing here reads the event that started the run. Every fact comes from
    the API, so an issue title never reaches a shell, and two runs started by
    different events build the same board from the same state.
 
@@ -127,6 +138,16 @@ from pathlib import Path
 
 SCHEMA = 1
 
+# The most digits an order, a pass count or a reference may carry. JavaScript
+# reads every number as a double, which holds any integer up to 15 digits
+# exactly. Past that a number can stop being one: a 400-digit order is
+# infinity, which JSON cannot carry, and past 4,300 digits Python's `int()`
+# raises. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+MAX_DIGITS = 15
+# A reference's number: up to `MAX_DIGITS` digits, then a word boundary, so a
+# longer number is no reference at all rather than one `int()` cannot read.
+REF_NUMBER = rf"(\d{{1,{MAX_DIGITS}}})\b"
+
 # A `Part of` reference, read the way GitHub reads a closing keyword: anywhere
 # in a pull request's body, with `#` and the number right after it, and never
 # inside a code span or a fenced code block. Sessions write the phrase
@@ -136,8 +157,9 @@ SCHEMA = 1
 # prose such as "merged in PR 488, part of 458" names another pull request's
 # issue and is not one. A sentence mentioning the phrase in passing counts
 # unless a code span holds it, as a closing keyword does. `pr_items` strips the
-# code before matching.
-PART_OF = re.compile(r"\bPart of #(\d+)\b")
+# code before matching. A number longer than ``MAX_DIGITS`` is no reference at
+# all, rather than one ``int()`` cannot read.
+PART_OF = re.compile(rf"\bPart of #{REF_NUMBER}")
 
 # A review comment opens with a line reading `## Review`, which the l3a0
 # plugin's update-build-board skill states as the convention. "## Reviewer" is not one.
@@ -273,19 +295,55 @@ MARKER_KIND = {"o": "order", "v": "verdict", "a": "after"}
 # with no verdict.
 PASS_HEADING = re.compile(r"^[ \t]*## Plan audit, pass \d+", re.MULTILINE)
 
-# An issue a `Board after:` line names. A bare number is not one.
-AFTER_REF = re.compile(r"#(\d+)\b")
+# The references a `Board after:` line can name: `#N`, `owner/name#N`, and the
+# link form `[#N](url)`. A bare number is not one. `REF_NUMBER` reads a
+# number longer than `MAX_DIGITS` as no reference at all. Ported from
+# l3a0/marketlake's generator at commit ``cc9d3432``, with one change. The
+# link's address there was `[^)\s]*`, which runs to the end of the line from
+# every `[#N](` that no `)` closes, so a line of `[#1](` repeated costs time
+# that grows with the square of its length. Anyone can write a body, and a
+# 65,000-character line of that shape took 9.6 s. Leaving `(` out of the
+# address stops each try at the next `[#N](`, and the same line took 1.1 ms.
+LINK_REF = re.compile(rf"\[#(\d{{1,{MAX_DIGITS}}})\]\(([^()\s]*)\)")
+# An issue's or pull request's address, with anything after the number, such
+# as a comment's `#issuecomment-5` anchor, a query or a `/files` tab.
+ISSUE_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/(?:issues|pull)/(\d+)(?:[/#?]\S*)?")
+# The opening of a link, `[#N](`, whatever follows it. A link `LINK_REF` cannot
+# read, such as one whose address carries a title, a leading space or a
+# parenthesis, still names an address, so its `#N` must not reach `BARE_REF`
+# and be read as an issue here. It runs once over the line, so it stays
+# linear. A number longer than `MAX_DIGITS` is no reference, as in `LINK_REF`,
+# so such a link is left to read as an after line naming nothing.
+OPEN_LINK = re.compile(rf"\[#\d{{1,{MAX_DIGITS}}}\]\(")
+REPO_REF = re.compile(rf"(?<![\w.-])([\w.-]+/[\w.-]+)#{REF_NUMBER}")
+BARE_REF = re.compile(rf"(?<![\w/.-])#{REF_NUMBER}")
 
 # A fenced code block, opened by three or more backticks or tildes and closed
 # by the same run, or left open to the end of the text. A comment quoting the
-# verdict format inside a fence would otherwise read as a verdict.
+# verdict format inside a fence would otherwise read as a verdict. The opening
+# run is possessive, `{3,}+`, so it never gives back a character. A greedy run
+# on a last line of backticks with no newline after it tried every shorter
+# run in turn, each scanning to the end of the line, so the time grew with
+# the square of its length: about 3 s for 65,536 backticks. `unfenced` runs
+# on every body and comment, a stranger's included, before anything checks
+# who wrote it. The possessive run reads the same fences, and the same line
+# took 0.3 ms.
 FENCE = re.compile(
-    r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.MULTILINE | re.DOTALL
+    r"^[ \t]*(`{3,}+|~{3,}+)[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.MULTILINE | re.DOTALL
 )
 
 
 def unfenced(text: str) -> str:
-    """The text with every fenced code block removed, so no line in one is read."""
+    """The text with line endings made ``\\n`` and every fenced code block removed.
+
+    GitHub's web editor saves ``\\r\\n``. A marker line read with the ``\\r``
+    still on it fails its ``[ \\t]*$``, so an order or a verdict the owner
+    edited in a browser would be lost with nothing said, and a fence's closing
+    line would never match, so the fence would remove the rest of the text. A
+    marker inside a fence quotes the format rather than setting anything, so no
+    line in one is read.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     return FENCE.sub("", text)
 
 
@@ -330,9 +388,8 @@ def outside_code(text: str) -> str:
     GitHub does not read a closing keyword written inside either, so a ``Part
     of`` reference written inside one does not count here either.
     """
-    # GitHub's web editor saves `\r\n`, which the fence's `$` and the blank
-    # line between paragraphs would otherwise never match.
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # `unfenced` turns `\r\n` into `\n` first, so the blank line between
+    # paragraphs matches in a body GitHub's web editor saved.
     return "\n\n".join(_spans_out(p) for p in PARAGRAPH.split(unfenced(text)))
 
 
@@ -899,8 +956,17 @@ def in_repo(node: dict | None, repo: str) -> bool:
     job's token reads every issue and pull request in the caller's repository,
     so such an entry is never this repository's, and dropping it loses
     nothing from the board.
+
+    The names are compared without case, because GitHub treats an owner and a
+    repository named in any case as the same one. The run's own name and
+    ``nameWithOwner`` both come in GitHub's spelling, so only a reference a
+    person typed on a ``Board after:`` line, which ``after_refs`` reads, can
+    differ in case alone.
     """
-    return bool(node) and (node.get("repository") or {}).get("nameWithOwner") == repo
+    if not node:
+        return False
+    name = (node.get("repository") or {}).get("nameWithOwner") or ""
+    return name.lower() == repo.lower()
 
 
 def pr_items(
@@ -1074,31 +1140,116 @@ def _marker_lines(text: str) -> list[tuple[str, str, int]]:
     return found
 
 
-def read_body(n: int, body: str, owner: bool, *, notes: Notes) -> tuple[list[str], list[str]]:
-    """The ``Board order:`` values and the text after each ``Board after:`` in a body.
+def _short(number: str) -> bool:
+    """Whether a number carries no more than ``MAX_DIGITS`` digits."""
+    return sum(ch.isdigit() for ch in number) <= MAX_DIGITS
+
+
+def after_refs(rest: str, repo: str) -> tuple[set[int], set[str]]:
+    """The issues in ``repo`` that the text after ``Board after:`` names, and the
+    summary phrase for each kind of reference it refused.
+
+    A reference to another repository is refused, whether written
+    ``owner/name#N`` or as a link whose address names another repository. Read
+    as a bare ``#N``, its number would match an issue here it does not mean,
+    the trap ``in_repo`` keeps ``needs`` out of. A link whose text names one
+    number and whose address names another is refused too, because nothing
+    says which one was meant. A refused reference leaves the rest of its line
+    read. Ported from l3a0/marketlake's generator at commit ``cc9d3432``.
+
+    Three behaviours come with the port, and each is named on
+    l3a0/repo-template#48 rather than listed in the summary.
+
+    1. A ``#N`` right after a word character, ``/``, ``-`` or ``.`` is not
+       read and not listed, so ``#3/#4`` reads 3 and ``repo-template#3 #4``
+       reads 4.
+    2. A link whose address is not an issue or pull request address on
+       ``https://github.com``, such as a relative ``../issues/4``, is refused
+       as naming another repository. A link to ``issues/04`` is refused as a
+       disagreement.
+    3. A reference-style link such as ``[#3][ref]`` reads as ``#3``,
+       whatever its reference names, because nothing on the line says where
+       it points.
+
+    A link that opens with ``[#N](`` and that ``LINK_REF`` cannot read, such
+    as ``[#3](url "title")``, ``[#3]( url)`` or an address holding a
+    parenthesis, is refused as naming another repository. Its address cannot
+    be checked, and read as a bare ``#N`` it could name an issue here it does
+    not mean.
+    """
+    named: set[int] = set()
+    refused: set[str] = set()
+
+    def link(m: re.Match[str]) -> str:
+        url = ISSUE_URL.fullmatch(m.group(2))
+        if not url or not in_repo({"repository": {"nameWithOwner": url.group(1)}}, repo):
+            refused.add("Board after, naming another repository")
+        elif url.group(2) != m.group(1):
+            refused.add("Board after, link and number disagree")
+        else:
+            named.add(int(m.group(1)))
+        return "\0"
+
+    rest = LINK_REF.sub(link, rest)
+    rest, opened = OPEN_LINK.subn("\0", rest)
+    if opened:
+        refused.add("Board after, naming another repository")
+    for m in REPO_REF.finditer(rest):
+        if in_repo({"repository": {"nameWithOwner": m.group(1)}}, repo):
+            named.add(int(m.group(2)))
+        else:
+            refused.add("Board after, naming another repository")
+    rest = REPO_REF.sub("\0", rest)
+    named |= {int(x) for x in BARE_REF.findall(rest)}
+    return named, refused
+
+
+def read_body(
+    n: int, body: str, owner: bool, *, notes: Notes, repo: str, owner_only: bool = False
+) -> tuple[list[str], set[int]]:
+    """The ``Board order:`` values and the issues ``Board after:`` lines name in a body.
 
     Each is read as ``ORDER`` and ``AFTER`` read it, from the body with its
-    fenced blocks removed. A body anyone wrote sets both, as it always has.
+    fenced blocks removed, and the after lines through ``after_refs``. A body
+    anyone wrote sets both, as it always has, unless ``owner_only`` is set.
+    Then a body the owner did not write, which ``owner`` says, sets neither,
+    and each kind of line ``ORDER`` or ``AFTER`` matches in it is listed as
+    refused. The ``--owner-body-lines`` input sets ``owner_only``.
 
-    In a body the owner wrote, which ``owner`` says, a line that looks meant as
-    a marker and is not read is listed as unread. That covers an order or after
-    line the grammar fails, an after line naming no ``#N``, and a verdict line,
-    which counts only in a comment. A stranger's near misses are not listed, so
-    a stranger cannot fill the summary.
+    In a body the owner wrote, a line that looks meant as a marker and is not
+    read is listed as unread. That covers an order or after line the grammar
+    fails, an order longer than ``MAX_DIGITS``, an after line naming no issue,
+    and a verdict line, which counts only in a comment. A stranger's near
+    misses are not listed, so a stranger cannot fill the summary. A reference
+    ``after_refs`` refuses is listed as refused whoever wrote it, which adds at
+    most two entries an issue. An after line naming only the card itself is
+    listed as dropped.
     """
+    text = unfenced(body)
+    if owner_only and not owner:
+        for kind, marker in (("order", ORDER), ("after", AFTER)):
+            if marker.search(text):
+                notes.refused.add((n, f"{MARKER_NAME[kind]}, not the owner's"))
+        return [], set()
     orders: list[str] = []
-    after: list[str] = []
-    for kind, line, _ in _marker_lines(unfenced(body)):
+    after: set[int] = set()
+    for kind, line, _ in _marker_lines(text):
         if kind == "order":
             m = ORDER.match(line)
-            if m:
+            if m and _short(m.group(1)):
                 orders.append(m.group(1))
                 continue
         elif kind == "after":
             m = AFTER.match(line)
             if m:
-                after.append(m.group(1))
-                if AFTER_REF.search(m.group(1)):
+                named, refused = after_refs(m.group(1), repo)
+                after |= named
+                notes.refused |= {(n, phrase) for phrase in refused}
+                # A card cannot wait on itself, so `tracker_card` leaves a
+                # line naming only the card itself with nothing to set.
+                if named == {n} and not refused:
+                    notes.dropped.add((n, "Board after, naming itself"))
+                if named or refused:
                     continue
         if owner:
             notes.unread.add((n, MARKER_NAME[kind]))
@@ -1115,7 +1266,7 @@ def tracker_card(
     kinds_read: tuple[tuple[str, str], ...] = KIND_LABELS,
     sort_labels: bool = False,
     *,
-    after_texts: list[str],
+    after: set[int],
     cut: bool = False,
 ) -> dict:
     """One open issue as the card the page draws.
@@ -1128,9 +1279,9 @@ def tracker_card(
     drawn as the rank chip and the busy stripe, so they are left off the card's
     label chips. Those chips keep the order GitHub returns, which is the order
     the labels were added, unless ``sort_labels`` asks for name order. An issue
-    claiming two kinds takes the first and is reported. ``after_texts`` is the
-    text after each ``Board after:`` line, which ``read_body`` reads. ``cut``
-    writes the milestone's short name in place of its whole title.
+    claiming two kinds takes the first and is reported. ``after`` holds the
+    issues the body's ``Board after:`` lines name, which ``read_body`` reads.
+    ``cut`` writes the milestone's short name in place of its whole title.
     """
     n = issue["number"]
     blockers = _all_nodes(gql, issue["id"], "blockedBy", issue["blockedBy"])
@@ -1151,10 +1302,9 @@ def tracker_card(
     }
     if sort_labels:
         card["labels"] = sorted(card["labels"])
-    after = {int(m) for line in after_texts for m in AFTER_REF.findall(line)}
-    after = sorted((after & open_issues) - {n})
-    if after:
-        card["after"] = after
+    later = sorted((after & open_issues) - {n})
+    if later:
+        card["after"] = later
     return card
 
 
@@ -1170,9 +1320,10 @@ def latest_verdict(
     heading alike. A stranger's line that ``VERDICT`` reads is listed as
     refused, while a stranger's near miss is not listed at all, so a stranger
     cannot fill the summary. A stranger's pass heading counts for nothing. In
-    an owner's comment, a line
-    that looks meant as a marker and is not read is listed as unread, which
-    includes an order or after line, since those count only in a body.
+    an owner's comment, a line that looks meant as a marker and is not read is
+    listed as unread, which includes an order or after line, since those count
+    only in a body, and a pass count longer than ``MAX_DIGITS``. A verdict not
+    read leaves the one before it standing.
 
     A plan finished with no verdict when the owner's newest ``## Plan audit,
     pass N`` heading comes after the newest verdict, or when a heading exists
@@ -1192,7 +1343,7 @@ def latest_verdict(
             last_pass = (i, heading.start())
         for kind, line, offset in _marker_lines(text):
             m = VERDICT.match(line) if kind == "verdict" else None
-            if m:
+            if m and _short(m.group(2)):
                 found, verdict_at = (m.group(1), int(m.group(2))), (i, offset)
             else:
                 notes.unread.add((n, MARKER_NAME[kind]))
@@ -1299,6 +1450,7 @@ def build(
     review_heading: str = "",
     settled_rollup: str = "",
     milestone_default: str = "",
+    owner_body_lines: str = "",
 ) -> tuple[dict, dict]:
     """The board, and what the job summary reports about the read.
 
@@ -1317,13 +1469,16 @@ def build(
     only when it is set, so a caller setting none gets the board it got
     before.
 
-    ``default_branch_head``, ``label_colors``, ``sort_labels`` and
-    ``settled_rollup`` are each empty or ``true``, read by ``switch``.
+    ``default_branch_head``, ``label_colors``, ``sort_labels``,
+    ``settled_rollup`` and ``owner_body_lines`` are each empty or ``true``,
+    read by ``switch``.
     ``label_colors`` writes ``state.labelColors``, each card label's colour as
     GitHub stores it, and ``sort_labels`` sorts each card's labels by name.
     ``review_heading`` names the heading that closes a review, and
     ``settled_rollup`` set to ``true`` settles the rollup, as ``pr_items``
     says. An empty one keeps the rule from before either existed.
+    ``owner_body_lines`` set to ``true`` reads ``Board order:`` and
+    ``Board after:`` lines only from an issue the owner opened.
 
     ``milestone_default`` names the milestone the page opens on, such as
     ``MVP <n>``, and an empty one draws no milestone selector. Only a named one
@@ -1332,7 +1487,7 @@ def build(
     before the input existed. It takes a pattern rather than empty or
     ``true``, so ``milestone_pattern`` reads it rather than ``switch``.
 
-    The data label, the note, the four on-or-off inputs, the review heading
+    The data label, the note, the five on-or-off inputs, the review heading
     and the milestone default are checked before anything is read from GitHub.
     """
     kinds_read = kind_labels(data_label)
@@ -1343,6 +1498,7 @@ def build(
     settle = switch("settled-rollup", settled_rollup)
     fields = pr_fields(review_rule(review_heading) is not None, settle)
     milestone_pattern(milestone_default)
+    owner_lines = switch("owner-body-lines", owner_body_lines)
     owner, name = repo.split("/", 1)
     main = head_commit(gql, owner, name) if head else None
     issues = _top_pages(gql, ISSUES_QUERY, owner, name, "issues")
@@ -1364,7 +1520,7 @@ def build(
         names = [lb["name"] for lb in nodes]
         body = issue.get("body") or ""
         by_owner = issue.get("authorAssociation") == "OWNER"
-        orders, after_texts = read_body(n, body, by_owner, notes=notes)
+        orders, after = read_body(n, body, by_owner, notes=notes, repo=repo, owner_only=owner_lines)
         card = tracker_card(
             gql,
             issue,
@@ -1373,16 +1529,10 @@ def build(
             repo,
             conflicts,
             kinds_read,
-            by_name,
-            after_texts=after_texts,
+            sort_labels=by_name,
+            after=after,
             cut=bool(milestone_default),
         )
-        # A card cannot wait on itself, so `tracker_card` leaves a line naming
-        # only the card itself with nothing to set.
-        for text in after_texts:
-            refs = AFTER_REF.findall(text)
-            if refs and all(int(r) == n for r in refs):
-                notes.dropped.add((n, "Board after, naming itself"))
         data_carried += bool(data_label) and data_label in names
         tracker.append(card)
         if colours_wanted:
@@ -1561,12 +1711,19 @@ def cmd_build(args: argparse.Namespace) -> None:
         review_heading=args.review_heading,
         settled_rollup=args.settled_rollup,
         milestone_default=args.milestone_default,
+        owner_body_lines=args.owner_body_lines,
     )
+    try:
+        # `allow_nan=False` refuses a number JavaScript's `JSON.parse` cannot
+        # read, which would leave the page drawing nothing. `MAX_DIGITS` leaves
+        # no read that writes one, so this guards a later change. The failed
+        # run keeps the last good board up and says why in the summary.
+        text = json.dumps(board, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except ValueError as e:
+        raise BoardError(f"board.json would carry a number JSON cannot hold: {e}") from e
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "board.json").write_text(
-        json.dumps(board, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
-    )
+    (out / "board.json").write_text(text, encoding="utf-8")
     updated = board["state"]["updatedAt"]
     _output("updated_at", updated)
     # A misspelt pattern matches nothing and fails no read, so the row says what
@@ -1745,6 +1902,11 @@ def main(argv: list[str] | None = None) -> int:
         "--milestone-default",
         default="",
         help="the milestone the page opens on, such as 'MVP <n>', no selector if empty",
+    )
+    b.add_argument(
+        "--owner-body-lines",
+        default="",
+        help="true to read order and after lines only from the owner's issues, empty for anyone's",
     )
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("measure", help="time how long a deployed board takes to be served")

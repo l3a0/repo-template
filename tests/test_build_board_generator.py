@@ -43,6 +43,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -447,6 +448,17 @@ def test_a_part_of_reference_after_a_fence_counts_in_a_crlf_body() -> None:
     gh = FakeGitHub([issue(482)], [pull(481, body=body)])
     board, _ = build(gh)
     assert [(p["pr"], p["issue"], p.get("partOf")) for p in prs_of(board)] == [(481, 482, True)]
+
+
+def test_a_crlf_inside_a_code_span_keeps_its_paragraph() -> None:
+    """Protects a ``Part of`` quoted in a code span that crosses a CRLF line end.
+
+    Each ``\\r\\n`` is one line end. Read as ``\\r`` and ``\\n`` apart, it
+    would be a blank line, which ends the paragraph, so the span would never
+    close and the quoted reference would count.
+    """
+    gh = FakeGitHub([issue(4)], [pull(20, body="`x\r\nPart of #4`")])
+    assert prs_of(build(gh)[0]) == []
 
 
 @pytest.mark.parametrize(
@@ -2082,7 +2094,7 @@ def test_the_issues_query_reads_each_issues_author() -> None:
         ("Board order 3", "Board order"),
         ("**Board order**: 3", "Board order"),
         ("- Board Order: 3", "Board order"),
-        ("Board order: 3\r", "Board order"),
+        ("Board order: 1234567890123456", "Board order"),
         ("Board after: soon", "Board after"),
         ("Board after: 3", "Board after"),
         ("Board after", "Board after"),
@@ -2171,7 +2183,7 @@ def test_an_unbanded_cards_near_miss_is_listed_as_unread() -> None:
         ("Board after: #2", ["Board after"]),
         ("Board verdict: ready after 5 passes", ["Board verdict"]),
         ("**Board verdict**: build after 5 passes", ["Board verdict"]),
-        ("Board verdict: build after 5 passes\r", ["Board verdict"]),
+        ("Board verdict: build after 1234567890123456 passes", ["Board verdict"]),
         ("Board verdict: decide after", ["Board verdict"]),
         ("Board verd\u0130ct: build after 5 passes", ["Board verdict"]),
         ("Board verd\u0131ct: build after 5 passes", ["Board verdict"]),
@@ -2426,6 +2438,8 @@ def test_an_order_on_a_card_with_no_band_is_listed_as_dropped() -> None:
         ("Board after: #5, #2\n", False),
         ("Board after: #2\n", False),
         ("Board after: #7\n", False),
+        ("Board after: octo-org/octo-repo#5\n", True),
+        ("Board after: other/repo#3 #5\n", False),
     ],
 )
 def test_an_after_line_naming_only_its_own_card_is_listed_as_dropped(
@@ -2434,7 +2448,9 @@ def test_an_after_line_naming_only_its_own_card_is_listed_as_dropped(
     """Protects an after line that can never hold its card from vanishing unseen.
 
     A line naming another issue too still sets something, and a line naming a
-    closed issue is a blocker that has finished, so neither is listed.
+    closed issue is a blocker that has finished, so neither is listed. A line
+    whose other reference was refused is listed as refused rather than
+    dropped, because it named something besides the card.
     """
     board, report = build(FakeGitHub([issue(2), issue(5, body=body)], []))
     assert report["dropped"] == ([(5, "Board after, naming itself")] if dropped else [])
@@ -2489,7 +2505,6 @@ def test_every_marker_shape_reaches_its_row() -> None:
         (1, "Board after"),
         (1, "Board order"),
         (1, "Board verdict"),
-        (2, "Board order"),
         (7, "Board order"),
         (7, "Board verdict"),
     ]
@@ -2502,7 +2517,7 @@ def test_every_marker_shape_reaches_its_row() -> None:
     assert "#6 carries 2 order lines, read as 4" in report["label_conflicts"]
 
 
-GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
+MARKERS_GOLDEN = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "markers.json"
 
 
 class FrozenNow(datetime):
@@ -2519,15 +2534,541 @@ def test_the_marker_rows_change_nothing_in_the_board(
     """Protects every caller that sets no input from a board that moves.
 
     The rows list what the board did not use, so the board itself has to stay
-    as it was. ``GOLDEN`` is the ``board.json`` that the command line at
+    as it was. ``MARKERS_GOLDEN`` is the ``board.json`` that the command line at
     l3a0/repo-template commit cf2959a3 wrote for ``marker_tracker``, and this
-    run has to write the same bytes. The file is read as the command line
-    writes it, so a change to how it is written fails here too.
+    run has to write the same bytes but one. The file is read as the command
+    line writes it, so a change to how it is written fails here too. #2's body
+    ends its lines with ``\\r\\n``, so cf2959a3 lost its order line, and
+    since l3a0/repo-template#48 the generator reads it. No current caller's
+    data carries a ``\\r``.
     """
     monkeypatch.setattr(bb, "datetime", FrozenNow)
     summary_of(monkeypatch, tmp_path, marker_tracker(), "--data-label", DATA_LABEL)
     written = (tmp_path / "site" / "board.json").read_bytes()
-    assert written == GOLDEN.read_bytes().removesuffix(b"\n")
+    golden = MARKERS_GOLDEN.read_bytes().removesuffix(b"\n")
+    lost = b'{"issue":2,"band":2,"ready":"plan"}'
+    assert golden.count(lost) == 1
+    assert written == golden.replace(lost, b'{"issue":2,"band":2,"ready":"plan","order":5}')
+
+
+def compat_tracker() -> FakeGitHub:
+    """A tracker holding the order lines, after lines, references and blockers
+    that l3a0/repo-template#48 reads differently, each in a form both readers
+    read alike.
+
+    Strangers' issues carry lines, an after line names this repository by
+    name, a blocker and a closing link name it in GitHub's spelling, and every
+    number is short.
+    """
+    return FakeGitHub(
+        [
+            issue(
+                1,
+                labels=("band:1",),
+                body="Board order: 3\nBoard after: #2, octo-org/octo-repo#4 and #99\n",
+            ),
+            issue(
+                2,
+                labels=("band:2",),
+                body="Board order: 2.5\nBoard after: #1\n",
+                association="NONE",
+            ),
+            issue(
+                3,
+                labels=("band:1",),
+                body="Board order: -1\n",
+                association="CONTRIBUTOR",
+                comments=(("OWNER", "Board verdict: build after 4 passes"),),
+                mentioned_by=(22,),
+            ),
+            issue(
+                4,
+                blocked_by=((2, "OPEN"), (7, "OPEN", "other/repo"), (1, "CLOSED")),
+                comments=(("NONE", VERDICT_LINE),),
+            ),
+            issue(5, body="Board after: #4\n", association="MEMBER", closed_by=(21,)),
+        ],
+        [
+            pull(20, body="Part of #4"),
+            pull(21, closes=(5,)),
+            pull(22, state="MERGED", body="Part of #3"),
+        ],
+    )
+
+
+COMPAT = REPO_ROOT / "tests" / "fixtures" / "build_board_generator" / "compat.json"
+
+
+def test_a_caller_that_sets_no_input_gets_the_board_it_got_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects every caller that sets no input from a board that moves.
+
+    ``COMPAT`` is the ``board.json`` that the generator at l3a0/repo-template
+    commit cf2959a3 wrote for ``compat_tracker``, and this run has to write the
+    same bytes. The file is read as the command line writes it, so a change to
+    how it is written fails here too. A stranger's lines still count, and a
+    reference to this repository by name still reads, until a caller sets
+    ``owner-body-lines``.
+    """
+    monkeypatch.setattr(bb, "datetime", FrozenNow)
+    summary_of(monkeypatch, tmp_path, compat_tracker())
+    written = (tmp_path / "site" / "board.json").read_bytes()
+    assert written == COMPAT.read_bytes().removesuffix(b"\n")
+
+
+# ---- Marker lines from strangers, other repositories and long numbers ----
+
+# Two open issues numbered with 15 digits and with 16, so a reference to either
+# can only reach the board by being read.
+FIFTEEN = 123456789012345
+SIXTEEN = 1234567890123456
+# More digits than Python 3.12 turns into an ``int``, which raises
+# ``ValueError`` past 4,300.
+HUGE = "9" * 4301
+
+
+@pytest.mark.parametrize(
+    ("order", "read"),
+    [
+        (str(FIFTEEN), FIFTEEN),
+        ("1234567890.12345", 1234567890.12345),
+        (str(SIXTEEN), None),
+        ("1234567890.123456", None),
+        ("9" * 400, None),
+    ],
+)
+def test_an_order_longer_than_fifteen_digits_is_not_read(order: str, read: object) -> None:
+    """Protects the page from an order it cannot draw.
+
+    JavaScript reads every number as a double, which holds 15 digits exactly.
+    A 400-digit order is infinity, which ``board.json`` cannot carry. An order
+    that is not read is listed as unread in the owner's body.
+    """
+    gh = FakeGitHub([issue(1, labels=("band:1",), body=f"Board order: {order}\n")], [])
+    board, report = build(gh)
+    [entry] = board["next"]["items"]
+    if read is None:
+        assert "order" not in entry
+        assert report["unread"] == [(1, "Board order")]
+    else:
+        assert entry["order"] == read
+        assert report["unread"] == []
+    json.dumps(board, allow_nan=False)
+
+
+# Each form a `Board after:` line can name an issue in, with `{n}` for its number.
+AFTER_FORMS = [
+    "#{n}",
+    "octo-org/octo-repo#{n}",
+    "[#{n}](https://github.com/octo-org/octo-repo/issues/{n})",
+]
+
+
+@pytest.mark.parametrize("form", AFTER_FORMS)
+@pytest.mark.parametrize(("number", "read"), [(FIFTEEN, True), (SIXTEEN, False)])
+def test_an_after_reference_longer_than_fifteen_digits_is_no_reference(
+    number: int, read: bool, form: str
+) -> None:
+    """Protects the read of a stranger's line from a number ``int()`` refuses.
+
+    Every form a reference takes has the limit, because each one is turned
+    into an ``int``.
+    """
+    line = form.format(n=number)
+    gh = FakeGitHub([issue(1, body=f"Board after: {line}\n"), issue(number)], [])
+    board, report = build(gh)
+    assert card(board, 1).get("after") == ([number] if read else None)
+    assert report["unread"] == ([] if read else [(1, "Board after")])
+
+
+@pytest.mark.parametrize(("number", "read"), [(FIFTEEN, True), (SIXTEEN, False)])
+def test_a_pass_count_longer_than_fifteen_digits_leaves_the_last_verdict(
+    number: int, read: bool
+) -> None:
+    """Protects a planned card from a verdict whose count ``int()`` refuses."""
+    comments = (
+        ("OWNER", VERDICT_LINE),
+        ("OWNER", f"Board verdict: decide after {number} passes"),
+    )
+    board, report = build(FakeGitHub([issue(1, comments=comments)], []))
+    if read:
+        assert board["planned"]["items"] == [{"n": 1, "passes": number, "ready": "decide"}]
+        assert report["unread"] == []
+    else:
+        assert board["planned"]["items"] == [{"n": 1, "passes": 2, "ready": "build"}]
+        assert report["unread"] == [(1, "Board verdict")]
+
+
+@pytest.mark.parametrize(("number", "read"), [(FIFTEEN, True), (SIXTEEN, False)])
+def test_a_part_of_reference_longer_than_fifteen_digits_is_no_reference(
+    number: int, read: bool
+) -> None:
+    """Protects the run from a branch whose ``Part of`` number ``int()`` refuses."""
+    gh = FakeGitHub([issue(number)], [pull(20, body=f"Part of #{number}")])
+    items = prs_of(build(gh)[0])
+    assert [p["issue"] for p in items] == ([number] if read else [])
+
+
+def test_a_number_too_long_for_int_still_builds_the_board() -> None:
+    """Protects every board run from one stranger's issue.
+
+    Before the limit, a ``Board after:`` line carrying more than 4,300 digits
+    made ``int()`` raise, and every run failed until someone edited the issue.
+    A pass count and a ``Part of`` number reached the same error, and a long
+    order reached ``Infinity``.
+    """
+    gh = FakeGitHub(
+        [
+            issue(
+                1,
+                body="".join(f"Board after: {form.format(n=HUGE)}\n" for form in AFTER_FORMS),
+                association="NONE",
+            ),
+            issue(2, labels=("band:1",), body=f"Board order: {HUGE}\n"),
+            issue(3, comments=(("OWNER", f"Board verdict: build after {HUGE} passes"),)),
+        ],
+        [pull(20, body=f"Part of #{HUGE}")],
+    )
+    board, report = build(gh)
+    assert "after" not in card(board, 1)
+    assert board["next"]["items"] == [{"issue": 2, "band": 1, "ready": "plan"}]
+    assert board["planned"]["items"] == []
+    assert prs_of(board) == []
+    assert report["unread"] == [(2, "Board order"), (3, "Board verdict")]
+    json.dumps(board, allow_nan=False)
+
+
+def test_a_board_json_cannot_carry_fails_the_run_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the page from a ``board.json`` that ``JSON.parse`` refuses.
+
+    Python writes infinity as ``Infinity``, which is not JSON, so the page
+    would draw nothing. The run stops instead, keeps the last good board up,
+    and says why where the run's page shows it rather than as a traceback.
+    """
+    real = bb.build
+
+    def build_with_infinity(*args: object, **kwargs: object) -> tuple[dict, dict]:
+        board, report = real(*args, **kwargs)
+        board["next"]["items"] = [{"issue": 1, "band": 1, "ready": "plan", "order": float("inf")}]
+        return board, report
+
+    fake = FakeGitHub([issue(1)], [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    monkeypatch.setattr(bb, "build", build_with_infinity)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+    assert bb.main(argv) == 1
+    assert not (out / "board.json").exists()
+    text = summary.read_text()
+    assert "## Board run failed" in text
+    assert "build_board: board.json would carry a number JSON cannot hold" in text
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "```\r\ncode\r\n```\r\nBoard order: 3\r\nBoard after: #2\r\n",
+        "```\rcode\r```\rBoard order: 3\rBoard after: #2\r",
+        "```\ncode\n```\nBoard order: 3\nBoard after: #2\n",
+    ],
+    ids=["crlf", "cr", "lf"],
+)
+def test_a_body_is_read_through_any_line_ending(body: str) -> None:
+    """Protects an order the owner edited in a browser from being lost.
+
+    GitHub's web editor saves ``\\r\\n``. Read with the ``\\r`` on it, an order
+    line failed its pattern with nothing said, and the fence's closing line
+    never matched, so the fence removed every marker after it.
+    """
+    gh = FakeGitHub([issue(1, labels=("band:1",), body=body), issue(2)], [])
+    board, report = build(gh)
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 3}]
+    assert card(board, 1)["after"] == [2]
+    assert report["unread"] == []
+
+
+@pytest.mark.parametrize("end", ["\r\n", "\r", "\n"], ids=["crlf", "cr", "lf"])
+def test_a_comment_is_read_through_any_line_ending(end: str) -> None:
+    """Protects a verdict the owner posted from a browser from being lost."""
+    text = end.join(["## Plan audit, pass 3", "", "```", "x", "```", VERDICT_LINE, ""])
+    board, report = build(FakeGitHub([issue(1, comments=(("OWNER", text),))], []))
+    assert board["planned"]["items"] == [{"n": 1, "passes": 2, "ready": "build"}]
+    assert report["unread"] == []
+    assert report["no_verdict"] == []
+
+
+def test_a_fence_in_a_crlf_body_still_hides_what_it_quotes() -> None:
+    """Protects the fence rule once the fence closes, so it still quotes."""
+    body = "```\r\nBoard order: 9\r\n```\r\nBoard order: 3\r\n"
+    board, _ = build(FakeGitHub([issue(1, labels=("band:1",), body=body)], []))
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 3}]
+
+
+@pytest.mark.parametrize("run_repo", [REPO, "Octo-Org/Octo-Repo"])
+@pytest.mark.parametrize(
+    "spelling", ["octo-org/octo-repo", "Octo-Org/Octo-Repo", "OCTO-ORG/OCTO-REPO"]
+)
+def test_a_repository_is_the_same_whatever_its_case(spelling: str, run_repo: str) -> None:
+    """Protects a reference typed in another case from reading as another repository.
+
+    GitHub treats an owner and a repository named in any case as the same one,
+    so the run's own name is folded too, not only the name each reference
+    carries.
+    """
+    gh = FakeGitHub(
+        [
+            issue(1, blocked_by=((2, "OPEN", spelling),)),
+            issue(2),
+            issue(3, body=f"Board after: {spelling}#2\n"),
+            issue(4, body=f"Board after: [#2](https://github.com/{spelling}/issues/2)\n"),
+            issue(5),
+        ],
+        [pull(20, closes=((5, spelling),))],
+    )
+    board, report = bb.build(gh, run_repo, 30, NOW)
+    assert card(board, 1)["needs"] == [2]
+    assert card(board, 3)["after"] == [2]
+    assert card(board, 4)["after"] == [2]
+    assert [p["issue"] for p in prs_of(board)] == [5]
+    assert report["refused"] == []
+
+
+OTHER = "Board after, naming another repository"
+DISAGREE = "Board after, link and number disagree"
+HERE = "https://github.com/octo-org/octo-repo"
+
+
+@pytest.mark.parametrize(
+    ("line", "after", "refused"),
+    [
+        ("#2", [2], []),
+        ("octo-org/octo-repo#2", [2], []),
+        (f"[#2]({HERE}/issues/2)", [2], []),
+        (f"[#2]({HERE}/pull/2)", [2], []),
+        (f"[#2]({HERE}/issues/2#issuecomment-5)", [2], []),
+        (f"[#2]({HERE}/pull/2/files)", [2], []),
+        ("other/repo#2", None, [OTHER]),
+        ("[#2](https://github.com/other/repo/issues/2)", None, [OTHER]),
+        ("[#2](https://example.com/issues/2)", None, [OTHER]),
+        (f"[#2]({HERE}/issues/3)", None, [DISAGREE]),
+        ("other/repo#3 [#4](https://github.com/o/r/issues/5)", None, [OTHER]),
+        (f"other/repo#3, [#4]({HERE}/issues/5), #2", [2], [DISAGREE, OTHER]),
+        ("x#2 and a/#3", None, []),
+        (f"[#2]({HERE}/issues/2x)", None, [OTHER]),
+        # Three behaviours ported from l3a0/marketlake and named on #48. A
+        # `#N` right after `/`, `-`, `.` or a word character is skipped with
+        # nothing listed.
+        ("#3/#4", [3], []),
+        ("#3-#4", [3], []),
+        ("repo-template#3 #4", [4], []),
+        # A link to an address that is not an issue's is refused as naming
+        # another repository, and a zero-padded number as a disagreement.
+        ("[#2](../issues/2)", None, [OTHER]),
+        (f"[#2]({HERE}/discussions/2)", None, [OTHER]),
+        (f"[#2]({HERE}/issues/02)", None, [DISAGREE]),
+        # A link that opens with `[#N](` and that `LINK_REF` cannot read is
+        # refused, so its `#N` never reads as an issue here.
+        ('[#2](https://github.com/other/repo/issues/2 "title")', None, [OTHER]),
+        ("[#2]( https://github.com/other/repo/issues/2)", None, [OTHER]),
+        ("[#2](https://github.com/other/repo/issues/2(x))", None, [OTHER]),
+        # A reference-style link names no address on the line, so it reads as
+        # its `#N`.
+        ("[#2][ref]", [2], []),
+        ("[#2](https://gitlab.com/octo-org/octo-repo/issues/2)", None, [OTHER]),
+        (
+            "[#2](https://evil.example/https://github.com/octo-org/octo-repo/issues/2)",
+            None,
+            [OTHER],
+        ),
+        ("x-#2 and x.#2", None, []),
+        (f"[#2]({HERE}/issues/2#3)", [2], []),
+    ],
+)
+def test_each_reference_shape_on_an_after_line(
+    line: str, after: list[int] | None, refused: list[str]
+) -> None:
+    """Protects ``after`` from an issue number that belongs to another repository.
+
+    Read as a bare ``#N``, another repository's number would order the card
+    behind an issue here it does not mean. A link whose text and address name
+    different numbers is refused too, because nothing says which was meant. A
+    refused reference leaves the rest of its line read, and a line naming
+    nothing at all is listed as unread.
+    """
+    gh = FakeGitHub(
+        [issue(1, body=f"Board after: {line}\n"), *(issue(n) for n in (2, 3, 4, 5))], []
+    )
+    board, report = build(gh)
+    assert card(board, 1).get("after") == after
+    assert report["refused"] == [(1, phrase) for phrase in refused]
+    assert report["unread"] == ([] if after or refused else [(1, "Board after")])
+
+
+def test_a_strangers_refused_reference_is_listed_once_a_kind() -> None:
+    """Protects the summary from a stranger filling it with refused references."""
+    line = " ".join(f"other/repo#{i} [#{i}]({HERE}/issues/{i + 1})" for i in range(50))
+    gh = FakeGitHub([issue(1, body=f"Board after: {line}\n" * 3, association="NONE")], [])
+    _, report = build(gh)
+    assert report["refused"] == [(1, DISAGREE), (1, OTHER)]
+
+
+STRANGER_BODY = "Board order: 4\nBoard after: #2\n"
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "MEMBER"])
+def test_owner_body_lines_refuses_a_strangers_order_and_after(association: str) -> None:
+    """Protects the order from a stranger's body, once the caller asks for that.
+
+    Anyone can open an issue on a public repository. With the input empty a
+    stranger's lines count, as they always have. With it ``true`` they set
+    nothing, and each kind is listed as refused.
+    """
+    issues = [issue(1, labels=("band:1",), body=STRANGER_BODY, association=association), issue(2)]
+    board, report = bb.build(FakeGitHub(issues, []), REPO, 30, NOW, owner_body_lines="true")
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan"}]
+    assert "after" not in card(board, 1)
+    assert report["refused"] == [
+        (1, "Board after, not the owner's"),
+        (1, "Board order, not the owner's"),
+    ]
+    assert report["unread"] == []
+    board, report = build(FakeGitHub(issues, []))
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
+    assert card(board, 1)["after"] == [2]
+    assert report["refused"] == []
+
+
+def test_owner_body_lines_still_reads_the_owners_body() -> None:
+    """Protects the owner's own lines once the input is on."""
+    issues = [issue(1, labels=("band:1",), body=STRANGER_BODY), issue(2)]
+    board, report = bb.build(FakeGitHub(issues, []), REPO, 30, NOW, owner_body_lines="true")
+    assert board["next"]["items"] == [{"issue": 1, "band": 1, "ready": "plan", "order": 4}]
+    assert card(board, 1)["after"] == [2]
+    assert report["refused"] == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Board order: first\nBoard after soon\n",
+        "```\nBoard order: 4\nBoard after: #2\n```\n",
+        "See Board order: 4 in the skill.\n",
+        "",
+    ],
+)
+def test_owner_body_lines_refuses_only_lines_that_would_count(body: str) -> None:
+    """Protects the refused row from listing a stranger's prose or quotes."""
+    issues = [issue(1, body=body, association="NONE"), issue(2)]
+    _, report = bb.build(FakeGitHub(issues, []), REPO, 30, NOW, owner_body_lines="true")
+    assert report["refused"] == []
+    assert report["unread"] == []
+
+
+@pytest.mark.parametrize("value", ["yes", "True", "TRUE", "1", "false", " true", "true "])
+def test_an_owner_body_lines_value_other_than_empty_or_true_stops_the_run(value: str) -> None:
+    """Protects a caller that misspells the input from strangers' lines counting.
+
+    The run stops before it reads GitHub, as a refused data label does.
+    """
+    fake = FakeGitHub([issue(1)], [])
+    with pytest.raises(bb.BoardError, match="owner-body-lines"):
+        bb.build(fake, REPO, 30, NOW, owner_body_lines=value)
+    assert fake.calls == []
+
+
+def test_the_command_line_passes_owner_body_lines_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protects the reusable workflow's ``owner-body-lines`` input on its way to the read.
+
+    The workflow passes the input as ``--owner-body-lines`` whether or not the
+    caller set it, so an empty value has to read anyone's body, and a refused
+    one has to fail the run with its reason in the summary.
+    """
+    issues = [issue(1, labels=("band:1",), body=STRANGER_BODY, association="NONE"), issue(2)]
+    fake = FakeGitHub(issues, [])
+    fake.requests, fake.retries, fake.cost = 1, 0, 1
+    monkeypatch.setattr(bb, "GhGraphql", lambda: fake)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    out = tmp_path / "site"
+    argv = ["build", "--repo", REPO, "--workflow", str(WORKFLOW), "--out", str(out)]
+
+    def entry() -> dict:
+        return json.loads((out / "board.json").read_text())["next"]["items"][0]
+
+    assert bb.main([*argv, "--owner-body-lines=true"]) == 0
+    assert "order" not in entry()
+    assert summary_row(summary.read_text(), "Marker lines refused") == (
+        "#1 Board after, not the owner's; #1 Board order, not the owner's"
+    )
+    assert bb.main([*argv, "--owner-body-lines="]) == 0
+    assert entry()["order"] == 4
+    assert bb.main(argv) == 0
+    assert entry()["order"] == 4
+    (out / "board.json").unlink()
+    summary.unlink()
+    assert bb.main([*argv, "--owner-body-lines=yes"]) == 1
+    assert not (out / "board.json").exists()
+    assert "build_board: the owner-body-lines input 'yes' is neither empty nor true" in (
+        summary.read_text()
+    )
+
+
+# A 65,000-character line of each shape. Anyone can write an issue body, and the
+# build job has a 10-minute limit. The link pattern l3a0/marketlake uses
+# retried the rest of the line from every `[#N](` no `)` closed, and the first
+# shape took 9.6 s through it. Every shape here took under 6 ms through the
+# patterns ported, so a second leaves room for a loaded runner.
+HOSTILE = [
+    "[#1](",
+    "[#1](https://github.com/",
+    "[#1](https://github.com/a/b/issues/",
+    "a",
+    "/",
+    "1",
+    "#",
+    "#1",
+    "a/",
+    "a/b#",
+    ".-",
+    "[",
+    "](",
+]
+
+
+@pytest.mark.parametrize("shape", HOSTILE)
+def test_a_long_hostile_after_line_reads_inside_a_second(shape: str) -> None:
+    """Protects every board run from a stranger's line built to be slow to read."""
+    line = "Board after: " + shape * (65_000 // len(shape))
+    gh = FakeGitHub([issue(1, body=f"{line}\n", association="NONE")], [])
+    start = time.perf_counter()
+    build(gh)
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize("run", ["`" * 65_536, "~" * 65_536], ids=["backticks", "tildes"])
+def test_a_long_fence_run_with_no_newline_reads_inside_a_second(run: str) -> None:
+    """Protects every board run from a stranger's body or comment that opens no fence.
+
+    Every body and comment has its fences removed before anything checks who
+    wrote it. A greedy opening run tried every shorter run on a last line of
+    backticks with no newline after it, and 65,536 of them took about 3 s.
+    About 200 such comments would have run every caller's build past its
+    10-minute limit, whatever ``owner-body-lines`` said.
+    """
+    gh = FakeGitHub([issue(1, body=run, association="NONE", comments=(("NONE", run),))], [])
+    start = time.perf_counter()
+    build(gh)
+    assert time.perf_counter() - start < 1.0
 
 
 def test_an_issues_comments_and_blockers_are_read_to_their_end() -> None:
@@ -4463,6 +5004,7 @@ def test_the_schedule_stays_off_the_hour() -> None:
                 "inputs.review-heading",
                 "inputs.settled-rollup",
                 "inputs.milestone-default",
+                "inputs.owner-body-lines",
                 "job.workflow_repository",
                 "job.workflow_sha",
                 "steps.board.outputs.updated_at",
@@ -4500,6 +5042,7 @@ def test_no_step_reads_the_event_payload(path: Path, allowed: set[str]) -> None:
         ("sort-labels", "SORT_LABELS"),
         ("review-heading", "REVIEW_HEADING"),
         ("settled-rollup", "SETTLED_ROLLUP"),
+        ("owner-body-lines", "OWNER_BODY_LINES"),
     ):
         uses = re.findall(rf"^(.*)\$\{{\{{\s*inputs\.{key}\s*\}}\}}(.*)$", _called(), re.M)
         assert [(before.strip(), after) for before, after in uses] == [(f"{var}:", "")]
@@ -4546,8 +5089,10 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     data label reads no ``data`` kind, an empty subtitle, note,
     default-branch-head, label-colors or sort-labels leaves the board as it
     was, an empty review heading keeps the shared review rule, an empty
-    settled rollup keeps the rollup as GitHub lists it, and an empty
-    milestone default draws no selector. A switch such as
+    settled rollup keeps the rollup as GitHub lists it, an empty
+    milestone default draws no selector, and an empty
+    ``owner-body-lines`` reads body lines from anyone's issue, as every run
+    did before it. A switch such as
     ``settled-rollup`` is a string taking empty or ``true``. The README and
     the l3a0 plugin's update-build-board skill name the inputs by the keys
     declared here. The README quotes ``"true"``, because a bare ``true`` in
@@ -4570,6 +5115,7 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
         "review-heading",
         "settled-rollup",
         "milestone-default",
+        "owner-body-lines",
     ]
     for block in declared.values():
         assert "        type: string\n" in block
@@ -4586,6 +5132,7 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
     assert "    with:\n      review-heading: Review complete\n" in readme
     assert '    with:\n      settled-rollup: "true"\n' in readme
     assert "    with:\n      milestone-default: MVP <n>\n" in readme
+    assert '    with:\n      owner-body-lines: "true"\n' in readme
     page = _plugin("page.md")
     assert "`with: icon: <path>`" in page
     assert f"`with: data-label: {DATA_LABEL}`" in _skill()

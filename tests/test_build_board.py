@@ -2954,6 +2954,22 @@ def test_the_selector_lists_each_milestone_with_its_count(tmp_path: Path) -> Non
     assert text(ids, "mscount") == "2 of 6 open"
 
 
+def test_a_card_with_no_milestone_names_none_in_its_pill(tmp_path: Path) -> None:
+    """Protects the pill from drawing empty on a card with no milestone.
+
+    The generator writes ``ms`` as an empty string when an issue has no
+    milestone. The selector already names that "no milestone", and the card's
+    pill uses the same name rather than drawing a blank box beside the title.
+    """
+    docs = _ms_docs(
+        [(1, "MVP 2", "ready", ()), (2, "", "ready", ())], ranked=(1, 2), default=NO_DEFAULT
+    )
+    ids = draw(tmp_path, docs)
+    pill = r'data-n="(\d+)".*?<span class="sl">(.*?)</span>'
+    pills = re.findall(pill, ids["board"]["html"], re.S)
+    assert {int(n): name for n, name in pills} == {1: "MVP 2", 2: "no milestone"}
+
+
 @pytest.mark.parametrize(
     ("default", "chosen"),
     [("MVP 2", "MVP 2"), (None, MS_ALL), ("MVP 9", MS_ALL), (7, MS_ALL)],

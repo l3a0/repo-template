@@ -1355,7 +1355,7 @@ function buildOrder() {
         }${rank ? ` It is number ${rankPos.get(c.n) + 1} in the priority order.` : ""} Show what this connects to.">
         <div class="r1">
           <a class="id" href="${ISS}${c.n}" target="_blank" rel="noopener">#${c.n}</a>
-          <span class="sl">${esc(c.ms)}</span>
+          <span class="sl">${esc(msName(c.ms))}</span>
           ${rank ? `<span class="rk" title="priority order">${rankPos.get(c.n) + 1}</span>` : ""}
         </div>
         <div class="lb">${esc(c.label)}</div>

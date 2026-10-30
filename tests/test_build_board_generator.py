@@ -5754,9 +5754,13 @@ def test_every_input_is_an_optional_string_that_defaults_to_empty() -> None:
         "owner-body-lines",
         "ranking",
     ]
-    for block in declared.values():
-        assert "        type: string\n" in block
-        assert '        default: ""' in block
+    for name, block in declared.items():
+        # Anchored to the line's start, so a ``type`` indented into the folded
+        # description above it, which YAML reads as description text, fails.
+        # Exactly once each, so a second ``type`` or ``default`` line, which a
+        # merge that keeps both sides can leave, fails too.
+        assert re.findall(r"^ {8}type:.*$", block, re.M) == ["        type: string"], name
+        assert re.findall(r"^ {8}default:.*$", block, re.M) == ['        default: ""'], name
         assert "required" not in block
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "    with:\n      icon: .github/board/favicon.ico\n" in readme
@@ -5794,6 +5798,9 @@ def test_nothing_checks_out_a_pull_requests_code() -> None:
         "            .github/workflows/board.yml\n"
         "            ${{ inputs.icon }}\n"
     ) in caller
+    # Anchored, so the key indented into the sparse list above it, which YAML
+    # reads as a third path, fails here.
+    assert re.search(r"^ {10}sparse-checkout-cone-mode: false$", caller, re.M)
     assert "repository:" not in caller
     assert "actions/checkout" not in _workflow()
 
@@ -6019,7 +6026,8 @@ def test_the_page_published_is_the_checked_in_one() -> None:
     assert "cp template/.claude/skills/update-build-board/board.html _site/index.html" in flow
     assert "--workflow caller/.github/workflows/board.yml" in flow
     assert f"--workflow caller/{bb.BOARD_WORKFLOW}" in flow
-    assert f"            {bb.BOARD_WORKFLOW}\n" in flow.split("sparse-checkout: |\n", 1)[1]
+    sparse = flow.split("sparse-checkout: |\n", 1)[1]
+    assert re.search(rf"^ {{12}}{re.escape(bb.BOARD_WORKFLOW)}$", sparse, re.M)
 
 
 def _add_the_page(

@@ -93,6 +93,29 @@ Two conventions keep [docs/design.md](docs/design.md) usable as the project grow
 
 One lesson is worth keeping in view. Reviews armor what exists. They rarely ask whether it should exist. Ask "why is this needed" before "is this correct."
 
+## Design for 100x, across the whole lifecycle
+
+The owner's global `~/.claude/CLAUDE.md` is the source for these two rules. This section repeats them because the repo is public and a reader or an agent may arrive without that file. The global file wins, and this section is what gets corrected.
+
+**Design for 100x, build at 1x (owner directive, 2026-11-02).** Every architecture is designed for 100 times the load it first carries, and its first version, the MVP, is built at that first load. A design passes when reaching 100x takes configuration and more infrastructure, such as more instances, more machines or more partitions, and no rewrite of a component, a file format or a rule. The parts that only matter at 100x are designed now, built when load calls for them, and drilled before anything relies on them. This fits the ranking rule, because a path that has run zero times is the one to defer. On 2026-11-02 an architecture review had written a cluster of three VMs into a first slice, and the owner moved the cluster to the scale-out path and started the slice on one VM.
+
+**Weigh the whole lifecycle (owner directive, 2026-11-02).** A design considers every stage of the software development lifecycle, from planning, building and testing through deploying and operating to retiring, and follows best practice for ten qualities.
+
+1. Scalability.
+2. Availability.
+3. Security.
+4. Operability.
+5. Monitoring.
+6. Auditing.
+7. Testing.
+8. Performance.
+9. Usability.
+10. Deployment.
+
+A design that serves one stage and breaks another, such as a fast path no test can reach or a deployment nobody can roll back, is not finished. A design pull request says which of the ten it changes and what each change costs. A quality it leaves untouched needs no line.
+
+The design doc's own principles section is where a repo records how it applies them.
+
 ## Markdown hygiene
 
 Every `.md` file must pass markdownlint, which CI runs on every pull request. The rules that bite most: use real headings, never a bold line as a heading (MD036). No trailing whitespace (MD009). No stacked blank lines (MD012). End the file with exactly one newline (MD047). Table delimiter rows use single-space padding, so `| --- |` and never `|---|` (MD060). Escape an "approximately" tilde in prose as `\~`, since a bare tilde can render as strikethrough on some surfaces. Code fences are exempt.

@@ -7,6 +7,8 @@
 ## Contents
 
 - [Premise](#premise)
+- [Design for 100x, build at 1x](#design-for-100x-build-at-1x)
+- [Every design weighs the whole lifecycle](#every-design-weighs-the-whole-lifecycle)
 - [How work is cut and ordered](#how-work-is-cut-and-ordered)
 - [Vocabulary](#vocabulary)
 - [Configuration](#configuration)
@@ -26,6 +28,24 @@
      Name the equivalent asymmetry here. If nothing in the project is
      irreversible, say that, because it changes what the ranking rule in
      CLAUDE.md protects. -->
+
+TODO.
+
+## Design for 100x, build at 1x
+
+<!-- TEMPLATE: say what this project's first load is, what 100 times it
+     would be, what carries the design to 100x without a rewrite, how load
+     is measured and what alarm says it nears the 1x limit, and which
+     100x parts are designed now and built later. CLAUDE.md carries the
+     rule. -->
+
+TODO.
+
+## Every design weighs the whole lifecycle
+
+<!-- TEMPLATE: for each of the ten qualities CLAUDE.md lists, point at the
+     section of this doc or the code that carries it, or say that the
+     project does not have it yet. -->
 
 TODO.
 

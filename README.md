@@ -14,8 +14,9 @@ from whichever copy it was cloned off.
 ## What it carries
 
 - **[CLAUDE.md](CLAUDE.md)** is the agent instruction file. Scope authority,
-  how to rank work, plan audits, writing style, markdown hygiene, secrets,
-  committing, pull request review and the build board. It has template slots,
+  how to rank work, plan audits, writing style, designing for 100x across
+  the whole lifecycle, markdown hygiene, secrets, committing, pull request
+  review and the build board. It has template slots,
   marked as HTML comments, for what only the new repo can say, such as its
   premise and what each band on its board means.
 - **[.github/workflows/ci.yml](.github/workflows/ci.yml)** runs two jobs. `test`

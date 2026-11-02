@@ -95,9 +95,9 @@ One lesson is worth keeping in view. Reviews armor what exists. They rarely ask 
 
 ## Design for 100x, across the whole lifecycle
 
-The owner's global `~/.claude/CLAUDE.md` is the source for these two rules. This section repeats them because the repo is public and a reader or an agent may arrive without that file. The global file wins, and this section is what gets corrected.
+The owner's global `~/.claude/CLAUDE.md` is the source for these two rules. This section repeats them because the repo is public and a reader or an agent may arrive without that file. The price is that the two copies can drift. The global file wins, and this section is what gets corrected.
 
-**Design for 100x, build at 1x (owner directive, 2026-11-02).** Every architecture is designed for 100 times the load it first carries, and its first version, the MVP, is built at that first load. A design passes when reaching 100x takes configuration and more infrastructure, such as more instances, more machines or more partitions, and no rewrite of a component, a file format or a rule. The parts that only matter at 100x are designed now, built when load calls for them, and drilled before anything relies on them. This fits the ranking rule, because a path that has run zero times is the one to defer. On 2026-11-02 an architecture review had written a cluster of three VMs into a first slice, and the owner moved the cluster to the scale-out path and started the slice on one VM.
+**Design for 100x, build at 1x (owner directive, 2026-11-02).** Every architecture is designed for 100 times the load it first carries, and its first version, the MVP, is built at that first load. A design passes when reaching 100x takes configuration and more infrastructure, such as more instances, more machines or more partitions, and no rewrite of a component, a file format or a rule. The parts that only matter at 100x are designed now, built when load calls for them, and drilled before anything relies on them. This fits the ranking rule a repo's own CLAUDE.md carries, which defers a path that has run zero times. Two things are built at 1x all the same. The first is the measure of load and the alarm that says when it nears the 1x limit, because otherwise the first sign of needing 100x is an outage, and an alarm already sits outside that deferral. The second is least privilege, so a credential carries only what its 1x use needs from the first day. On 2026-11-02 an architecture review of l3a0/ithildin-runtime had written a cluster of three VMs into its first slice, and the owner moved the cluster to the scale-out path and started the slice on one VM.
 
 **Weigh the whole lifecycle (owner directive, 2026-11-02).** A design considers every stage of the software development lifecycle, from planning, building and testing through deploying and operating to retiring, and follows best practice for ten qualities.
 
@@ -114,7 +114,7 @@ The owner's global `~/.claude/CLAUDE.md` is the source for these two rules. This
 
 A design that serves one stage and breaks another, such as a fast path no test can reach or a deployment nobody can roll back, is not finished. A design pull request says which of the ten it changes and what each change costs. A quality it leaves untouched needs no line.
 
-The design doc's own principles section is where a repo records how it applies them.
+[docs/design.md](docs/design.md)'s `## Design for 100x, build at 1x` and `## Every design weighs the whole lifecycle` are where a repo records how it applies them, including what 1x and 100x mean for it and where each of the ten qualities lives.
 
 ## Markdown hygiene
 
@@ -219,7 +219,7 @@ An issue whose pieces have all been split has no finishing PR left, so close it 
 
 PR titles use a Conventional Commits prefix. The form is `type(scope): summary`. `gh pr list --state merged --json title` reports which prefixes this repo has used, rather than a list here that goes stale on the first unfamiliar one. Add a scope in parens when it sharpens the title, like `docs(CLAUDE.md)`. Drop it when none does, like a plain `docs:` for a whole-doc change.
 
-PR bodies use Markdown section headings, not a wall of prose. Lead with `## Why`, then `## What`. Add situational sections after as the change needs them, like `## Scope`, `## Notes`, or `## Evidence`. The body's prose obeys the writing-style rules above. So clear, short sentences and no em dashes. End every body with the footer line: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+PR bodies use Markdown section headings, not a wall of prose. Lead with `## Why`, then `## What`. Add situational sections after as the change needs them, like `## Scope`, `## Notes`, `## Evidence`, or `## Qualities`, where a design pull request names each of the ten qualities it changes and the price. The body's prose obeys the writing-style rules above. So clear, short sentences and no em dashes. End every body with the footer line: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 
 ## Keep the build board current
 

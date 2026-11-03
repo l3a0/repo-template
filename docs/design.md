@@ -69,12 +69,19 @@ race, and stored records have to outlive the bugs in the code that reads them.
 The rules serve the book's three goals for maintainable software: operability,
 simplicity and evolvability (DDIA L645, L646, L648).
 
-The last group comes from Steve McConnell's *Code Complete* (2nd ed.,
+The next group comes from Steve McConnell's *Code Complete* (2nd ed.,
 Microsoft Press, 2004), cited by printed page, so CC p. 470 is page 470. It
 covers how the code holds the design's rules. Its case for writing each rule
 as a check is measured: no single way of finding defects reaches more than
 about 75% at its typical rate, and two methods combined find almost twice
 what one finds (CC p. 470, p. 471).
+
+The last group comes from Mark Douglas's book *Trading in the Zone* (Prentice
+Hall Press, 2000), cited by Kindle location, so TZ L2038 is location 2038. It
+covers judging a process whose single outcomes are partly chance, such as a
+trading strategy, an experiment or a staged rollout. Douglas writes for
+traders who decide each trade themselves, and these rules carry his method
+for judging an edge over a sample, not his psychology.
 
 These are checks on a design, and a review applies all of them. The mechanism
 a rule names is built when the path it guards first runs, under the ranking
@@ -379,13 +386,49 @@ exceptions decide what is built from the first run whatever the count.
    measures each change alone and reverts one that does not help, since more
    than half of attempted tunings gain little or slow the code (CC p. 606).
 
+### A process with chance outcomes is judged over a sample set in advance
+
+1. **The sample, the measures and the result that ends the process are
+   written down before the first outcome, and no conclusion rests on one
+   outcome or one streak.** Douglas holds that wins and losses fall at random
+   within any set of conditions that defines an edge (TZ L2038). He judges an
+   edge over a sample large enough to test it fairly and small enough that a
+   fading edge shows before it has cost too much (TZ L3198). His own sample
+   of at least 20 trades comes from his experience rather than data, so the
+   project sets each sample from the spread of the outcomes it expects. A
+   review checks that the plan existed before the first outcome.
+2. **The process runs unchanged through its sample, every case is counted,
+   and a change starts a new sample.** Douglas trades a system exactly as
+   designed for every occurrence of its edge in the sample (TZ L3232),
+   because taking every case is what lets the sample show the odds
+   (TZ L1860). Here each outcome counted in a sample carries one version of
+   the code and configuration. Every case the process should have acted on
+   ends as acted on or as skipped with a recorded reason, and a test asserts
+   that the two add up to the cases. A case a person overrode is reported
+   apart from the evidence, since an unplanned action cannot show what works
+   (TZ L559). A halt or a rollback still stops the process at any time.
+3. **Each action's worst loss is fixed before the action, and a limit that
+   binds shrinks the action rather than moving its exit.** Douglas's exit for
+   a losing trade says in advance how much must be risked to learn whether
+   the trade works (TZ L3095), and a trader whose total risk is too large
+   cuts the size and leaves each trade's risk where the research set it
+   (TZ L3220). Here that means a canary's error budget and abort rule, or an
+   order's loss bound, set before it starts, and a gate that refuses an
+   action whose worst case it cannot compute.
+4. **Nothing raises the stake after a run of good results, except a rule
+   written down before the run.** Douglas finds a trader most likely to break
+   rules and oversize while winning, and a larger position magnifies the
+   next move against it (TZ L919, L943). A raise of a limit, a traffic share
+   or a stake cites the evidence the plan named, never a streak.
+
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
 write that needs one, histograms in place of averages, a test harness that can inject
 faults, an import check in CI, a run of the suite under `python -O`, a type
 for each kind of outside value, a contract suite for each stand-in, a second
-implementation in the tests of each result whose error costs money, and a
-measurement for each tuning change. What they buy is stored data that survives the bugs in the code
+implementation in the tests of each result whose error costs money, a
+measurement for each tuning change, and a sample plan written before any
+process with chance outcomes is judged. What they buy is stored data that survives the bugs in the code
 around it, and a 100x design that holds along parameters it has named.
 
 ## How work is cut and ordered

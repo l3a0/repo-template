@@ -173,9 +173,9 @@ exceptions decide what is built from the first run whatever the count.
    request can still land after its sender has gone. Where the write is
    irreversible or moves money, its record reaches stable storage, through
    `fsync` or the store's acknowledged write, before the write is sent, and a
-   write in doubt is resent only to a receiver shown to reject a repeated id, or
-   one a test against its sandbox shows applies it at most once, as a cancel by
-   its id usually is.
+   write in doubt is resent only to a receiver shown to reject a repeated id, or,
+   for a cancel by the receiver's own id, one a test against its sandbox shows
+   applies a repeated cancel at most once.
 2. **A lease or a lock is enforced by a fencing token where the protected
    resource checks one, and where it cannot, the design says the write is
    unfenced and guards the window that is left.** A process can pause past
@@ -190,7 +190,7 @@ exceptions decide what is built from the first run whatever the count.
    L9292). That lets a late write be found afterwards and stops none, and the
    book offers nothing more. So where the resource does not check, the design
    checks the lease just before each write, names the window between that
-   check and the write, never resends a write whose outcome is in doubt unless a test against the receiver's sandbox shows it applies the write at most once, as it usually does a cancel by its id, and
+   check and the write, never resends a write whose outcome is in doubt unless the write is a cancel by the receiver's own id and a test against the receiver's sandbox shows it applies a repeated cancel at most once, and
    halts when it finds a write that names an older lease after a takeover. No
    id or lease number comes from a counter that a failover or a restore from
    backup can wind back. The book's case is a promoted replica whose lagging
@@ -404,8 +404,9 @@ exceptions decide what is built from the first run whatever the count.
    one database lose both cohesion and loose coupling (BM L\~932). A
    module's interface may be the files it publishes in a versioned format. A
    backup, a scheduled read-back or a replay that copies files whole is not a
-   read of a module's records. A module that only wraps storage is a layer,
-   not a capability.
+   read of a module's records. A module cut along a technical layer, such as one that only
+   wraps storage, names its reason, such as a performance goal, because the
+   book makes the technical seam the second driver (BM L866).
 2. **A component splits further than the design already does only with a
    named reason and the history of changes across its boundary.** Newman's
    team split a product into services early, merged them back, and split
@@ -423,7 +424,7 @@ exceptions decide what is built from the first run whatever the count.
    on any other difference, and the deploy and the running process each
    record the artifact's hash so a mismatch halts startup or a running process, and a rollback re-points the deploy's record to the kept hash. Where only one
    instance may act at a time, a new release acts only after the old one has
-   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, such as a cancel or a kill switch, the old release until the new one's own checks have passed, and the new one from the start of its wait, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
+   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, the old release until the new one's own checks have passed, and the new one from the start of its wait, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
    takes over, and an alarm fires when no release has been acting past a
    written bound.
 4. **Every outside call has a timeout, every dependency that can stall
@@ -432,7 +433,7 @@ exceptions decide what is built from the first run whatever the count.
    and names bulkheads and circuit breakers as tools to use where they fit
    (BM L4252, BM L4292, BM L4995). Where a wrong result costs more than none,
    an open breaker stops new irreversible actions rather than serving a stale
-   value, and a cancel or a kill switch passes through it with every call it needs. A cancel with no
+   value, and an action that reduces risk passes through it with every call it needs. A cancel with no
    answer is looked up rather than sent again, unless a test against the receiver's sandbox shows it applies a repeated cancel at most once, and one still unsettled past a written time pages a person. Where a breaker raises a halt, the halt releases itself at most a written number of times
    before it waits for a person. The call that tests recovery has no side effect, a breaker
    closing releases no halt before the state it guards is reconciled, and

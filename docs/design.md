@@ -76,6 +76,15 @@ as a check is measured: no single way of finding defects reaches more than
 about 75% at its typical rate, and two methods combined find almost twice
 what one finds (CC p. 470, p. 471).
 
+Viktor Farcic's *The DevOps 2.0 Toolkit* (2016), cited by printed page, so DT
+p. 247 is page 247, supplies the group on releases, machines and healing. It
+covers what happens once code leaves the repository: how a release is checked
+on the machine that runs it, how those machines are built, and what an
+automatic restart may do. The book's pipeline deploys every passing commit to
+production with no person in it (DT p. 20). A project whose owner deploys by
+hand takes the book's continuous delivery instead, where every passing build
+could be deployed and a person decides when (DT p. 19).
+
 These are checks on a design, and a review applies all of them. The mechanism
 a rule names is built when the path it guards first runs, under the ranking
 rule in [CLAUDE.md](../CLAUDE.md), and no sooner. That rule's three
@@ -379,13 +388,62 @@ exceptions decide what is built from the first run whatever the count.
    measures each change alone and reverts one that does not help, since more
    than half of attempted tunings gain little or slow the code (CC p. 606).
 
+### Releases are checked where they run, and nothing heals by hiding a fault
+
+1. **A release is checked where it runs, before it takes work and again after,
+   by the same suite, and no such check acts on a real irreversible target.**
+   Farcic runs the same integration tests against a new release twice. The
+   first run reaches it at its own address before it is made publicly
+   available, and the second reaches it through the entry point users reach,
+   after the switch (DT p. 173, p. 247, p. 248). A failure before the switch
+   stops the new release and leaves the old one serving, and a failure after
+   it switches back (DT p. 247, p. 248). The suite is one command whose target
+   is its only input. A check that would touch something that cannot be
+   undone, such as a live account or a customer's data, runs against a
+   stand-in instead.
+2. **Every machine is built from committed code, a second run of that code
+   changes nothing, and a change made by hand is committed or undone.** Farcic
+   runs every step from a delivery server and finds no need to log in to a
+   server and work on it by hand (DT p. 88), and a second run of his playbook
+   finds nothing to be done (DT p. 190). A second run that reports a change is
+   drift, and it alerts. Data the project cannot recapture is restored from
+   its copies and never rebuilt this way. Deployment code swallows no error
+   either. The book's function that reads which release is live returns an
+   empty value on any failure (DT p. 246), so an outage there reads as the
+   first release ever and starts a second one beside the running one. A
+   deployment state that cannot be read stops the deploy.
+3. **An automatic restart, reschedule or scale step is capped, recorded and
+   reported, a stop made on purpose is never a failure to heal, and a missing
+   reading leads to no step at all.** Farcic warns that recovery from a failed
+   process often needs a person to find the cause, so a notification goes with
+   it (DT p. 302), and he finds a bare redeploy incomplete for the same reason
+   (DT p. 263). Docker's `always` policy restarts a container without limit
+   (DT p. 345). So a restart starts the artifact already deployed, each
+   component restarts at most a written number of times in a written window
+   before a person is paged, and each restart is recorded with its component,
+   exit and count. The book's own average over the last hour comes back null
+   when no entry falls inside it (DT p. 383), and a null, stale or failed
+   reading takes no step and alerts. An instance that scaling removes stops
+   taking work and settles what it holds before it exits, where the book's
+   scale-down simply removes the instances it no longer wants (DT p. 286).
+   A component stopped or halted on purpose reports that state, so no health
+   check reads it as failed and restarts it to clear it.
+4. **Logs leave the machine as structured records, into one place that can be
+   searched, and no record the project cannot recapture is one of them.**
+   Farcic finds a service's logs spread over several files and several
+   servers, and gathers them into one store that can be searched (DT p. 349,
+   p. 362). A record that cannot be recaptured, such as an audit trail, keeps
+   its own store, which no log pipeline, retention rule or cleanup reaches.
+
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
 write that needs one, histograms in place of averages, a test harness that can inject
 faults, an import check in CI, a run of the suite under `python -O`, a type
 for each kind of outside value, a contract suite for each stand-in, a second
-implementation in the tests of each result whose error costs money, and a
-measurement for each tuning change. What they buy is stored data that survives the bugs in the code
+implementation in the tests of each result whose error costs money, a
+measurement for each tuning change, a release suite run before and after each
+switch, infrastructure code with a second run that changes nothing, and a cap
+on every automatic restart. What they buy is stored data that survives the bugs in the code
 around it, and a 100x design that holds along parameters it has named.
 
 ## How work is cut and ordered

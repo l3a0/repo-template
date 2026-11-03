@@ -69,6 +69,13 @@ race, and stored records have to outlive the bugs in the code that reads them.
 The rules serve the book's three goals for maintainable software: operability,
 simplicity and evolvability (DDIA L645, L646, L648).
 
+The last group comes from Steve McConnell's *Code Complete* (2nd ed.,
+Microsoft Press, 2004), cited by printed page, so CC p. 470 is page 470. It
+covers how the code holds the design's rules. Its case for writing each rule
+as a check is measured: no single way of finding defects reaches more than
+about 75% at its typical rate, and two methods combined find almost twice
+what one finds (CC p. 470, p. 471).
+
 These are checks on a design, and a review applies all of them. The mechanism
 a rule names is built when the path it guards first runs, under the ranking
 rule in [CLAUDE.md](../CLAUDE.md), and no sooner. That rule's three
@@ -300,10 +307,85 @@ exceptions decide what is built from the first run whatever the count.
    cannot recapture spills to disk or slows its producer rather than dropping
    anything.
 
+### The code holds its own rules, and every check runs in production
+
+1. **A rule whose breach cannot be undone is held by the code's structure, a
+   type or a test, never by a comment or a convention alone.** McConnell
+   separates programming in a language, limited to what it offers, from
+   programming into one, deciding what the program needs and making the
+   language supply it (CC p. 68, p. 69). Where the language enforces no
+   boundary between modules, a check in CI enforces the boundaries the design
+   draws, and a test that adds a forbidden import shows it fails. An import
+   check guards the wiring and not the call, since code handed an object can
+   call it without importing anything. McConnell's way to make one step's
+   dependence on another visible is to pass the earlier step's output to the
+   later one (CC p. 349). Most languages let any module build any type, so the
+   argument shows a reader the order and a check holds it. The later step
+   reads the record the argument names, and refuses one that is missing, not
+   yet durable or already used.
+2. **A check that guards an irreversible action or stored data runs the same
+   way in tests and in production.** McConnell's default compiles assertions
+   out of production builds (CC p. 190), though he keeps the code that checks
+   for important errors and the code that lets a program fail safely, which
+   the Mars Pathfinder's engineers left in and used to fix it after landing
+   (CC p. 209, p. 210). Python drops every `assert`, and every
+   `if __debug__:` block, when it runs with `-O`. A guard written that way is
+   tested and then absent where it matters, so it raises explicitly, a lint
+   rule refuses `assert` outside the tests, and CI runs the suite once under
+   `python -O`.
+3. **The design chooses once between correctness and robustness, and where a
+   wrong result costs more than no result, bad input fails rather than turning
+   neutral.** McConnell lists ways to handle a bad value, among them a neutral
+   value, the closest legal value, and a logged warning followed by carrying
+   on, and calls the choice an architectural decision (CC p. 194, p. 195,
+   p. 197). Correctness means returning no result rather than a wrong one,
+   which safety-critical software favors (CC p. 197). Where the design picks
+   correctness, no value such as −1 or zero stands for "missing" (CC p. 257),
+   a branch over a closed set ends in a failure rather than a default case
+   (CC p. 363), as the faults rule's stop on an impossible case requires, a
+   function's result starts as the failing one (CC p. 224), and a number is
+   compared with zero explicitly (CC p. 441). Bad input stops the action it
+   feeds and never an action that reduces risk, such as a cancel, which keeps
+   acting on everything else it covers. Data stored as received is not
+   refused at the door. The check runs where the data is parsed, under the
+   recorded-data rules above.
+4. **Data from outside becomes the project's own types at the boundary, and a
+   stand-in for an outside system passes the same contract tests as the real
+   one.** McConnell's barricade checks and converts data at the boundary, so
+   the code inside can treat a bad value as a bug rather than as input
+   (CC p. 203, p. 204). The adapter records what it received unchanged before
+   converting it, and that raw record is the only thing past the boundary in
+   the vendor's form. Each adapter checks the result of every call it makes
+   (CC p. 197), and raises the project's own exceptions at the level of the
+   interface it presents (CC p. 199, p. 200), keeping rejected, provably not
+   sent and outcome unknown apart. Its exceptions and logs carry no
+   credential, since attackers read error messages (CC p. 196). A stand-in,
+   such as a fake or a simulator, keeps every promise of the thing it
+   replaces, which is McConnell's statement of the Liskov principle
+   (CC p. 145). So one contract suite runs against the stand-in and against
+   the real system or its recorded responses, and covers the cases the code's
+   correctness depends on rather than only the shapes of responses. A
+   recording strips credentials and account identifiers before it is written,
+   and a test fails on a committed recording that matches a credential
+   pattern.
+5. **A result whose error costs money or cannot be undone is checked in tests
+   by a second, plain implementation, and a change made for speed carries a
+   measurement before and after.** McConnell's example is an insurer that
+   checked a complicated rate system with a separate tool computing each rate
+   on its own, because accuracy was essential (CC p. 722). The second
+   implementation lives under the tests, which no module outside them
+   imports, so it is a reference rather than a second code path, and it
+   shares no helper with the code it checks. McConnell's tuning procedure
+   measures each change alone and reverts one that does not help, since more
+   than half of attempted tunings gain little or slow the code (CC p. 606).
+
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
-write that needs one, histograms in place of averages, and a test harness that can inject
-faults. What they buy is stored data that survives the bugs in the code
+write that needs one, histograms in place of averages, a test harness that can inject
+faults, an import check in CI, a run of the suite under `python -O`, a type
+for each kind of outside value, a contract suite for each stand-in, a second
+implementation in the tests of each result whose error costs money, and a
+measurement for each tuning change. What they buy is stored data that survives the bugs in the code
 around it, and a 100x design that holds along parameters it has named.
 
 ## How work is cut and ordered
@@ -376,4 +458,6 @@ once rather than re-argued.
 | A copy of the build board's skills in each repository | Four repositories held their own copies of the build board's skills, and each copy held something the others lacked, which [l3a0/claude-plugins#28](https://github.com/l3a0/claude-plugins/issues/28) inventoried. The skills moved into the `l3a0` Claude Code plugin on 2026-10-29, and a seeded repository installs the plugin rather than copying them. [#24](https://github.com/l3a0/repo-template/issues/24) had kept them per repository because a repository pins the generator to one commit while a plugin skill moves with each release. That is the price, and a second comes with it: every session runs what the plugin's `main` holds, hooks included, with no pull request in this repository to show a change. The plugin skill's `## Generator compatibility` table names the generator commits its formats were checked against. `tests/test_build_board_generator.py` reads the skill at a pinned plugin commit, so renaming a marker or a label the generator reads fails here until a matching plugin release exists. Other format changes rest on the plugin's release rule |
 | Holding a reviewed, green branch back only while a build session holds its card | l3a0/marketlake's own page held such a branch back from the owner's queue only for `working:build`. The shared page holds it back for any `working:` label, and [#47](https://github.com/l3a0/repo-template/issues/47) kept that rule when it ported marketlake's review rule. The plugin's `sync-prune-next` skill already applied the stricter hold to marketlake's queue because it fails safe. marketlake's build-only check was the fix for [l3a0/marketlake PR #713](https://github.com/l3a0/marketlake/pull/713), adding a hold the sync skill had promised, rather than a decision that a decompose loop frees a branch. The price is that a reviewed, green pull request whose card carries `working:decompose` waits under "Waiting on my review" until the loop ends. Porting marketlake's rule would need a flag in `board.json`, because a change to the page alone would move a current caller's card. |
 | A warning on a pull request whose closing link GitHub did not register | l3a0/marketlake's page drew one. Neither generator can write the entry that draws it, because each writes `linked` false only beside `partOf`, which [#47](https://github.com/l3a0/repo-template/issues/47) measured over 73 mixes of closing link and body. The `pr_items` docstring in `scripts/build_board.py` carries the reason, and the page carries no such warning. |
+| Compiling assertions out of the production build | *Code Complete*'s default for assertions (CC p. 190), though it keeps the code that checks for important errors (CC p. 209). A guard that is tested and then compiled out is absent where it matters, so a guard raises explicitly and runs in every environment. [The code holds its own rules](#the-code-holds-its-own-rules-and-every-check-runs-in-production) carries the reasoning |
+| A neutral value, the closest legal value, or logging and carrying on, as the answer to bad input where a wrong result costs more than none | *Code Complete* offers each one (CC p. 194, p. 195). Each turns bad input into a value the project acts on. A project whose wrong result is cheap may choose robustness instead, and says so here |
 | TODO | TODO |

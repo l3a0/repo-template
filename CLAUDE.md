@@ -114,7 +114,7 @@ The owner's global `~/.claude/CLAUDE.md` is the source for these two rules. This
 
 A design that serves one stage and breaks another, such as a fast path no test can reach or a deployment nobody can roll back, is not finished. A design pull request says which of the ten it changes and what each change costs. A quality it leaves untouched needs no line.
 
-[docs/design.md](docs/design.md)'s `## Design for 100x, build at 1x` and `## Every design weighs the whole lifecycle` are where a repo records how it applies them, including what 1x and 100x mean for it and where each of the ten qualities lives.
+[docs/design.md](docs/design.md)'s `## Design for 100x, build at 1x` and `## Every design weighs the whole lifecycle` are where a repo records how it applies them, including what 1x and 100x mean for it and where each of the ten qualities lives. Its `## Design principles` holds the checks a review applies to every design.
 
 ## Markdown hygiene
 

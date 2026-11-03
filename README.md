@@ -14,7 +14,7 @@ from whichever copy it was cloned off.
 ## What it carries
 
 - **[CLAUDE.md](CLAUDE.md)** is the agent instruction file. Scope authority,
-  how to rank work, plan audits, writing style, designing for 100x across
+  how to rank work, plan audits, writing style, designing for 10x across
   the whole lifecycle, markdown hygiene, secrets, committing, pull request
   review and the build board. It has template slots,
   marked as HTML comments, for what only the new repo can say, such as its

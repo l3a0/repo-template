@@ -7,7 +7,7 @@
 ## Contents
 
 - [Premise](#premise)
-- [Design for 100x, build at 1x](#design-for-100x-build-at-1x)
+- [Design for 10x, plan the rewrite before 100x, build at 1x](#design-for-10x-plan-the-rewrite-before-100x-build-at-1x)
 - [Every design weighs the whole lifecycle](#every-design-weighs-the-whole-lifecycle)
 - [Design principles](#design-principles)
 - [How work is cut and ordered](#how-work-is-cut-and-ordered)
@@ -32,14 +32,16 @@
 
 TODO.
 
-## Design for 100x, build at 1x
+## Design for 10x, plan the rewrite before 100x, build at 1x
 
 <!-- TEMPLATE: say what this project's first load is, in the load
-     parameters the design principles below ask a design to name, what 100
-     times it would be, what carries the design to 100x without a rewrite,
-     how load is measured and what alarm says it nears the 1x limit, and
-     which 100x parts are designed now and built later. CLAUDE.md carries
-     the rule. -->
+     parameters the design principles below ask a design to name, what 10
+     times it would be, what carries the design to 10x without a rewrite,
+     how load is measured and what alarm says it nears the 1x limit, which
+     10x parts are designed now and built later, and, for growth beyond
+     10x, the load at which planning a rewrite starts, what it would
+     replace and what must carry over unchanged. CLAUDE.md carries the
+     rule. -->
 
 TODO.
 
@@ -69,12 +71,21 @@ race, and stored records have to outlive the bugs in the code that reads them.
 The rules serve the book's three goals for maintainable software: operability,
 simplicity and evolvability (DDIA L645, L646, L648).
 
-The last group comes from Steve McConnell's *Code Complete* (2nd ed.,
+The group on the code comes from Steve McConnell's *Code Complete* (2nd ed.,
 Microsoft Press, 2004), cited by printed page, so CC p. 470 is page 470. It
 covers how the code holds the design's rules. Its case for writing each rule
 as a check is measured: no single way of finding defects reaches more than
 about 75% at its typical rate, and two methods combined find almost twice
 what one finds (CC p. 470, p. 471).
+
+The group on modules and releases comes from Sam Newman's *Building
+Microservices* (O'Reilly Media, 2015), cited by Kindle location, so BM L4252
+is location 4252 and BM L\~932 is good to about one screen. It covers where
+modules are cut, how one build reaches every environment, and how each
+dependency fails. The book argues for splitting a system into services, and
+its own author's team found that splitting too soon was costly, so the rules
+keep a project in one process until evidence calls for a split
+(BM L777, BM L796).
 
 These are checks on a design, and a review applies all of them. The mechanism
 a rule names is built when the path it guards first runs, under the ranking
@@ -264,7 +275,7 @@ exceptions decide what is built from the first run whatever the count.
 ### Load is named before it is scaled
 
 1. **A design names its load parameters and the operations it assumes are
-   common, and its 100x holds only along them.** A load parameter is one of
+   common, and its 10x holds only along them.** A load parameter is one of
    the few numbers that describe load, such as requests per second or records
    per day. The book asks two questions of each one: how performance changes
    when it rises and resources stay fixed, and how far resources must grow to
@@ -273,10 +284,10 @@ exceptions decide what is built from the first run whatever the count.
    wastes the scaling work or makes it harmful (DDIA L627). The book also
    finds that an architecture rarely copes with ten times its load, so a
    fast-growing service rethinks it at each tenfold rise (DDIA L598). That
-   finding sits beside the directive in [CLAUDE.md](../CLAUDE.md) to design
-   for 100 times the first load rather than against it. A 100x design holds
-   only along the parameters it names, so
-   [Design for 100x, build at 1x](#design-for-100x-build-at-1x) names them,
+   finding is the reason for the directive in [CLAUDE.md](../CLAUDE.md) to
+   design for 10 times the first load and plan the rewrite before 100
+   times. A 10x design holds only along the parameters it names, so
+   [Design for 10x, plan the rewrite before 100x, build at 1x](#design-for-10x-plan-the-rewrite-before-100x-build-at-1x) names them,
    and a review checks them against measured use. Load along a parameter
    nobody named is what forces a rewrite. Stateful parts stay on one machine
    until cost or an availability target forces a split, which the book
@@ -291,7 +302,7 @@ exceptions decide what is built from the first run whatever the count.
    machines lets a new machine take whole partitions, so no key changes
    partition (DDIA L6418). The count chosen at the start caps the machines
    the split can use, and each partition carries overhead, so the count is
-   sized for the 100x load and no higher (DDIA L6443).
+   sized for the 10x load and no higher (DDIA L6443).
 3. **Latency is reported as percentiles from merged histograms, and every
    queue has a bound and an alarm on how far behind it is.** A mean hides how
    many requests were slow, percentiles show it, and the slowest requests
@@ -379,14 +390,53 @@ exceptions decide what is built from the first run whatever the count.
    measures each change alone and reverts one that does not help, since more
    than half of attempted tunings gain little or slow the code (CC p. 606).
 
+### Modules are cut by capability, and every release and dependency is bounded
+
+1. **A module is cut along a capability of the domain, owns what it stores,
+   and no other module reads its store except through its interface.**
+   Newman draws boundaries along bounded contexts, the parts of a domain that
+   keep their internal models to themselves (BM L740), and finds that
+   services sharing one database lose both cohesion and loose coupling
+   (BM L\~932). A module that only wraps storage is a layer, not a
+   capability.
+2. **A module moves into a process of its own only with a named reason and
+   the history of changes across its boundary.** Newman's team split a
+   product into services early, merged them back, and split again a year
+   later along boundaries that held (BM L777, BM L796). The reason names the
+   load, the isolation or the credential that calls for the split.
+3. **One artifact is built once and runs in every environment, and
+   configuration that differs by environment selects adapters and holds
+   credentials, nothing else.** Newman builds an artifact once so that what
+   is deployed is what was tested (BM L\~2160), and keeps configuration that
+   changes between environments to an absolute minimum (BM L2393). Where
+   only one instance may act at a time, a new release takes that right only
+   after the old release has stopped, because blue/green runs two versions
+   side by side (BM L3044) and two writers would be one too many.
+4. **Every outside dependency has its own timeout, its own pool and a
+   breaker, and every retried job has a maximum.** Newman names timeouts,
+   circuit breakers and bulkheads as the tools that keep one failure from
+   spreading (BM L4252, BM L4292, BM L4995). His cautionary tale is a queue
+   with no retry limit, where one request that crashed its worker went back
+   on the queue and crashed the next (BM L1286). Where a wrong result costs
+   more than none, a breaker that opens stops the action that depends on it
+   rather than serving a stale value.
+5. **One correlation id runs from where a request starts through everything
+   it leads to, and a synthetic transaction watches the running system
+   without reaching anything irreversible.** Newman finds correlation ids
+   very hard to add later (BM L3354), and found a scheduled fake event, with
+   an alert when its result did not appear, a far better sign of trouble
+   than lower-level metrics (BM L3250, BM L3300).
+
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
 write that needs one, histograms in place of averages, a test harness that can inject
 faults, an import check in CI, a run of the suite under `python -O`, a type
 for each kind of outside value, a contract suite for each stand-in, a second
 implementation in the tests of each result whose error costs money, and a
-measurement for each tuning change. What they buy is stored data that survives the bugs in the code
-around it, and a 100x design that holds along parameters it has named.
+measurement for each tuning change, a pool and a
+breaker for each outside dependency, and a correlation id threaded through
+every request. What they buy is stored data that survives the bugs in the code
+around it, and a 10x design that holds along parameters it has named.
 
 ## How work is cut and ordered
 

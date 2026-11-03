@@ -400,11 +400,14 @@ exceptions decide what is built from the first run whatever the count.
    second list that would drift from them. A failure halts new irreversible
    actions, or rolls back where the project allows an automatic rollback, and
    tells a person, and the actions that reduce risk, such as a cancel or a
-   stop, stay served throughout. A check that would touch something that
-   cannot be undone, such as a live account or a customer's data, runs against
-   a stand-in instead. A check that starts something waits on a readiness
-   check with a timeout, never on a fixed sleep. The book calls its own fixed
-   pause something to use rarely (DT p. 200), and this doc makes it never.
+   stop, stay served wherever their own record can still be written before
+   they are sent. A release that fails its own integrity check cannot be
+   trusted to serve them, so it serves nothing and the page names the person's
+   fallback. A check that would touch something that cannot be undone, such as
+   a live account or a customer's data, runs against a stand-in instead. A
+   check that starts something waits on a readiness check with a timeout,
+   never on a fixed sleep. The book calls its own fixed pause something to use
+   rarely (DT p. 200), and this doc makes it never.
 2. **Every machine is built from committed code, a check of that code against
    what it built finds no difference, and a change made by hand is committed
    or undone.** Farcic runs every step from a delivery server and finds no
@@ -420,26 +423,29 @@ exceptions decide what is built from the first run whatever the count.
    data, and a difference is drift, which alerts, as does a check that has not
    reported past a written bound. Neither the code nor any role that applies
    it can delete, overwrite, expire or recreate data the project cannot
-   recapture, or a stop that only a person may release. That guard sits where
-   the role it binds cannot edit it, such as an account-level policy, and a
-   check on the plan's machine-readable output refuses such a change,
-   including one to a lifecycle rule or a policy attached to the store,
-   whether or not the store's block is still in the code, since a mark inside
-   the block goes when a revert removes it. A store of a stop that is created
-   again starts stopped until a person releases it. Such data is restored from
-   its copies and never rebuilt this way. No workflow run whose code comes
-   from a branch other than the default holds a credential that can deploy or
-   act on production. Where the owner deploys by hand, a deploy credential
-   sits behind an environment per target account that admits only the default
-   branch, with an identity no agent session holds as its required reviewer
-   and no administrator bypass. A cloud role trusted through OIDC trusts only
-   that environment, and a job that uses it runs only on a push or a manual
-   dispatch on the default branch, never on `pull_request_target` or
-   `workflow_run`, and runs nothing but the default branch's head. A deploy
-   that holds no such credential, such as the build board's Pages, is outside
-   this. Every interface that can control a host or a container takes only
-   authenticated calls. The book's own setup listens for remote requests from
-   any address and says a real one must be much more restrictive (DT p. 92).
+   recapture, or a stop that only a person may release, or grant itself read
+   of a credential it does not need. That guard sits where the role it binds
+   cannot edit it, such as an account-level policy, and a check on the plan's
+   machine-readable output refuses such a change, including one to a lifecycle
+   rule or a policy attached to the store, whether or not the store's block is
+   still in the code, since a mark inside the block goes when a revert removes
+   it. A store of a stop that is created again starts stopped until a person
+   releases it, and a store of records the project cannot recapture that is
+   found empty, or behind its own copies, reads as missing, never as empty.
+   Such data is restored from its copies and never rebuilt this way. No
+   workflow run whose code comes from a branch other than the default holds a
+   credential that can deploy or act on production. Where the owner deploys by
+   hand, a deploy credential sits behind an environment per target account
+   that admits only the default branch, with an identity no agent session
+   holds as its required reviewer and no administrator bypass. A cloud role
+   trusted through OIDC trusts only that environment, and a job that uses it
+   runs only on a push or a manual dispatch on the default branch, never on
+   `pull_request_target` or `workflow_run`, and runs nothing but the default
+   branch's head. A deploy that holds no such credential, such as the build
+   board's Pages, is outside this. Every interface that can control a host or
+   a container takes only authenticated calls from the identities the design
+   names for it. The book's own setup listens for remote requests from any
+   address and says a real one must be much more restrictive (DT p. 92).
    Deployment code swallows no error either. The book's function that reads
    which release is live returns an empty value on any failure (DT p. 246), so
    an outage there reads as no release live, and the next deploy can land on
@@ -452,29 +458,34 @@ exceptions decide what is built from the first run whatever the count.
    it (DT p. 302), and he finds a bare redeploy incomplete for the same reason
    (DT p. 263). Docker's `always` policy restarts a container without limit
    (DT p. 345). So a restart starts the artifact already deployed and cannot
-   change which one that is. Each component restarts at most a written number
-   of times in a written window before a person is paged, with whether the
-   window's edge counts written beside the number, and each restart is
-   recorded with its component, exit and count. The count is kept where a move
-   to another machine does not reset it and the restarter gains no write
-   access where irreplaceable records live, it is raised in one atomic
-   conditional write, and a count that cannot be read takes no restart and
-   alerts. A component whose stop loses data the project cannot recapture
-   keeps restarting past its cap and when its count cannot be read, with a
-   delay that grows to a written maximum, and pages a person. The book's own
-   average over the last hour comes back null when no entry falls inside it
-   (DT p. 383), and a null, stale or failed reading takes no step and alerts.
-   A person can switch these steps off without a deploy, except the restarts
-   of a component whose stop loses such data, and a scaling step has a written
-   floor and ceiling on instances. An instance that scaling removes stops
-   taking work, where the book's scale-down simply removes the instances it no
-   longer wants (DT p. 286), and a write whose outcome it cannot learn stays
-   unknown, never marked as not sent. A component stopped or halted on purpose
-   reports that state, so no health check reads it as failed and restarts it
-   to clear it, and it comes up halted after a restart. Neither a cap nor a
-   scaling step leaves an action that reduces risk, such as a cancel, with
-   nothing to serve it, and where one would, the page names the person's
-   fallback.
+   change which one that is, and a record of what is deployed that cannot be
+   read takes no restart and alerts. Each component restarts at most a written
+   number of times in a written window before a person is paged, held by one
+   implementation, such as the host supervisor's own start limit, and the cap
+   is stated so a test at it has one answer: with a cap of N, the Nth restart
+   runs and the crash after it pages. Each restart is recorded with its
+   component, exit and count. Where a component can move to another machine on
+   its own, the count survives the move without the restarter gaining write
+   access where irreplaceable records live. Two kinds of component keep
+   restarting past the cap, with a delay that grows to a written maximum and a
+   page: one whose stop loses data the project cannot recapture, and one that
+   serves actions that reduce risk, such as a cancel, which comes up stopped
+   for everything else. A component whose output the system acts on, or whose
+   check it relies on, halts the system at its cap rather than only paging.
+   The book's own average over the last hour comes back null when no entry
+   falls inside it (DT p. 383), and a null, stale or failed reading takes no
+   step and alerts. A person can switch these steps off without a deploy,
+   through an authenticated call, except the restarts of the two kinds of
+   component above, and an unreadable switch takes no step and alerts. A
+   scaling step has a written floor and ceiling on instances. An instance that
+   scaling removes stops taking work, where the book's scale-down simply
+   removes the instances it no longer wants (DT p. 286), and a write whose
+   outcome it cannot learn stays unknown, never marked as not sent. A
+   component stopped or halted on purpose reports that state, so no health
+   check reads it as failed and restarts it to clear it, and it comes up
+   halted after a restart. Neither a cap nor a scaling step leaves an action
+   that reduces risk, such as a cancel, with nothing to serve it, and where
+   one would, the page names the person's fallback.
 4. **Where a component runs on more than one machine, or on a machine that
    keeps no state, its logs leave the machine as structured records, into one
    place that can be searched, and no log write waits on that place.** Farcic
@@ -488,10 +499,12 @@ exceptions decide what is built from the first run whatever the count.
    pipeline, retention rule or cleanup reaches.
 
 Each run-time failure this group handles is a fault the faults rule above
-injects, with its test, such as a component at its restart cap tested one
-restart below it, at it and one above, a null reading behind a step that
-heals, and a store found missing. A failure at deploy time, such as an
-unreadable deployment state or drift, has a CI test and a drill.
+injects, with its test, such as a component that must come up halted, a null
+reading behind a step that heals, and a store found missing. A failure at
+deploy time, such as an unreadable deployment state or drift, has a CI test
+and a drill, and so do the restart cap, every alarm this group adds, and the
+switch that stops restarts and scaling, flipped with the component left
+running.
 
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
@@ -635,4 +648,7 @@ once rather than re-argued.
 | A warning on a pull request whose closing link GitHub did not register | l3a0/marketlake's page drew one. Neither generator can write the entry that draws it, because each writes `linked` false only beside `partOf`, which [#47](https://github.com/l3a0/repo-template/issues/47) measured over 73 mixes of closing link and body. The `pr_items` docstring in `scripts/build_board.py` carries the reason, and the page carries no such warning. |
 | Compiling assertions out of the production build | *Code Complete*'s default for assertions (CC p. 190), though it keeps the code that checks for important errors (CC p. 209). A guard that is tested and then compiled out is absent where it matters, so a guard raises explicitly and runs in every environment. [The code holds its own rules](#the-code-holds-its-own-rules-and-every-check-runs-in-production) carries the reasoning |
 | A neutral value, the closest legal value, or logging and carrying on, as the answer to bad input where a wrong result costs more than none | *Code Complete* offers each one (CC p. 194, p. 195). Each turns bad input into a value the project acts on. A project whose wrong result is cheap may choose robustness instead, and says so here |
+| Deploying every passing commit to production with no human step, where the owner deploys by hand | *The DevOps 2.0 Toolkit*'s continuous deployment runs from a commit to production with no human intervention (DT p. 20). A project whose owner deploys by hand takes the book's continuous delivery instead, where every passing build could be deployed and a person decides when (DT p. 19) |
+| Restarting a component without limit, as Docker's `always` policy does | The book lists the policy, which restarts a container whatever its exit status (DT p. 345). A restart without limit hides the cause of a crash loop, so each component has a written cap, and only a component whose stop loses unrecoverable data or a cancel keeps restarting past it, with a page |
+| A fixed sleep to wait for something to start | The book pauses its playbook for a fixed time and says such a pause should be rarely used (DT p. 200). A fixed sleep passes or fails by timing, so every check waits on readiness with a timeout |
 | TODO | TODO |

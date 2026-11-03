@@ -388,38 +388,50 @@ exceptions decide what is built from the first run whatever the count.
 
 ### A process with chance outcomes is judged over a sample set in advance
 
-1. **The sample, the measures and the result that ends the process are
-   written down before the first outcome, and no conclusion rests on one
-   outcome or one streak.** Douglas holds that wins and losses fall at random
+1. **The sample, the measures, the result that counts as success and the
+   result that ends the process are written down before the first outcome,
+   and no conclusion rests on one outcome or one streak.** Douglas holds that wins and losses fall at random
    within any set of conditions that defines an edge (TZ L2038). He judges an
    edge over a sample large enough to test it fairly and small enough that a
    fading edge shows before it has cost too much (TZ L3198). His own sample
    of at least 20 trades comes from his experience rather than data, so the
-   project sets each sample from the spread of the outcomes it expects. A
-   review checks that the plan existed before the first outcome.
-2. **The process runs unchanged through its sample, every case is counted,
-   and a change starts a new sample.** Douglas trades a system exactly as
-   designed for every occurrence of its edge in the sample (TZ L3232),
-   because taking every case is what lets the sample show the odds
-   (TZ L1860). Here each outcome counted in a sample carries one version of
-   the code and configuration. Every case the process should have acted on
-   ends as acted on or as skipped with a recorded reason, and a test asserts
-   that the two add up to the cases. A case a person overrode is reported
-   apart from the evidence, since an unplanned action cannot show what works
-   (TZ L559). A halt or a rollback still stops the process at any time.
+   project sets each sample from the spread of the outcomes it expects, as
+   the considered-and-rejected register records. A review checks that the
+   plan existed before the first outcome.
+2. **The parts that decide the outcomes run unchanged through the sample,
+   every case is accounted for, and a change to those parts starts a new
+   sample.** Douglas trades a system exactly as designed for every
+   occurrence of its edge in the sample (TZ L3232), because taking every
+   case is what lets the sample show the odds (TZ L1860). Here each outcome
+   counted in a sample carries one version of the parts that decide it. A
+   change elsewhere that leaves the decisions the same keeps the sample
+   open, and every sample opened is counted, including one ended early, so
+   a sample cannot be restarted until one happens to look good. Every case
+   the process should have acted on maps to exactly one recorded outcome,
+   such as acted on or skipped with a reason. A test matches them one to
+   one by id, and the running system counts the same match and alarms on a
+   mismatch. A case a person overrode is reported apart from the evidence,
+   since an unplanned action cannot show what works (TZ L559). A halt pauses
+   the sample, and stopping the process early ends it. Either can happen at
+   any time.
 3. **Each action's worst loss is fixed before the action, and a limit that
-   binds shrinks the action rather than moving its exit.** Douglas's exit for
-   a losing trade says in advance how much must be risked to learn whether
-   the trade works (TZ L3095), and a trader whose total risk is too large
-   cuts the size and leaves each trade's risk where the research set it
-   (TZ L3220). Here that means a canary's error budget and abort rule, or an
-   order's loss bound, set before it starts, and a gate that refuses an
-   action whose worst case it cannot compute.
+   binds makes the action smaller rather than moving its exit.** Douglas's
+   exit for a losing trade says in advance how much must be risked to learn
+   whether the trade works (TZ L3095), and a trader whose total risk is too
+   large cuts the size and leaves each trade's risk where the research set it
+   (TZ L3220). Here the worst loss is the larger of the loss at the planned
+   exit and the loss under a stated stress case, since anything can happen
+   and a jump can carry the result past the exit (TZ L1698). It is set before
+   the action starts, and a check refuses an action that adds risk when that
+   loss cannot be computed, while an action that only reduces risk is never
+   refused for it. Actions sized together, such as the parts of one change,
+   are made smaller together.
 4. **Nothing raises the stake after a run of good results, except a rule
    written down before the run.** Douglas finds a trader most likely to break
    rules and oversize while winning, and a larger position magnifies the
-   next move against it (TZ L919, L943). A raise of a limit, a traffic share
-   or a stake cites the evidence the plan named, never a streak.
+   next move against it (TZ L919, L943). A raise of a limit, a share of
+   traffic or a stake cites the evidence the plan named before the run,
+   never a streak.
 
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
@@ -557,6 +569,7 @@ once rather than re-argued.
 | Cut | Why |
 | --- | --- |
 | A build-plan doc listing each slice's deliverables and tests | It would restate scope the tracker holds, so the two would drift. A slice's tests are its parent issue's acceptance criteria, and what each deliverable waits on is its sub-issue's "blocked by" links. The rule for cutting a slice is the one part GitHub cannot hold, and it lives in [How work is cut and ordered](#how-work-is-cut-and-ordered) |
+| *Trading in the Zone*'s sample of at least 20 trades as the unit that judges a process | Douglas found it from his own trading and gives no data for it (TZ L3198). A sample that small rarely separates an effect from noise, so each project sets its sample from the spread of the outcomes it expects, under [A process with chance outcomes is judged over a sample set in advance](#a-process-with-chance-outcomes-is-judged-over-a-sample-set-in-advance) |
 | A copy of the build board's skills in each repository | Four repositories held their own copies of the build board's skills, and each copy held something the others lacked, which [l3a0/claude-plugins#28](https://github.com/l3a0/claude-plugins/issues/28) inventoried. The skills moved into the `l3a0` Claude Code plugin on 2026-10-29, and a seeded repository installs the plugin rather than copying them. [#24](https://github.com/l3a0/repo-template/issues/24) had kept them per repository because a repository pins the generator to one commit while a plugin skill moves with each release. That is the price, and a second comes with it: every session runs what the plugin's `main` holds, hooks included, with no pull request in this repository to show a change. The plugin skill's `## Generator compatibility` table names the generator commits its formats were checked against. `tests/test_build_board_generator.py` reads the skill at a pinned plugin commit, so renaming a marker or a label the generator reads fails here until a matching plugin release exists. Other format changes rest on the plugin's release rule |
 | Holding a reviewed, green branch back only while a build session holds its card | l3a0/marketlake's own page held such a branch back from the owner's queue only for `working:build`. The shared page holds it back for any `working:` label, and [#47](https://github.com/l3a0/repo-template/issues/47) kept that rule when it ported marketlake's review rule. The plugin's `sync-prune-next` skill already applied the stricter hold to marketlake's queue because it fails safe. marketlake's build-only check was the fix for [l3a0/marketlake PR #713](https://github.com/l3a0/marketlake/pull/713), adding a hold the sync skill had promised, rather than a decision that a decompose loop frees a branch. The price is that a reviewed, green pull request whose card carries `working:decompose` waits under "Waiting on my review" until the loop ends. Porting marketlake's rule would need a flag in `board.json`, because a change to the page alone would move a current caller's card. |
 | A warning on a pull request whose closing link GitHub did not register | l3a0/marketlake's page drew one. Neither generator can write the entry that draws it, because each writes `linked` false only beside `partOf`, which [#47](https://github.com/l3a0/repo-template/issues/47) measured over 73 mixes of closing link and body. The `pr_items` docstring in `scripts/build_board.py` carries the reason, and the page carries no such warning. |

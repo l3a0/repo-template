@@ -412,35 +412,39 @@ exceptions decide what is built from the first run whatever the count.
    run of his playbook finds almost nothing left to do (DT p. 190). The code
    names where each credential is read from and holds none, its state stays
    out of the repository, and a setting only the owner may change stays
-   outside it. Applying the code to production is a deploy, and an
-   infrastructure change rolls back by applying the commit before it, keeping
-   rather than deleting any store the change created. The scheduled check runs
-   in a mode that only reports, under a role that reads configuration and not
-   stored data, and a difference is drift, which alerts, as does a check that
-   has not reported past a written bound. The code never replaces, deletes or
-   creates again a store that holds data the project cannot recapture, or a
-   stop that only a person may release, and a check on every plan's
-   machine-readable output fails on any delete, replace or second create of
-   such a store's address, whether or not its block is still in the code,
-   since a mark inside the block goes when a revert removes it. The roles that
-   deploy and apply deny deleting that data, its backups and releasing that
-   stop, because a guard in the plan does not bind the credential, and a store
-   of a stop found empty reads as missing. Such data is restored from its
-   copies and never rebuilt this way. No workflow run whose code comes from a
-   branch other than the default holds a credential that can deploy or act on
-   production. Where the owner deploys by hand, a deploy credential sits
-   behind an environment per target account that admits only the default
-   branch, with the owner as its required reviewer, and a job that uses it
-   runs only on a push or a manual dispatch on the default branch, never on
-   `pull_request_target` or `workflow_run`. A deploy that holds no such
-   credential, such as the build board's Pages, is outside this. Every
-   interface that can control a host or a container takes only authenticated
-   calls. The book's own setup listens for remote requests from any address
-   and says a real one must be much more restrictive (DT p. 92). Deployment
-   code swallows no error either. The book's function that reads which release
-   is live returns an empty value on any failure (DT p. 246), so an outage
-   there reads as no release live, and the next deploy can land on the release
-   that is serving. A deployment state that cannot be read stops the deploy.
+   outside it. Applying the code to production is a deploy, timed so it cannot
+   cut an action that reduces risk, such as a cancel. An infrastructure change
+   rolls back by applying the commit before it and rolls forward again without
+   destroying or recreating a protected store. The scheduled check runs in a
+   mode that only reports, under a role that cannot write and reads no stored
+   data, and a difference is drift, which alerts, as does a check that has not
+   reported past a written bound. Neither the code nor any role that applies
+   it can delete, overwrite, expire or recreate data the project cannot
+   recapture, or a stop that only a person may release. That guard sits where
+   the role it binds cannot edit it, such as an account-level policy, and a
+   check on the plan's machine-readable output refuses such a change,
+   including one to a lifecycle rule or a policy attached to the store,
+   whether or not the store's block is still in the code, since a mark inside
+   the block goes when a revert removes it. A store of a stop that is created
+   again starts stopped until a person releases it. Such data is restored from
+   its copies and never rebuilt this way. No workflow run whose code comes
+   from a branch other than the default holds a credential that can deploy or
+   act on production. Where the owner deploys by hand, a deploy credential
+   sits behind an environment per target account that admits only the default
+   branch, with an identity no agent session holds as its required reviewer
+   and no administrator bypass. A cloud role trusted through OIDC trusts only
+   that environment, and a job that uses it runs only on a push or a manual
+   dispatch on the default branch, never on `pull_request_target` or
+   `workflow_run`, and runs nothing but the default branch's head. A deploy
+   that holds no such credential, such as the build board's Pages, is outside
+   this. Every interface that can control a host or a container takes only
+   authenticated calls. The book's own setup listens for remote requests from
+   any address and says a real one must be much more restrictive (DT p. 92).
+   Deployment code swallows no error either. The book's function that reads
+   which release is live returns an empty value on any failure (DT p. 246), so
+   an outage there reads as no release live, and the next deploy can land on
+   the release that is serving. A deployment state that cannot be read stops
+   the deploy.
 3. **An automatic restart, reschedule or scale step is capped, recorded and
    reported, a stop made on purpose is never a failure to heal, and a missing
    reading leads to no step at all.** Farcic warns that recovery from a failed
@@ -452,22 +456,25 @@ exceptions decide what is built from the first run whatever the count.
    of times in a written window before a person is paged, with whether the
    window's edge counts written beside the number, and each restart is
    recorded with its component, exit and count. The count is kept where a move
-   to another machine does not reset it and is raised in one atomic
+   to another machine does not reset it and the restarter gains no write
+   access where irreplaceable records live, it is raised in one atomic
    conditional write, and a count that cannot be read takes no restart and
    alerts. A component whose stop loses data the project cannot recapture
-   keeps restarting past its cap, with a growing delay and a page. The book's
-   own average over the last hour comes back null when no entry falls inside
-   it (DT p. 383), and a null, stale or failed reading takes no step and
-   alerts. One switch turns these steps off without a deploy, and the number
-   of instances has a written floor and ceiling. An instance that scaling
-   removes stops taking work, where the book's scale-down simply removes the
-   instances it no longer wants (DT p. 286), and a write whose outcome it
-   cannot learn stays unknown, never marked as not sent. A component stopped
-   or halted on purpose reports that state, so no health check reads it as
-   failed and restarts it to clear it, and it comes up halted after a restart.
-   Neither a cap nor a scaling step leaves an action that reduces risk, such
-   as a cancel, with nothing to serve it, and where one would, the page names
-   the person's fallback.
+   keeps restarting past its cap and when its count cannot be read, with a
+   delay that grows to a written maximum, and pages a person. The book's own
+   average over the last hour comes back null when no entry falls inside it
+   (DT p. 383), and a null, stale or failed reading takes no step and alerts.
+   A person can switch these steps off without a deploy, except the restarts
+   of a component whose stop loses such data, and a scaling step has a written
+   floor and ceiling on instances. An instance that scaling removes stops
+   taking work, where the book's scale-down simply removes the instances it no
+   longer wants (DT p. 286), and a write whose outcome it cannot learn stays
+   unknown, never marked as not sent. A component stopped or halted on purpose
+   reports that state, so no health check reads it as failed and restarts it
+   to clear it, and it comes up halted after a restart. Neither a cap nor a
+   scaling step leaves an action that reduces risk, such as a cancel, with
+   nothing to serve it, and where one would, the page names the person's
+   fallback.
 4. **Where a component runs on more than one machine, or on a machine that
    keeps no state, its logs leave the machine as structured records, into one
    place that can be searched, and no log write waits on that place.** Farcic
@@ -492,8 +499,8 @@ write that needs one, histograms in place of averages, a test harness that can i
 faults, an import check in CI, a run of the suite under `python -O`, a type
 for each kind of outside value, a contract suite for each stand-in, a second
 implementation in the tests of each result whose error costs money, a
-measurement for each tuning change, a release suite run before and after each
-switch, infrastructure code with a scheduled check that finds no difference, a
+measurement for each tuning change, startup checks that are the tested code, run where each release runs,
+infrastructure code with a scheduled check that finds no difference, a
 cap on every automatic restart, and a log pipeline off the machine. What they buy is stored data that survives the bugs in the code
 around it, and a 100x design that holds along parameters it has named.
 

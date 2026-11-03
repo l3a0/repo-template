@@ -417,6 +417,65 @@ that.
 
 Slice 1 is TODO, on TODO issue link.
 
+Steve McConnell's *Rapid Development* (Microsoft Press, 1996) supplies the
+rules for estimating, cutting and tracking the work, cited by printed page,
+so RD p. 199 is page 199. The book writes from studies of human teams in the
+1980s and 1990s, so its rules are adopted for their method rather than their
+numbers, and how well they fit agent loops is untested. Five rules follow.
+
+1. **A slice builds its most important behavior first.** McConnell's staged
+   delivery ends every stage with a product that meets its size, performance
+   and quality targets as well as its function, and delivers capabilities
+   from most to least important (RD p. 553). A working product is a more
+   accurate status report than any paper report (RD p. 551). The parent issue
+   names the check that shows the slice usable, and that check runs before
+   the parent closes.
+2. **An estimate is a range drawn from loops of the same kind, posted under
+   its own heading, and the next estimate of that kind carries the slip.**
+   McConnell's multipliers, adapted from Boehm and others' COCOMO 2.0 of
+   1995, put an estimate of effort made at the first concept anywhere from a
+   quarter to four times the final figure (RD p. 169), and estimating from
+   memory of similar projects goes with overruns (RD p. 178, citing Lederer
+   and Prasad 1992). So a build issue carries a comment opening with
+   `## Estimate` that gives a range and names the earlier loops of the same
+   kind it was drawn from, whose measured costs are the `## Cost` comments
+   the owner's global instructions require. Where none of that kind exists,
+   the first estimate is a labelled guess inside the widest of McConnell's
+   ranges. A project behind schedule hardly ever makes up the lost time
+   (RD p. 199, citing van Genuchten 1991), and McConnell raises what remains
+   by the share of the slip so far (RD p. 381). So when a loop's cost lands
+   above its range, the next estimate of that kind raises its range by the
+   same ratio.
+3. **A loop that runs past its estimate drops behavior from a list written in
+   advance, and never a check.** McConnell's timebox drops features rather
+   than quality, and he advises against boxing planning, requirements and
+   design, whose mistakes cost the most downstream (RD p. 581). So a build
+   issue lists, in order, the behaviors a slip may drop. That list never
+   holds anything the ranking rule's three exceptions name, an alarm or the
+   drill that shows it works, a rollback, a review, a test, or anything that
+   guards what the premise says cannot be recovered. A dropped behavior moves
+   to an issue of its own, and its acceptance tests stay in the suite as
+   strict expected failures that name that issue.
+4. **Done is a state a check shows, never a percentage.** McConnell's test of
+   a finished piece is whether it could be locked in a vault and shipped as
+   it stands, so a piece "99 percent done" is not done (RD p. 381). A report
+   of done links the merged pull request that closed the issue, its review,
+   and the checks that ran the changed code. A check that never ran the
+   changed code shows nothing.
+5. **A spike answers one stated question and never becomes production code,
+   and a risk to something that cannot be undone ranks above every risk that
+   can.** McConnell treats each throwaway prototype as an experiment with a
+   hypothesis, and stops it once the hypothesis is settled (RD p. 572), so a
+   spike lives outside the product's package, nothing in the product imports
+   it, and it takes no irreversible action. He ranks risks to a schedule by
+   probability times size, then moves a larger loss above its place in that
+   order (RD p. 95, p. 96). A slice keeps the risks to its delivery on its
+   parent issue under a `## Risks` heading. The losses the premise names rank
+   first whatever their probability, and the list ranks what to watch, never
+   what to build next. The status round of the `/l3a0:sync-prune-next` skill
+   reviews it whenever it names a card from the slice, and posts a dated
+   comment opening with `## Risks review`.
+
 ## Vocabulary
 
 Terms with exact definitions, reused on purpose. A term listed here is not a

@@ -85,7 +85,7 @@ is location 4252 and BM L\~932 is good to about one screen. It covers where
 modules are cut, how one build reaches every environment, and how each
 dependency fails. The book argues for splitting a system into services, and
 its own author's team found that splitting too soon was costly, so the rules
-keep a project in one process until evidence calls for a split
+split a component further only when evidence calls for it
 (BM L777, BM L796).
 
 These are checks on a design, and a review applies all of them. The mechanism
@@ -303,8 +303,8 @@ exceptions decide what is built from the first run whatever the count.
    machines lets a new machine take whole partitions, so no key changes
    partition (DDIA L6418). The count chosen at the start caps the machines
    the split can use, and each partition carries overhead, and changing the
-   count moves stored data, so the count is sized for the rewrite point, 100
-   times the first load, and no higher, since the partition layout is part of
+   count moves stored data, so the count is sized for 100 times the first
+   load, the ceiling a rewrite must come before, and no higher, since the partition layout is part of
    what must survive a rewrite (DDIA L6411, L6443).
 3. **Latency is reported as percentiles from merged histograms, and every
    queue has a bound and an alarm on how far behind it is.** A mean hides how
@@ -416,13 +416,15 @@ exceptions decide what is built from the first run whatever the count.
    was tested (BM L\~2160), and keeps configuration that changes between
    environments to an absolute minimum (BM L2393). The list holds adapter
    selection and parameters, references to where each credential is read
-   from and never its value, and limits that can only tighten. A test fails
+   from and never its value. A limit only the owner may raise sits outside the
+   tracked configuration, and an input that may only tighten it says so. A test fails
    on any other difference, and the deploy and the running process each
    record the artifact's hash so a mismatch halts startup. Where only one
    instance may act at a time, a new release acts only after the old one has
    stopped taking work and exited, as the host shows, because blue/green
    runs two versions side by side (BM L3044) and two writers would be one too
-   many. Every takeover, a rollback's included, rebuilds its state after it
+   many. Meanwhile any running release serves the actions that reduce risk,
+   such as a cancel or a kill switch. Every takeover, a rollback's included, rebuilds its state after it
    takes over, and an alarm fires when no release has been acting past a
    written bound.
 4. **Every outside call has a timeout, every dependency that can stall
@@ -431,15 +433,18 @@ exceptions decide what is built from the first run whatever the count.
    and names bulkheads and circuit breakers as tools to use where they fit
    (BM L4252, BM L4292, BM L4995). Where a wrong result costs more than none,
    an open breaker stops new irreversible actions rather than serving a stale
-   value, and a cancel or a kill switch passes through it and keeps
-   retrying. The call that tests recovery has no side effect, a breaker
+   value, and a cancel or a kill switch passes through it. A cancel with no
+   answer is looked up and sent again until a read shows it took effect, and
+   a halt a breaker raised releases itself at most a written number of times
+   before it waits for a person. The call that tests recovery has no side effect, a breaker
    closing releases no halt before the state it guards is reconciled, and
    recording data the project cannot recapture never waits on a breaker. His
    cautionary tale is a queue with no retry limit, where one request that
    crashed its worker went back on the queue and crashed the next (BM L1286).
    So a retried job that builds something regenerable has a maximum, past
-   which it is set aside and alerts, and a write to an outside system that
-   got no answer is looked up, never retried.
+   which it is set aside and alerts, and a write that is not safe to repeat,
+   such as a new order, that got no answer is looked up, and resent only to a
+   receiver shown to reject a repeated id.
 5. **One correlation id runs from where a request starts through everything
    it leads to, and a synthetic transaction watches the running system
    without reaching anything irreversible.** Newman finds correlation ids
@@ -448,17 +453,20 @@ exceptions decide what is built from the first run whatever the count.
    leads to several writes gives each a unique one. He found a scheduled fake
    event, with an alert when its result did not appear, a far better sign of
    trouble than lower-level metrics (BM L3250, BM L3300). Every synthetic
-   transaction carries a marker that the real adapters refuse.
+   transaction carries a marker that passes to every record built from it,
+   the real adapters refuse anything carrying it, and the transaction never
+   enters recorded data or an input the real system reads.
 
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
 write that needs one, histograms in place of averages, a test harness that can inject
 faults, an import check in CI, a run of the suite under `python -O`, a type
 for each kind of outside value, a contract suite for each stand-in, a second
-implementation in the tests of each result whose error costs money, and a
-measurement for each tuning change, a pool and a
-breaker for each outside dependency, and a correlation id threaded through
-every request. What they buy is stored data that survives the bugs in the code
+implementation in the tests of each result whose error costs money, a
+measurement for each tuning change, a timeout per outside call, a limit and a
+breaker per dependency that can stall others, the artifact's hash, a test on
+configuration that differs between environments, a correlation id and a
+synthetic transaction. What they buy is stored data that survives the bugs in the code
 around it, and a 10x design that holds along parameters it has named.
 
 ## How work is cut and ordered

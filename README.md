@@ -45,7 +45,9 @@ from whichever copy it was cloned off.
   what to take next, rebuilt from GitHub by a reusable workflow that every
   seeded repo calls. The section below explains it.
 - **[docs/design.md](docs/design.md)** is the skeleton for the design doc
-  CLAUDE.md refers to by name.
+  CLAUDE.md refers to by name. Its design principles, drawn from *Designing
+  Data-Intensive Applications*, hold for any seeded repo, which adds its own
+  after them.
 - **[docs/optional-policies.md](docs/optional-policies.md)** holds two policy
   modules that only some repos need, ready to move into CLAUDE.md.
 - **[tests/test_markdown_hygiene.py](tests/test_markdown_hygiene.py)** runs the

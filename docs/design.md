@@ -417,6 +417,52 @@ that.
 
 Slice 1 is TODO, on TODO issue link.
 
+Steve McConnell's *Rapid Development* (Microsoft Press, 1996) supplies the
+rules for estimating, cutting and tracking the work, cited by printed page,
+so RD p. 199 is page 199. Its case for them is a survey of more than 300
+projects, which found that a project behind schedule hardly ever makes up
+the lost time and tends to fall further behind (RD p. 199). Six rules follow.
+
+1. **Each slice ends releasable, and builds its most important behavior
+   first.** McConnell's staged delivery ends every stage with a truly
+   releasable product that meets its size, performance and quality targets
+   as well as its function, and delivers capabilities from most to least
+   important (RD p. 553). A working product is a more accurate status report
+   than any paper report (RD p. 551).
+2. **An estimate is a range from measured cost, posted as a dated comment,
+   and recalibrated at the first slip.** McConnell's multipliers put an
+   estimate of effort made at the first concept anywhere from a quarter to
+   four times the final figure (RD p. 169), and he estimates from records of
+   past projects rather than memory (RD p. 178). Here those records are the
+   `## Cost` comments on earlier issues. A piece of work that runs past its
+   range multiplies what remains by the slip so far, rather than counting on
+   catching up (RD p. 199). Each estimate is a new comment rather than an
+   edit, so the record of how it moved stays readable.
+3. **A slip cuts behavior, never a check.** McConnell's timebox drops
+   features rather than quality, and he advises against boxing planning,
+   requirements and design, whose mistakes cost the most downstream
+   (RD p. 581). So an issue with a budget names, in order, the behaviors it
+   may drop, and that list never holds a review, a test, or anything that
+   guards what the premise says cannot be recovered.
+4. **Done is a state a check shows, never a percentage.** McConnell's test of
+   a finished piece is whether it could be locked in a vault and shipped as
+   it stands, so a piece "99 percent done" is not done (RD p. 381). A report
+   of done links the merged pull request and the checks that passed on it.
+5. **Each slice keeps a ranked list of its top risks, and a loss that cannot
+   be undone ranks by its size alone.** McConnell's top-10 risks list gives
+   each risk its rank this week and last, its weeks on the list and the
+   progress on resolving it (RD p. 100 to p. 102). He ranks risks by
+   probability times size, then moves a larger loss above its place in that
+   order (RD p. 96). The losses the premise names rank first whatever their
+   probability.
+6. **A spike answers one stated question and never becomes production code,
+   and shared code is extracted at its second use.** McConnell treats each
+   throwaway prototype as an experiment with a hypothesis, stopped once the
+   hypothesis is settled (RD p. 572), so a spike lives outside the product's
+   package. A reusable component costs two to three times as much as a
+   one-off and pays back only from its third use, so McConnell's rule of two
+   builds the first as a one-off (RD p. 535).
+
 ## Vocabulary
 
 Terms with exact definitions, reused on purpose. A term listed here is not a

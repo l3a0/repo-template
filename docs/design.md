@@ -173,7 +173,8 @@ exceptions decide what is built from the first run whatever the count.
    request can still land after its sender has gone. Where the write is
    irreversible or moves money, its record reaches stable storage, through
    `fsync` or the store's acknowledged write, before the write is sent, and a
-   write in doubt is resent only to a receiver shown to reject a repeated id, or,
+   write in doubt is resent only to a receiver shown to reject a repeated id and
+   only within the time it is shown to remember one, or,
    for a cancel by the receiver's own id, one a test against its sandbox shows
    applies a repeated cancel at most once.
 2. **A lease or a lock is enforced by a fencing token where the protected
@@ -404,7 +405,8 @@ exceptions decide what is built from the first run whatever the count.
    one database lose both cohesion and loose coupling (BM L\~932). A
    module's interface may be the files it publishes in a versioned format. A
    backup, a scheduled read-back or a replay that copies files whole is not a
-   read of a module's records. A module cut along a technical layer, such as one that only
+   read of a module's records, and any parse of a copied file goes through the
+   owning module's reader. A module cut along a technical layer, such as one that only
    wraps storage, names its reason, such as a performance goal, because the
    book makes the technical seam the second driver (BM L866).
 2. **A component splits further than the design already does only with a
@@ -412,7 +414,8 @@ exceptions decide what is built from the first run whatever the count.
    team split a product into services early, merged them back, and split
    again a year later along boundaries that held (BM L777, BM L796). The
    reason names the load, the isolation or the credential that calls for the
-   split.
+   split. Clones of a component and a split by key follow the scale rules and
+   need no such reason.
 3. **One artifact is built once and runs in every environment, and
    configuration may differ by environment only in a committed list of
    keys.** Newman builds an artifact once so that what is deployed is what
@@ -424,9 +427,9 @@ exceptions decide what is built from the first run whatever the count.
    on any other difference, and the deploy and the running process each
    record the artifact's hash so a mismatch halts startup or a running process, and a rollback re-points the deploy's record to the kept hash. Where only one
    instance may act at a time, a new release acts only after the old one has
-   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, the old release until the new one's own checks have passed, and the new one from the start of its wait, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
+   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, the old release until the new one's own checks have passed, and the new one from the start of its wait, each under the one-actor guard and re-reading the record so a cancel already recorded is recognised rather than sent again, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
    takes over, and an alarm fires when no release has been acting past a
-   written bound.
+   written bound, watched from outside every release and started by a risk-reducing action that waits.
 4. **Every outside call has a timeout, every dependency that can stall
    others has its own limit and a breaker, each limit keeps a slice for actions that reduce risk, and a breaker never stops an
    action that reduces risk.** Newman puts a timeout on every outside call,
@@ -434,7 +437,7 @@ exceptions decide what is built from the first run whatever the count.
    (BM L4252, BM L4292, BM L4995). Where a wrong result costs more than none,
    an open breaker stops new irreversible actions rather than serving a stale
    value, and an action that reduces risk passes through it with every call it needs. A cancel with no
-   answer is looked up rather than sent again, unless a test against the receiver's sandbox shows it applies a repeated cancel at most once, and one still unsettled past a written time pages a person. Where a breaker raises a halt, the halt releases itself at most a written number of times
+   answer is looked up rather than sent again, unless it is a cancel by the receiver's own id that rule 1 of [Writes happen once, from one writer at a time](#writes-happen-once-from-one-writer-at-a-time) allows to be resent, and one still unsettled past a written time pages a person. Where a breaker raises a halt, the halt releases itself at most a written number of times
    before it waits for a person. The call that tests recovery has no side effect, a breaker
    closing releases no halt before the state it guards is reconciled, and
    recording data the project cannot recapture never waits on a breaker. His
@@ -443,7 +446,8 @@ exceptions decide what is built from the first run whatever the count.
    So a retried job that builds something regenerable has a maximum, past
    which it is set aside and alerts, and a write that is not safe to repeat,
    such as a new order, that got no answer is looked up, and resent only to a
-   receiver shown to reject a repeated id, and for how long it remembers one.
+   receiver shown to reject a repeated id, and only within the time it is shown
+   to remember one.
 5. **One correlation id runs from where a request starts through everything
    it leads to, and a synthetic transaction watches the running system
    without reaching anything irreversible.** Newman finds correlation ids

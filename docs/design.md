@@ -37,11 +37,12 @@ TODO.
 <!-- TEMPLATE: say what this project's first load is, in the load
      parameters the design principles below ask a design to name, what 10
      times it would be, what carries the design to 10x without a rewrite,
-     how load is measured and what alarm says it nears the 1x limit, which
-     10x parts are designed now and built later, and, for growth beyond
-     10x, the load at which planning a rewrite starts, what it would
-     replace and what must carry over unchanged. CLAUDE.md carries the
-     rule. -->
+     how load is measured, the alarm that says it nears the 1x limit and the
+     one that says it reached the rewrite-planning level, which 10x parts
+     are designed now and built later, and, for growth beyond 10x, the load
+     at which planning a rewrite starts, what it would replace and what must
+     carry over unchanged, such as recorded data, its formats and its
+     partition layout. CLAUDE.md carries the rule. -->
 
 TODO.
 
@@ -284,7 +285,7 @@ exceptions decide what is built from the first run whatever the count.
    wastes the scaling work or makes it harmful (DDIA L627). The book also
    finds that an architecture rarely copes with ten times its load, so a
    fast-growing service rethinks it at each tenfold rise (DDIA L598). That
-   finding is the reason for the directive in [CLAUDE.md](../CLAUDE.md) to
+   finding matches the directive in [CLAUDE.md](../CLAUDE.md) to
    design for 10 times the first load and plan the rewrite before 100
    times. A 10x design holds only along the parameters it names, so
    [Design for 10x, plan the rewrite before 100x, build at 1x](#design-for-10x-plan-the-rewrite-before-100x-build-at-1x) names them,
@@ -301,8 +302,10 @@ exceptions decide what is built from the first run whatever the count.
    whenever a machine is added (DDIA L6411). Many more partitions than
    machines lets a new machine take whole partitions, so no key changes
    partition (DDIA L6418). The count chosen at the start caps the machines
-   the split can use, and each partition carries overhead, so the count is
-   sized for the 10x load and no higher (DDIA L6443).
+   the split can use, and each partition carries overhead, and changing the
+   count moves stored data, so the count is sized for the rewrite point, 100
+   times the first load, and no higher, since the partition layout is part of
+   what must survive a rewrite (DDIA L6411, L6443).
 3. **Latency is reported as percentiles from merged histograms, and every
    queue has a bound and an alarm on how far behind it is.** A mean hides how
    many requests were slow, percentiles show it, and the slowest requests
@@ -392,40 +395,60 @@ exceptions decide what is built from the first run whatever the count.
 
 ### Modules are cut by capability, and every release and dependency is bounded
 
-1. **A module is cut along a capability of the domain, owns what it stores,
-   and no other module reads its store except through its interface.**
-   Newman draws boundaries along bounded contexts, the parts of a domain that
-   keep their internal models to themselves (BM L740), and finds that
-   services sharing one database lose both cohesion and loose coupling
-   (BM L\~932). A module that only wraps storage is a layer, not a
-   capability.
-2. **A module moves into a process of its own only with a named reason and
-   the history of changes across its boundary.** Newman's team split a
-   product into services early, merged them back, and split again a year
-   later along boundaries that held (BM L777, BM L796). The reason names the
-   load, the isolation or the credential that calls for the split.
+1. **A module is cut along a capability of the domain, and no other module
+   reads its internal state except through its interface.** Newman draws
+   boundaries along bounded contexts, the parts of a domain that keep their
+   internal models to themselves (BM L740), and finds that services sharing
+   one database lose both cohesion and loose coupling (BM L\~932). A
+   module's interface may be the files it publishes in a versioned format. A
+   backup, a scheduled read-back or a replay that copies files whole is not a
+   read of a module's records. A module that only wraps storage is a layer,
+   not a capability.
+2. **A component splits further than the design already does only with a
+   named reason and the history of changes across its boundary.** Newman's
+   team split a product into services early, merged them back, and split
+   again a year later along boundaries that held (BM L777, BM L796). The
+   reason names the load, the isolation or the credential that calls for the
+   split.
 3. **One artifact is built once and runs in every environment, and
-   configuration that differs by environment selects adapters and holds
-   credentials, nothing else.** Newman builds an artifact once so that what
-   is deployed is what was tested (BM L\~2160), and keeps configuration that
-   changes between environments to an absolute minimum (BM L2393). Where
-   only one instance may act at a time, a new release takes that right only
-   after the old release has stopped, because blue/green runs two versions
-   side by side (BM L3044) and two writers would be one too many.
-4. **Every outside dependency has its own timeout, its own pool and a
-   breaker, and every retried job has a maximum.** Newman names timeouts,
-   circuit breakers and bulkheads as the tools that keep one failure from
-   spreading (BM L4252, BM L4292, BM L4995). His cautionary tale is a queue
-   with no retry limit, where one request that crashed its worker went back
-   on the queue and crashed the next (BM L1286). Where a wrong result costs
-   more than none, a breaker that opens stops the action that depends on it
-   rather than serving a stale value.
+   configuration may differ by environment only in a committed list of
+   keys.** Newman builds an artifact once so that what is deployed is what
+   was tested (BM L\~2160), and keeps configuration that changes between
+   environments to an absolute minimum (BM L2393). The list holds adapter
+   selection and parameters, references to where each credential is read
+   from and never its value, and limits that can only tighten. A test fails
+   on any other difference, and the deploy and the running process each
+   record the artifact's hash so a mismatch halts startup. Where only one
+   instance may act at a time, a new release acts only after the old one has
+   stopped taking work and exited, as the host shows, because blue/green
+   runs two versions side by side (BM L3044) and two writers would be one too
+   many. Every takeover, a rollback's included, rebuilds its state after it
+   takes over, and an alarm fires when no release has been acting past a
+   written bound.
+4. **Every outside call has a timeout, every dependency that can stall
+   others has its own limit and a breaker, and a breaker never stops an
+   action that reduces risk.** Newman puts a timeout on every outside call,
+   and names bulkheads and circuit breakers as tools to use where they fit
+   (BM L4252, BM L4292, BM L4995). Where a wrong result costs more than none,
+   an open breaker stops new irreversible actions rather than serving a stale
+   value, and a cancel or a kill switch passes through it and keeps
+   retrying. The call that tests recovery has no side effect, a breaker
+   closing releases no halt before the state it guards is reconciled, and
+   recording data the project cannot recapture never waits on a breaker. His
+   cautionary tale is a queue with no retry limit, where one request that
+   crashed its worker went back on the queue and crashed the next (BM L1286).
+   So a retried job that builds something regenerable has a maximum, past
+   which it is set aside and alerts, and a write to an outside system that
+   got no answer is looked up, never retried.
 5. **One correlation id runs from where a request starts through everything
    it leads to, and a synthetic transaction watches the running system
    without reaching anything irreversible.** Newman finds correlation ids
-   very hard to add later (BM L3354), and found a scheduled fake event, with
-   an alert when its result did not appear, a far better sign of trouble
-   than lower-level metrics (BM L3250, BM L3300).
+   very hard to add later (BM L3354). Each write to an outside system still
+   gets an id of its own that contains the correlation id, so a request that
+   leads to several writes gives each a unique one. He found a scheduled fake
+   event, with an alert when its result did not appear, a far better sign of
+   trouble than lower-level metrics (BM L3250, BM L3300). Every synthetic
+   transaction carries a marker that the real adapters refuse.
 
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every

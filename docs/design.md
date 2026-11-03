@@ -188,7 +188,7 @@ exceptions decide what is built from the first run whatever the count.
    L9292). That lets a late write be found afterwards and stops none, and the
    book offers nothing more. So where the resource does not check, the design
    checks the lease just before each write, names the window between that
-   check and the write, never resends a write whose outcome is in doubt, and
+   check and the write, never resends a write whose outcome is in doubt unless the receiver applies it at most once, as it does a cancel, and
    halts when it finds a write that names an older lease after a takeover. No
    id or lease number comes from a counter that a failover or a restore from
    backup can wind back. The book's case is a promoted replica whose lagging
@@ -419,22 +419,19 @@ exceptions decide what is built from the first run whatever the count.
    from and never its value. A limit only the owner may raise sits outside the
    tracked configuration, and an input that may only tighten it says so. A test fails
    on any other difference, and the deploy and the running process each
-   record the artifact's hash so a mismatch halts startup. Where only one
+   record the artifact's hash so a mismatch halts startup or a running process, and a rollback re-points the deploy's record to the kept hash. Where only one
    instance may act at a time, a new release acts only after the old one has
-   stopped taking work and exited, as the host shows, because blue/green
-   runs two versions side by side (BM L3044) and two writers would be one too
-   many. Meanwhile any running release serves the actions that reduce risk,
-   such as a cancel or a kill switch. Every takeover, a rollback's included, rebuilds its state after it
+   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and two versions acting by turns would apply different rules to one record, so replay could not say which version decided what. Throughout the handover something reads the actions that reduce risk, such as a cancel or a kill switch, the old release until it exits and the new one from the start of its wait, and a release serves them only once its startup checks have passed. Every takeover, a rollback's included, rebuilds its state after it
    takes over, and an alarm fires when no release has been acting past a
    written bound.
 4. **Every outside call has a timeout, every dependency that can stall
-   others has its own limit and a breaker, and a breaker never stops an
+   others has its own limit and a breaker, each limit keeps a slice for actions that reduce risk, and a breaker never stops an
    action that reduces risk.** Newman puts a timeout on every outside call,
    and names bulkheads and circuit breakers as tools to use where they fit
    (BM L4252, BM L4292, BM L4995). Where a wrong result costs more than none,
    an open breaker stops new irreversible actions rather than serving a stale
-   value, and a cancel or a kill switch passes through it. A cancel with no
-   answer is looked up and sent again until a read shows it took effect, and
+   value, and a cancel or a kill switch passes through it with every call it needs. A cancel with no
+   answer is looked up and sent again until a read shows it took effect, each resend recorded first, and
    a halt a breaker raised releases itself at most a written number of times
    before it waits for a person. The call that tests recovery has no side effect, a breaker
    closing releases no halt before the state it guards is reconciled, and

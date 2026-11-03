@@ -423,7 +423,7 @@ exceptions decide what is built from the first run whatever the count.
    on any other difference, and the deploy and the running process each
    record the artifact's hash so a mismatch halts startup or a running process, and a rollback re-points the deploy's record to the kept hash. Where only one
    instance may act at a time, a new release acts only after the old one has
-   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, such as a cancel or a kill switch, the old release until it exits and the new one from the start of its wait, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
+   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, such as a cancel or a kill switch, the old release until the new one's own checks have passed, and the new one from the start of its wait, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
    takes over, and an alarm fires when no release has been acting past a
    written bound.
 4. **Every outside call has a timeout, every dependency that can stall
@@ -433,7 +433,7 @@ exceptions decide what is built from the first run whatever the count.
    (BM L4252, BM L4292, BM L4995). Where a wrong result costs more than none,
    an open breaker stops new irreversible actions rather than serving a stale
    value, and a cancel or a kill switch passes through it with every call it needs. A cancel with no
-   answer is looked up and sent again at a written interval until a read shows its target in a final state, each resend recorded first, and an answer such as already filled ends the retry. Where a breaker raises a halt, the halt releases itself at most a written number of times
+   answer is looked up rather than sent again, unless a test against the receiver's sandbox shows it applies a repeated cancel at most once, and one still unsettled past a written time pages a person. Where a breaker raises a halt, the halt releases itself at most a written number of times
    before it waits for a person. The call that tests recovery has no side effect, a breaker
    closing releases no halt before the state it guards is reconciled, and
    recording data the project cannot recapture never waits on a breaker. His
@@ -442,7 +442,7 @@ exceptions decide what is built from the first run whatever the count.
    So a retried job that builds something regenerable has a maximum, past
    which it is set aside and alerts, and a write that is not safe to repeat,
    such as a new order, that got no answer is looked up, and resent only to a
-   receiver shown to reject a repeated id.
+   receiver shown to reject a repeated id, and for how long it remembers one.
 5. **One correlation id runs from where a request starts through everything
    it leads to, and a synthetic transaction watches the running system
    without reaching anything irreversible.** Newman finds correlation ids
@@ -463,8 +463,8 @@ for each kind of outside value, a contract suite for each stand-in, a second
 implementation in the tests of each result whose error costs money, a
 measurement for each tuning change, a timeout per outside call, a limit and a
 breaker per dependency that can stall others, the artifact's hash, a test on
-configuration that differs between environments, a correlation id and a
-synthetic transaction. What they buy is stored data that survives the bugs in the code
+configuration that differs between environments, a correlation id, a
+synthetic transaction, and an alarm at the level where planning the rewrite starts. What they buy is stored data that survives the bugs in the code
 around it, and a 10x design that holds along parameters it has named.
 
 ## How work is cut and ordered

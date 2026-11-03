@@ -403,11 +403,12 @@ exceptions decide what is built from the first run whatever the count.
    stop, stay served wherever their own record can still be written before
    they are sent. A release that fails its own integrity check cannot be
    trusted to serve them, so it serves nothing and the page names the person's
-   fallback. A check that would touch something that cannot be undone, such as
-   a live account or a customer's data, runs against a stand-in instead. A
-   check that starts something waits on a readiness check with a timeout,
-   never on a fixed sleep. The book calls its own fixed pause something to use
-   rarely (DT p. 200), and this doc makes it never.
+   fallback. While one release replaces another, something keeps serving the
+   actions that reduce risk. A check that would touch something that cannot be
+   undone, such as a live account or a customer's data, runs against a
+   stand-in instead. A check that starts something waits on a readiness check
+   with a timeout, never on a fixed sleep. The book calls its own fixed pause
+   something to use rarely (DT p. 200), and this doc makes it never.
 2. **Every machine is built from committed code, a check of that code against
    what it built finds no difference, and a change made by hand is committed
    or undone.** Farcic runs every step from a delivery server and finds no
@@ -417,41 +418,47 @@ exceptions decide what is built from the first run whatever the count.
    out of the repository, and a setting only the owner may change stays
    outside it. Applying the code to production is a deploy, timed so it cannot
    cut an action that reduces risk, such as a cancel. An infrastructure change
-   rolls back by applying the commit before it and rolls forward again without
-   destroying or recreating a protected store. The scheduled check runs in a
-   mode that only reports, under a role that cannot write and reads no stored
-   data, and a difference is drift, which alerts, as does a check that has not
-   reported past a written bound. Neither the code nor any role that applies
-   it can delete, overwrite, expire or recreate data the project cannot
-   recapture, or a stop that only a person may release, or grant itself read
-   of a credential it does not need. That guard sits where the role it binds
-   cannot edit it, such as an account-level policy, and a check on the plan's
-   machine-readable output refuses such a change, including one to a lifecycle
-   rule or a policy attached to the store, whether or not the store's block is
-   still in the code, since a mark inside the block goes when a revert removes
-   it. A store of a stop that is created again starts stopped until a person
-   releases it, and a store of records the project cannot recapture that is
-   found empty, or behind its own copies, reads as missing, never as empty.
-   Such data is restored from its copies and never rebuilt this way. No
-   workflow run whose code comes from a branch other than the default holds a
-   credential that can deploy or act on production. Where the owner deploys by
-   hand, a deploy credential sits behind an environment per target account
+   rolls back by applying the commit before it while detaching, never
+   destroying, any protected store the change created, and rolls forward by
+   bringing that store back under the code by its recorded id. The scheduled
+   check runs in a mode that only reports, under a role that cannot write and
+   reads no stored data, and a difference is drift, which alerts, as does a
+   check that has not reported past a written bound. Neither the code nor any
+   role that applies it can delete, overwrite, expire or recreate data the
+   project cannot recapture, or a stop that only a person may release, grant
+   read of a credential to any principal but the one the design names, or
+   change who can act as that principal. That guard sits where the role it
+   binds cannot edit it, such as an account-level policy, and a check on the
+   plan's machine-readable output refuses such a change, including one to a
+   lifecycle rule or a policy attached to the store, whether or not the
+   store's block is still in the code, since a mark inside the block goes when
+   a revert removes it. A store of a stop that is created again starts stopped
+   until a person releases it, and a store of records the project cannot
+   recapture that is found empty, or behind its own copies, reads as missing,
+   never as empty. Such data is restored from its copies and never rebuilt
+   this way. Every interface that can control a host or a container takes only
+   authenticated calls from the identities the design names for it. The book's
+   own setup listens for remote requests from any address and says a real one
+   must be much more restrictive (DT p. 92). Deployment code swallows no error
+   either. The book's function that reads which release is live returns an
+   empty value on any failure (DT p. 246), so an outage there reads as no
+   release live, and the next deploy can land on the release that is serving.
+   A deployment state that cannot be read stops the deploy.
+3. **No run of a branch other than the default holds a production credential,
+   and a deploy by hand sits behind an approval no agent session can give.**
+   No workflow run whose code comes from a branch other than the default holds
+   a credential that can deploy or act on production. Where the owner deploys
+   by hand, a deploy credential sits behind an environment per target account
    that admits only the default branch, with an identity no agent session
    holds as its required reviewer and no administrator bypass. A cloud role
    trusted through OIDC trusts only that environment, and a job that uses it
    runs only on a push or a manual dispatch on the default branch, never on
    `pull_request_target` or `workflow_run`, and runs nothing but the default
    branch's head. A deploy that holds no such credential, such as the build
-   board's Pages, is outside this. Every interface that can control a host or
-   a container takes only authenticated calls from the identities the design
-   names for it. The book's own setup listens for remote requests from any
-   address and says a real one must be much more restrictive (DT p. 92).
-   Deployment code swallows no error either. The book's function that reads
-   which release is live returns an empty value on any failure (DT p. 246), so
-   an outage there reads as no release live, and the next deploy can land on
-   the release that is serving. A deployment state that cannot be read stops
-   the deploy.
-3. **An automatic restart, reschedule or scale step is capped, recorded and
+   board's Pages, is outside this. A deploy accepts only an artifact a run on
+   the default branch built and recorded, in a store no other run can write.
+   These credential rules are this doc's, not the book's.
+4. **An automatic restart, reschedule or scale step is capped, recorded and
    reported, a stop made on purpose is never a failure to heal, and a missing
    reading leads to no step at all.** Farcic warns that recovery from a failed
    process often needs a person to find the cause, so a notification goes with
@@ -463,30 +470,33 @@ exceptions decide what is built from the first run whatever the count.
    number of times in a written window before a person is paged, held by one
    implementation, such as the host supervisor's own start limit, and the cap
    is stated so a test at it has one answer: with a cap of N, the Nth restart
-   runs and the crash after it pages. Each restart is recorded with its
-   component, exit and count. Where a component can move to another machine on
-   its own, the count survives the move without the restarter gaining write
-   access where irreplaceable records live. Two kinds of component keep
-   restarting past the cap, with a delay that grows to a written maximum and a
-   page: one whose stop loses data the project cannot recapture, and one that
-   serves actions that reduce risk, such as a cancel, which comes up stopped
-   for everything else. A component whose output the system acts on, or whose
-   check it relies on, halts the system at its cap rather than only paging.
-   The book's own average over the last hour comes back null when no entry
-   falls inside it (DT p. 383), and a null, stale or failed reading takes no
-   step and alerts. A person can switch these steps off without a deploy,
-   through an authenticated call, except the restarts of the two kinds of
-   component above, and an unreadable switch takes no step and alerts. A
-   scaling step has a written floor and ceiling on instances. An instance that
-   scaling removes stops taking work, where the book's scale-down simply
-   removes the instances it no longer wants (DT p. 286), and a write whose
-   outcome it cannot learn stays unknown, never marked as not sent. A
-   component stopped or halted on purpose reports that state, so no health
-   check reads it as failed and restarts it to clear it, and it comes up
-   halted after a restart. Neither a cap nor a scaling step leaves an action
-   that reduces risk, such as a cancel, with nothing to serve it, and where
-   one would, the page names the person's fallback.
-4. **Where a component runs on more than one machine, or on a machine that
+   runs and the crash after it pages. A window can let a slow crash loop pass,
+   so a restart of a component the system depends on pages a person as well.
+   Each restart is recorded with its component, exit and count. Where a
+   component can move to another machine on its own, the count survives the
+   move without the restarter gaining write access where irreplaceable records
+   live. Two kinds of component keep restarting past the cap, with a delay
+   that grows to a written maximum and a page: one whose stop loses data the
+   project cannot recapture, and one that serves actions that reduce risk,
+   such as a cancel, which comes up stopped for everything else. Neither an
+   unreadable record nor an unreadable or flipped switch stops their restarts.
+   Where the project has a halt that stops irreversible actions, a component
+   whose output the system acts on, or whose check it relies on, raises it at
+   its cap rather than only paging. The book's own average over the last hour
+   comes back null when no entry falls inside it (DT p. 383), and a null,
+   stale or failed reading takes no step and alerts. A person can switch these
+   steps off without a deploy, through an authenticated call, except the
+   restarts of the two kinds of component above, and an unreadable switch
+   takes no step and alerts. A scaling step has a written floor and ceiling on
+   instances. An instance that scaling removes stops taking work, where the
+   book's scale-down simply removes the instances it no longer wants (DT p.
+   286), and a write whose outcome it cannot learn stays unknown, never marked
+   as not sent. A component stopped or halted on purpose reports that state,
+   so no health check reads it as failed and restarts it to clear it, and it
+   comes up halted after a restart. Neither a cap nor a scaling step leaves an
+   action that reduces risk, such as a cancel, with nothing to serve it, and
+   where one would, the page names the person's fallback.
+5. **Where a component runs on more than one machine, or on a machine that
    keeps no state, its logs leave the machine as structured records, into one
    place that can be searched, and no log write waits on that place.** Farcic
    finds a service's logs spread over several files and several servers, and

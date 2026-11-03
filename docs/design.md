@@ -469,9 +469,12 @@ numbers, and how well they fit agent loops is untested. Five rules follow.
    spike lives outside the product's package, nothing in the product imports
    it, and it takes no irreversible action. He ranks risks to a schedule by
    probability times size, then moves a larger loss above its place in that
-   order (RD p. 95, p. 96). Where a slice keeps a list of its risks, the
-   losses the premise names rank first whatever their probability, and the
-   list ranks what to watch, never what to build next.
+   order (RD p. 95, p. 96). A slice keeps the risks to its delivery on its
+   parent issue under a `## Risks` heading. The losses the premise names rank
+   first whatever their probability, and the list ranks what to watch, never
+   what to build next. The status round of the `/l3a0:sync-prune-next` skill
+   reviews it whenever it names a card from the slice, and posts a dated
+   comment opening with `## Risks review`.
 
 ## Vocabulary
 

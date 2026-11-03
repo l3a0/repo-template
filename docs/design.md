@@ -191,7 +191,7 @@ exceptions decide what is built from the first run whatever the count.
    L9292). That lets a late write be found afterwards and stops none, and the
    book offers nothing more. So where the resource does not check, the design
    checks the lease just before each write, names the window between that
-   check and the write, never resends a write whose outcome is in doubt unless the write is a cancel by the receiver's own id and a test against the receiver's sandbox shows it applies a repeated cancel at most once, and
+   check and the write, never resends a write whose outcome is in doubt except as rule 1 allows, and
    halts when it finds a write that names an older lease after a takeover. No
    id or lease number comes from a counter that a failover or a restore from
    backup can wind back. The book's case is a promoted replica whose lagging
@@ -427,7 +427,7 @@ exceptions decide what is built from the first run whatever the count.
    on any other difference, and the deploy and the running process each
    record the artifact's hash so a mismatch halts startup or a running process, and a rollback re-points the deploy's record to the kept hash. Where only one
    instance may act at a time, a new release acts only after the old one has
-   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, the old release until the new one's own checks have passed, and the new one from the start of its wait, each under the one-actor guard and re-reading the record so a cancel already recorded is recognised rather than sent again, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
+   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, the old release until the new one's own checks have passed, and the new one from the start of its wait, each under the one-actor guard and re-reading the record so a cancel already recorded is recognised, and is sent again only as rule 1 of [Writes happen once, from one writer at a time](#writes-happen-once-from-one-writer-at-a-time) allows, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
    takes over, and an alarm fires when no release has been acting past a
    written bound, watched from outside every release and started by a risk-reducing action that waits.
 4. **Every outside call has a timeout, every dependency that can stall

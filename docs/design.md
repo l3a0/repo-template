@@ -69,6 +69,13 @@ race, and stored records have to outlive the bugs in the code that reads them.
 The rules serve the book's three goals for maintainable software: operability,
 simplicity and evolvability (DDIA L645, L646, L648).
 
+The last group comes from Steve McConnell's *Code Complete* (2nd ed.,
+Microsoft Press, 2004), cited by printed page, so CC p. 470 is page 470. It
+covers how the code holds the design's rules. Its case for writing each rule
+as a check is measured: no single way of finding defects reaches more than
+about 75% at its typical rate, and two methods combined find almost twice
+what one finds (CC p. 470, p. 471).
+
 These are checks on a design, and a review applies all of them. The mechanism
 a rule names is built when the path it guards first runs, under the ranking
 rule in [CLAUDE.md](../CLAUDE.md), and no sooner. That rule's three
@@ -300,10 +307,59 @@ exceptions decide what is built from the first run whatever the count.
    cannot recapture spills to disk or slows its producer rather than dropping
    anything.
 
+### The code holds its own rules, and every check runs in production
+
+1. **A rule whose breach cannot be undone is held by the code's structure, a
+   type or a test, never by a comment or a convention alone.** McConnell
+   separates programming in a language, limited to what it offers, from
+   programming into one, deciding what the program needs and making the
+   language supply it (CC p. 69). Where the language enforces no boundary
+   between modules, a check in CI enforces the boundaries the design draws,
+   and a test that adds a forbidden import shows it fails. A step that must
+   follow another takes the earlier step's output as its argument, so the
+   code cannot run them out of order (CC p. 348, p. 350).
+2. **A check that guards an irreversible action or stored data runs the same
+   way in tests and in production.** McConnell's default compiles assertions
+   out of production builds (CC p. 190), and Python drops every `assert` when
+   it runs with `-O`. A guard written that way is tested and then absent where
+   it matters, so it raises explicitly, and a lint rule refuses `assert`
+   outside the tests. McConnell's own exception is code that lets a program
+   fail safely, which the Mars Pathfinder's engineers left in and used to fix
+   it after landing (CC p. 210).
+3. **The design chooses once between correctness and robustness, and where a
+   wrong result costs more than no result, bad input fails rather than turning
+   neutral.** McConnell lists ways to handle a bad value, among them a neutral
+   value, the closest legal value, and a logged warning followed by carrying
+   on, and calls the choice an architectural decision (CC p. 194, p. 195,
+   p. 197). Correctness means returning no result rather than a wrong one,
+   which safety-critical software favors (CC p. 197). Where the design picks
+   correctness, no value such as −1 or zero stands for "missing" (CC p. 257),
+   a branch over a closed set ends in a failure rather than a default case
+   (CC p. 363), and a function's result starts as the failing one
+   (CC p. 224).
+4. **Data from outside becomes the project's own types at the boundary, and a
+   stand-in for an outside system passes the same contract tests as the real
+   one.** McConnell's barricade checks and converts data at the boundary, so
+   the code inside can treat a bad value as a bug rather than as input
+   (CC p. 203, p. 204). Each adapter raises the project's own exceptions at
+   the level of the interface it presents (CC p. 199, p. 200). A stand-in,
+   such as a fake or a simulator, keeps every promise of the thing it
+   replaces, which is McConnell's statement of the Liskov principle
+   (CC p. 145). So one contract suite runs against the stand-in and against
+   the real system or its recorded responses.
+5. **A result that must be exact has a second, plain implementation that a
+   test compares with the first, and a change made for speed carries a
+   measurement before and after.** McConnell's example is an insurer that
+   checked its rate system with a separate tool computing each rate on its
+   own, because accuracy was essential (CC p. 722). His tuning procedure
+   measures each change alone and reverts one that does not help, since more
+   than half of attempted tunings gain little or slow the code (CC p. 605).
+
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
-write that needs one, histograms in place of averages, and a test harness that can inject
-faults. What they buy is stored data that survives the bugs in the code
+write that needs one, histograms in place of averages, a test harness that can inject
+faults, an import check in CI, a type for each kind of outside value and a
+contract suite for each stand-in. What they buy is stored data that survives the bugs in the code
 around it, and a 100x design that holds along parameters it has named.
 
 ## How work is cut and ordered

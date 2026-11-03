@@ -94,7 +94,8 @@ exceptions decide what is built from the first run whatever the count.
    clock-offset monitor and every queue's lag alarm.
 3. Guards whose price is paid by building them late, such as the id that drops
    a repeated write, the lease number on every write that needs one, and the
-   check that refuses an action whose worst loss it cannot compute.
+   check that refuses an action that can lose money when its worst loss
+   cannot be computed.
 
 ### Faults are expected, and the system checks itself while it runs
 
@@ -400,10 +401,14 @@ exceptions decide what is built from the first run whatever the count.
    smallest effect worth detecting and the spread of the outcomes it
    expects, as the considered-and-rejected register records. The plan also
    names the measures after costs, the smallest effect the sample can
-   detect, and the range of losses to expect, set without any data held
-   back for the final test. Success is judged across every sample opened
-   for the same process, under the project's control for many tries. A
-   review checks that the plan existed before the first outcome.
+   detect with the level and power behind it, the range of losses to
+   expect, set without any data held back for the final test, and the most
+   overrides the sample takes. Success is judged across every sample the
+   project opened toward a decision, under a declared false-discovery-rate
+   control such as
+   [the research pins module](optional-policies.md#module-1-research-pins). A project that judges
+   chance outcomes with no such control has a gap to fix first. A review
+   checks that the plan existed before the first outcome.
 2. **The parts that decide the outcomes run unchanged through the sample,
    every case is accounted for, and a change to those parts starts a new
    sample.** Douglas trades a system exactly as designed for every
@@ -417,28 +422,33 @@ exceptions decide what is built from the first run whatever the count.
    on maps to exactly one recorded outcome, such as acted on or skipped for
    a reason from a closed list, and a skip never answers a missing or
    invalid input. A test matches them one to one by id, the running system
-   counts the same match and alarms on a mismatch, and fault tests drop and
-   duplicate an outcome to see the alarm fire. Overrides cluster on cases
-   that look bad at the time, so a case a person overrode is scored as the
-   process's own decision would have played out and kept in the sample,
-   with the override's effect reported apart (TZ L559). A halt of the whole
-   system pauses the sample, and the record says whether stopping one
-   process ended it. Either can happen at any time.
-3. **Each action that can lose money or something the project cannot
-   recover has its worst loss fixed first, and a check refuses it rather
-   than resizing it.** Douglas's exit for a losing trade says in advance how
-   much must be risked to learn whether the trade works (TZ L3095), and a
-   trader whose total risk is too large cuts the size and leaves each
-   trade's risk where the research set it (TZ L3220). Here the worst loss
-   comes from a stated stress case with every part of the action moving
-   against it, counting the actions already sent and still unanswered at
-   their worst, or from the planned exit where that is a fixed level and
-   larger. The project adds the reason: a jump or a halt can carry the
-   result past any exit. A check refuses an action that adds risk when that
-   loss cannot be computed, counts the part of an action that crosses zero
-   as adding, never refuses one that only reduces risk, and never resizes.
-   The step that sizes actions makes them smaller, and makes actions sized
-   together smaller together.
+   checks the same match, shows how many cases it checked and alarms on a
+   mismatch, and fault tests drop and duplicate an outcome to see the alarm
+   fire. Douglas finds that unplanned action cannot show what works
+   (TZ L559). Overrides also cluster on cases that look bad at the time, so
+   this project scores a case a person overrode as the process's own
+   decision would have played out and keeps it in the sample, with the
+   override's effect reported apart. A person stopping the process counts as
+   an override of every case while it is stopped. Only a halt the rules set
+   in advance pauses the sample, and any halt can happen at any time.
+3. **Each action that can lose money has its worst loss fixed first, and a
+   check refuses it rather than resizing it.** Douglas's exit for a losing
+   trade says in advance how much must be risked to learn whether the trade
+   works (TZ L3095), and a trader whose total risk is too large cuts the
+   size and leaves each trade's risk where the research set it (TZ L3220).
+   Here the worst loss comes from a stated stress case with every part of
+   the position moving against it, counting every action already sent,
+   working or unanswered, under each case of which ones fill, or from the
+   planned exit where that is a fixed level and larger. The project adds the
+   reason: a jump or a halt can carry the result past any exit. An action
+   counts as reducing only when it reduces the position under every case,
+   and the part of an action that crosses zero counts as adding. A check
+   refuses an action that adds to a position whose worst loss it cannot
+   compute, never refuses an action that only reduces the position for want
+   of that figure, and never resizes. The step that sizes actions makes them
+   smaller, and makes actions sized together smaller together. Tests cover
+   an action one step short of zero, at zero and past it, an action already
+   sent on each side, and a loss that cannot be computed.
 4. **Nothing raises the stake after a run of good results, except a rule
    written down before the run.** Douglas finds a trader most likely to break
    rules and oversize while winning, and a larger position magnifies the

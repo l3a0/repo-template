@@ -79,7 +79,7 @@ exceptions decide what is built from the first run whatever the count.
 2. Alarms, such as the checks a running system makes on its own guarantees, a
    clock-offset monitor and every queue's lag alarm.
 3. Guards whose price is paid by building them late, such as the id that drops
-   a repeated write and the fencing token on a lease.
+   a repeated write and the lease number on every write that needs one.
 
 ### Faults are expected, and the system checks itself while it runs
 
@@ -145,22 +145,41 @@ exceptions decide what is built from the first run whatever the count.
    unknown outcome. It may have landed with only its response lost, so a retry
    performs it twice unless the receiver removes duplicates (DDIA L4204,
    L4207). The retries at each layer below cannot see one another, so only an
-   id carried from end to end can drop the duplicate (DDIA L16438). A
-   timed-out write is recorded as unknown rather than failed, until a read of
-   the receiver settles it.
-2. **A lease or a lock is enforced by a fencing token that the protected
-   resource checks, and no id comes from a counter that a failover can wind
-   back.** A process can pause past the end of its lease, in a
-   garbage-collection pause or a suspended virtual machine, then wake and act
-   as if it still held it (DDIA L9084, L9094, L9102). A fencing token is a
-   number each grant of the lease carries, higher than every earlier grant,
-   and the resource refuses a write whose number is lower than one it has
-   already accepted (DDIA L9274, L9286). A resource that cannot check a token
-   itself still needs a workaround, such as carrying the token in the name it
-   writes (DDIA L9292). The book's case against a counter is a promoted
-   replica whose lagging counter reused keys another system already held
-   (DDIA L4868). A test pauses one holder past its lease, grants the lease to a
-   second, resumes the first, and asserts that its next write is refused.
+   id carried from end to end can drop the duplicate (DDIA L16438). The
+   receiver drops it with a uniqueness constraint applied in the same step as
+   the write, since a check that no such row exists yet has nothing to lock
+   and two writers can each pass it (DDIA L7635). A timed-out write is
+   recorded as unknown rather than failed. A read of the receiver that finds
+   the write settles it, and a read that finds nothing does not, because a
+   request can still land after its sender has gone. Where the write is
+   irreversible or moves money, its record reaches stable storage, through
+   `fsync` or the store's acknowledged write, before the write is sent, and a
+   write in doubt is resent only to a receiver shown to reject a repeated id.
+2. **A lease or a lock is enforced by a fencing token where the protected
+   resource checks one, and where it cannot, the design says the write is
+   unfenced and guards the window that is left.** A process can pause past
+   the end of its lease, in a garbage-collection pause, a suspended virtual
+   machine, swapping or a blocking write, then wake and act as if it still
+   held it (DDIA L9084, L9094, L9102, L9110). A fencing token is a number each
+   grant of the lease carries, higher than every earlier grant, and the
+   resource itself refuses a write whose number is lower than one it has
+   already accepted, since a client checking its own lease is not enough
+   (DDIA L9274, L9286). For a resource that cannot check a token, the book
+   suggests carrying it in what the resource stores, such as a file name (DDIA
+   L9292). That lets a late write be found afterwards and stops none, and the
+   book offers nothing more. So where the resource does not check, the design
+   checks the lease just before each write, names the window between that
+   check and the write, never resends a write whose outcome is in doubt, and
+   halts when it finds a write that names an older lease after a takeover. No
+   id or lease number comes from a counter that a failover or a restore from
+   backup can wind back. The book's case is a promoted replica whose lagging
+   counter reused keys another system already held (DDIA L4868). A lock held
+   for one process is one released only when its holder exits, such as
+   `flock`, never a POSIX record lock that closing any descriptor for the file
+   releases. A test pauses one holder between its check and its write, lets a
+   second take over, resumes the first, and asserts that the resource holds
+   exactly one result, or, where the resource checks tokens, that the stale
+   write is refused.
 3. **A read-modify-write on shared state is atomic, or every write that may
    conflict goes to one partition and runs in order.** Two writers that each
    read a value and write back a change lose one of the changes (DDIA L7374).
@@ -282,8 +301,8 @@ exceptions decide what is built from the first run whatever the count.
    anything.
 
 The price of these rules is a checksum and a format version on every stored
-record, an id on every write to another system, a fencing token on every
-lease, histograms in place of averages, and a test harness that can inject
+record, an id on every write to another system, a lease number on every
+write that needs one, histograms in place of averages, and a test harness that can inject
 faults. What they buy is stored data that survives the bugs in the code
 around it, and a 100x design that holds along parameters it has named.
 

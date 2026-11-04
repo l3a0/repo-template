@@ -476,8 +476,8 @@ exceptions decide what is built from the first run whatever the count.
    only after they pass.** Farcic runs the same integration tests against a
    new release twice, with only the address changed: once at its own address
    before it is made publicly available, and once through the entry point
-   users reach after the switch (DT p. 173, p. 247, p. 248). So the checks a
-   release runs at startup are the same functions the tests run, rather than a
+   users reach after the switch (DT p. 173, p. 247, p. 248). So the checks that clear a release, whether at startup or from the pipeline,
+   are the same functions the tests run, rather than a
    second list that would drift from them. A failure halts new irreversible
    actions, or rolls back where the project allows an automatic rollback, and
    tells a person, and the actions that reduce risk, such as a cancel or a
@@ -504,8 +504,7 @@ exceptions decide what is built from the first run whatever the count.
    check runs in a mode that only reports, under a role that cannot write and
    reads no stored data, and a difference is drift, which alerts, as does a
    check that has not reported past a written bound. Neither the code nor any
-   role that applies it can delete, overwrite, expire or recreate data the project cannot
-   recapture, a stop that only a person may release, a lease, or the channel
+   role that applies it can delete, overwrite, append to, expire or recreate data the project cannot recapture, a stop that only a person may release, a lease, or the channel
    that carries actions that reduce risk, write a setting only the owner may
    change, read a credential, grant read of one to any principal but the one
    the design names, or change who can act as that principal. That guard sits where the role it
@@ -515,9 +514,8 @@ exceptions decide what is built from the first run whatever the count.
    until a person releases it, and a store of records the project cannot
    recapture that is found empty, or behind its own copies, reads as missing,
    never as empty. A protected store found missing stops new irreversible
-   actions where the project has such a stop and pages a person, while recording of data the project cannot recapture keeps running. A
-   store of such records starts empty only on a record that says this is a
-   first start. Such data is restored from its copies and never rebuilt
+   actions where the project has such a stop and pages a person, while recording of data the project cannot recapture keeps running. A store of such records starts empty only once, on a record that says this
+   is the first start. Such data is restored from its copies and never rebuilt
    this way. Every interface that can control a host or a container takes only
    authenticated calls from the identities the design names for it. The book's
    own setup listens for remote requests from any address and says a real one
@@ -549,14 +547,14 @@ exceptions decide what is built from the first run whatever the count.
    process often needs a person to find the cause, so a notification goes with
    it (DT p. 302), and he finds a bare redeploy incomplete for the same reason
    (DT p. 263). Docker's `always` policy restarts a container without limit
-   (DT p. 345). So a restart starts the artifact already deployed and cannot
+   (DT p. 345). A restart starts the artifact already deployed and cannot
    change which one that is, and a record of what is deployed that cannot be
    read takes no restart and alerts. Each component restarts at most a written
    number of times in a written window before a person is paged, held by one implementation, such as the host supervisor's own start limit,
    which does not bind the two kinds of component below, and the cap
    is stated so a test at it has one answer: with a cap of N, the Nth restart
    runs and the crash after it pages. A window can let a slow crash loop pass,
-   so a restart of a component the system depends on pages a person as well.
+   so a crash loop slower than the window must still reach a person.
    Each restart is recorded with its component, exit and count. Where a
    component can move to another machine on its own, the count survives the
    move without the restarter gaining write access where irreplaceable records
@@ -591,7 +589,7 @@ exceptions decide what is built from the first run whatever the count.
    line goes through a bounded buffer that drops and counts what it cannot
    write, so a stalled pipeline never stalls the work, and the buffer alarms
    before it drops. Lines written are compared with lines received, per process run so a restart
-   cannot mask a gap, and a gap alerts. A component's log credential can only write. A record that cannot
+   cannot mask a gap, a gap alerts, and so does a comparison that stops running. A component's log credential can only write. A record that cannot
    be recaptured, such as an audit trail, keeps its own store, which no log
    pipeline, retention rule or cleanup reaches.
 
@@ -600,8 +598,8 @@ injects, with its test, such as a component that must come up halted, a null
 reading behind a step that heals, and a store found missing. A failure at
 deploy time, such as an unreadable deployment state or drift, has a CI test
 and a drill, and so do the restart cap, every alarm this group adds, and the
-switch that stops restarts and scaling, flipped with the component left
-running.
+switch that stops restarts and scaling, flipped with the component left running, and a crash after it takes no
+restart, except on the two kinds of component the rule names.
 
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
@@ -614,7 +612,8 @@ breaker per dependency that can stall others, the artifact's hash, a test on
 configuration that differs between environments, a correlation id, a
 synthetic transaction, an alarm at the level where planning the rewrite starts,
 startup checks that are the tested code, run where each release runs,
-an approval no agent session holds on every production credential,
+an approval no agent session holds on every deploy credential, where the owner
+deploys by hand,
 infrastructure code with a scheduled check that finds no difference, a
 cap on every automatic restart, and a log pipeline off the machine. What they buy is stored data that survives the bugs in the code
 around it, and a 10x design that holds along parameters it has named.

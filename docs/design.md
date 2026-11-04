@@ -540,8 +540,7 @@ exceptions decide what is built from the first run whatever the count.
    that admits only the default branch, with an identity no agent session holds as its required reviewer and no
    administrator bypass, and no login an agent session holds, on
    GitHub or in the cloud, can change that environment, bypass the default
-   branch's ruleset or assume a role that deploys or applies the code. A cloud role
-   trusted through OIDC trusts only that environment, and a job that uses it
+   branch's ruleset or assume a role that deploys or applies the code. A deploy's cloud role trusted through OIDC trusts only that environment, and a job that uses it
    runs only on a push or a manual dispatch on the default branch, never on
    `pull_request_target` or `workflow_run`, and runs nothing but the default
    branch's head. A deploy that holds no such credential, such as the build
@@ -550,8 +549,8 @@ exceptions decide what is built from the first run whatever the count.
    session holds can write, where that run was started by a
    push or a manual dispatch, never by `pull_request_target` or `workflow_run`.
    A plan's output and a deploy's log stay out of any public log or artifact,
-   and the code writes no secret into its state. These credential rules are
-   this doc's, not the book's.
+   and the code writes no secret into its state. A scheduled read-only check's role trusts one workflow and one event on the
+   default branch. These credential rules are this doc's, not the book's.
 4. **An automatic restart, reschedule or scale step is capped, recorded and
    reported, a stop made on purpose is never a failure to heal, and a missing
    reading leads to no step at all.** Farcic warns that recovery from a failed
@@ -566,15 +565,17 @@ exceptions decide what is built from the first run whatever the count.
    is stated so a test at it has one answer: with a cap of N, the Nth restart
    runs and the crash after it pages. A window can let a slow crash loop pass,
    so a crash loop slower than the window must still reach a person.
-   Each restart is recorded with its component, exit and count. Where a
+   Each restart, reschedule and scale step is recorded with its component, exit or
+   reason and count, and a component with no written kind takes the stricter
+   outcome below. Where a
    component can move to another machine on its own, the count survives the
    move without the restarter gaining write access where irreplaceable records
    live. Two kinds of component keep restarting past the cap, with a delay that grows
-   to a written maximum and a page, and for one that serves actions that reduce
-   risk the maximum sits below the written bound on those actions: one whose stop loses data the
+   to a written maximum and a page, and for one that serves actions that reduce risk the maximum, plus the time
+   from a start to serving those actions, sits below the written bound on them: one whose stop loses data the
    project cannot recapture, and one that serves actions that reduce risk,
-   such as a cancel, which comes up stopped for everything else, as it does below
-   the cap when its switch or count cannot be read or its switch is off. Neither an
+   such as a cancel, which comes up stopped for everything else, as it does below the cap when its switch or count cannot be read or is absent,
+   or its switch is off. Neither an
    unreadable record nor an unreadable or flipped switch stops their restarts.
    Where the project has a halt that stops irreversible actions, a component
    whose output the system acts on, or whose check it relies on, raises it at its cap rather than only paging, and a crash of any
@@ -582,8 +583,10 @@ exceptions decide what is built from the first run whatever the count.
    There, a crash on one record that cannot be recaptured or repeated halts on
    the first crash, names the record and takes no restart into it. The book's own average over the last hour
    comes back null when no entry falls inside it (DT p. 383), and a null,
-   stale or failed reading takes no step and alerts. A person can switch these
-   steps off without a deploy, through an authenticated call, except the
+   stale or failed reading takes no step and alerts. A person can switch these steps off without a deploy, through an authenticated
+   call, the code declares the switch and never its position, a switch left off
+   alerts when the component next starts, and one continuing cause raises one page
+   at a written interval, except the
    restarts of the two kinds of component above, a flip is recorded, and an
    unreadable switch takes no step and alerts. A scaling step has a written floor and ceiling on
    instances. An instance that scaling removes stops taking work, where the

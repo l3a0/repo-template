@@ -484,8 +484,8 @@ exceptions decide what is built from the first run whatever the count.
    stop, stay served wherever their own record can still be written before
    they are sent. A release that fails its own integrity check cannot be
    trusted to serve them, so it serves nothing and the page names the person's
-   fallback. No such check touches something that cannot be undone, such as a live
-   account or a customer's data, in any environment, so its code is the same
+   fallback. No such check touches something that cannot be undone, such as a production
+   system or a customer's data, in any environment, so its code is the same
    everywhere. A check that starts something waits on a readiness check
    with a timeout, never on a fixed sleep. The book calls its own fixed pause
    something to use rarely (DT p. 200), and this doc makes it never.
@@ -506,15 +506,19 @@ exceptions decide what is built from the first run whatever the count.
    check that has not reported past a written bound. Neither the code nor any
    role that applies it can delete, overwrite, append to, expire or recreate data the project cannot recapture, a stop that only a person may release, a lease, or the channel
    that carries actions that reduce risk, write a setting only the owner may
-   change, read a credential, grant read of one to any principal but the one
+   change, read, overwrite or delete a credential, grant read of one to any principal but the one
    the design names, or change who can act as that principal. That guard sits where the role it
    binds cannot edit it, such as an account-level policy, and a check on the
    plan's machine-readable output refuses such a change, including one to a
    lifecycle rule or a policy attached to the store, whether or not the store's block is still in the code. A store of a stop that is created again starts stopped
    until a person releases it, and a store of records the project cannot
    recapture that is found empty, or behind its own copies, reads as missing,
-   never as empty. A protected store found missing stops new irreversible
-   actions where the project has such a stop and pages a person, while recording of data the project cannot recapture keeps running. A store of such records starts empty only once, on a record that says this
+   never as empty. A protected store found missing stops new irreversible actions where the
+   project has such a stop and pages a person, while recording of data the
+   project cannot recapture keeps running. A store of such records found
+   missing, empty or behind takes no entry until it is restored, and where that
+   leaves an action that reduces risk unserved, the page names the person's
+   fallback. A store of such records starts empty only once, on a record that says this
    is the first start. Such data is restored from its copies and never rebuilt
    this way. Every interface that can control a host or a container takes only
    authenticated calls from the identities the design names for it. The book's
@@ -537,10 +541,13 @@ exceptions decide what is built from the first run whatever the count.
    runs only on a push or a manual dispatch on the default branch, never on
    `pull_request_target` or `workflow_run`, and runs nothing but the default
    branch's head. A deploy that holds no such credential, such as the build
-   board's Pages, is outside this. A deploy accepts only an artifact a run on the default branch built and
-   recorded, in a store no other run can write, where that run was started by a
+   board's Pages, is outside this. A deploy accepts only an artifact a run on the default branch built from the
+   branch's head and recorded, in a store no other run and no login an agent
+   session holds can write, where that run was started by a
    push or a manual dispatch, never by `pull_request_target` or `workflow_run`.
-   These credential rules are this doc's, not the book's.
+   A plan's output and a deploy's log stay out of any public log or artifact,
+   and the code writes no secret into its state. These credential rules are
+   this doc's, not the book's.
 4. **An automatic restart, reschedule or scale step is capped, recorded and
    reported, a stop made on purpose is never a failure to heal, and a missing
    reading leads to no step at all.** Farcic warns that recovery from a failed
@@ -558,8 +565,9 @@ exceptions decide what is built from the first run whatever the count.
    Each restart is recorded with its component, exit and count. Where a
    component can move to another machine on its own, the count survives the
    move without the restarter gaining write access where irreplaceable records
-   live. Two kinds of component keep restarting past the cap, with a delay
-   that grows to a written maximum and a page: one whose stop loses data the
+   live. Two kinds of component keep restarting past the cap, with a delay that grows
+   to a written maximum and a page, and for one that serves actions that reduce
+   risk the maximum sits below the written bound on those actions: one whose stop loses data the
    project cannot recapture, and one that serves actions that reduce risk,
    such as a cancel, which comes up stopped for everything else. Neither an
    unreadable record nor an unreadable or flipped switch stops their restarts.

@@ -116,8 +116,7 @@ exceptions decide what is built from the first run whatever the count.
    clock-offset monitor and every queue's lag alarm.
 3. Guards whose price is paid by building them late, such as the id that drops
    a repeated write, the lease number on every write that needs one, and the
-   check that refuses an action that adds to a position when its worst loss
-   cannot be computed.
+   check that refuses an action that adds to a position that can lose money when its worst loss cannot be computed.
 
 ### Faults are expected, and the system checks itself while it runs
 
@@ -683,31 +682,32 @@ restart, except on the two kinds of component the rule names.
    how many cases it checked, alarms on a mismatch and when it has not run
    within that time, and on either halts where the actions can lose money, and
    each such halt says why it halted and how it is released. Fault tests drop
-   and duplicate an outcome, inject an action with no cause and stop the
-   match, to see the alarm fire each time and, where the actions can lose
-   money, the halt. Douglas finds that unplanned action cannot show what works
-   (TZ L559). Overrides can also be expected to cluster on cases that look bad
-   at the time, so this project scores a case a person overrode as the
-   process's own decision would have played out and keeps it in the sample,
-   with the override's effect reported apart. A person stopping the process
-   counts as an override of every case while it is stopped, though a stop, a
-   cancel or a cut in size never counts toward the most overrides, and no
-   sample rule delays or refuses one. The only price of a long stop is that it
-   can use up the share scored by replay and end the sample without a verdict.
-   A raise of the stake or of a limit closes the sample without a verdict
-   unless a rule written before the sample moved it, and a cut, a tightened
-   limit or its return to the value it held when the sample opened keeps it
-   open, with results judged per unit of risk and a case refused because a
-   person tightened a limit scored by replay. A fix to a safety control or a
-   rollback is never held back to keep a sample whole. Only a halt the rules
-   set in advance or a stop of the system itself pauses the sample. A pause
-   stops new cases counting, while every position held through it keeps
-   counting its results and the cases it skipped are scored by replay,
-   reported apart and counted toward the share scored by replay. Past the
-   total the plan named for pauses a person starts or ends, such as a drill
-   recorded as one before it starts, their cases are scored as a stop's are.
-   Numbers from a sample that ended without a verdict, and cases reported
-   apart, are labelled exploratory.
+   and duplicate an outcome, feed a skip a bad input, inject an action with no
+   cause and stop the match, to see the alarm fire each time and, where the
+   actions can lose money, the halt. Douglas finds that unplanned action
+   cannot show what works (TZ L559). Overrides can also be expected to cluster
+   on cases that look bad at the time, so this project scores a case a person
+   overrode as the process's own decision would have played out and keeps it
+   in the sample, with the override's effect reported apart. A person stopping
+   the process counts as an override of every case while it is stopped, though
+   a stop, a cancel or a cut in size never counts toward the most overrides,
+   and no sample rule delays or refuses one. The only price of a long stop is
+   that it can use up the share scored by replay and end the sample without a
+   verdict. A raise of the stake or of a limit closes the sample without a
+   verdict unless a rule written before the sample moved it, and a cut, a
+   tightened limit or its return to the value it held when the sample opened
+   keeps it open, with results judged per unit of risk and a case refused
+   because a person tightened a limit scored by replay. A fix to a safety
+   control or a rollback is never held back to keep a sample whole. Only a
+   halt the rules set in advance or a stop of the system itself pauses the
+   sample. A pause stops new cases counting, while every position held through
+   it keeps counting its results and the cases it skipped are scored by
+   replay, reported apart and counted toward the share scored by replay. Past
+   the total the plan named for pauses a person starts or ends, such as a
+   drill recorded as one before it starts, their cases are scored as a stop's
+   are. Numbers from a sample that ended without a verdict, and cases reported
+   apart, are labelled exploratory, and what is promoted is the exact version
+   the passing sample ran on.
 3. **Where a process's actions can lose money, each action that adds to a
    position has its worst loss fixed first, and a check refuses rather than
    resizes.** Douglas's exit for a losing trade says in advance how much must
@@ -728,8 +728,8 @@ restart, except on the two kinds of component the rule names.
    decides whether it holds that action, and never resizes. The step that
    sizes actions makes them smaller, and makes actions sized together smaller
    together. Tests cover an action one step short of zero, at zero and past
-   it, an action already sent on each side, and a loss that cannot be
-   computed.
+   it, an action already sent on each side, a loss that cannot be computed,
+   and a bad stress value.
 4. **Where a process's actions can lose money, no process, agent or proposal
    raises the stake after a run of good results, except on a rule or evidence
    set out before the run.** Douglas holds that a trader is most likely to
@@ -742,27 +742,26 @@ restart, except on the two kinds of component the rule names.
    identical.
 
 The price of these rules is a checksum and a format version on every stored
-record, an id on every write to another system, a lease number on every
-write that needs one, histograms in place of averages, a test harness that can inject
-faults, an import check in CI, a run of the suite under `python -O`, a type
-for each kind of outside value, a contract suite for each stand-in, a second
-implementation in the tests of each result whose error costs money, a
+record, an id on every write to another system, a lease number on every write
+that needs one, histograms in place of averages, a test harness that can
+inject faults, an import check in CI, a run of the suite under `python -O`, a
+type for each kind of outside value, a contract suite for each stand-in, a
+second implementation in the tests of each result whose error costs money, a
 measurement for each tuning change, a timeout per outside call, a limit and a
 breaker per dependency that can stall others, the artifact's hash, a test on
-configuration that differs between environments, a correlation id, a
-synthetic transaction, an alarm at the level where planning the rewrite starts,
-startup checks that are the tested code, run where each release runs,
-an approval no agent session holds on every deploy credential, where the owner
-deploys by hand, a rollback that waits on a merge, a start that needs a copy to
-answer,
-infrastructure code with a scheduled check that finds no difference, a
-cap on every automatic restart, a log pipeline off the machine, a sample plan
-written before any process with chance outcomes is judged, a recorded outcome
-for every case with a running match that alarms, and a worst loss computed
-before each action that adds to a position. What they buy is stored data that
-survives the bugs in the code around it, a 10x design that holds along
-parameters it has named, and judgements of a chance process that one outcome
-or one streak cannot move.
+configuration that differs between environments, a correlation id, a synthetic
+transaction, an alarm at the level where planning the rewrite starts, startup
+checks that are the tested code, run where each release runs, an approval no
+agent session holds on every deploy credential, where the owner deploys by
+hand, a rollback that waits on a merge, a start that needs a copy to answer,
+infrastructure code with a scheduled check that finds no difference, a cap on
+every automatic restart, a log pipeline off the machine, a sample plan written
+before any process with chance outcomes is judged, a recorded outcome for
+every case with a running match that alarms, and a worst loss computed before
+each action that adds to a position that can lose money. What they buy is
+stored data that survives the bugs in the code around it, a 10x design that
+holds along parameters it has named, and judgements of a chance process that
+one outcome or one streak cannot move.
 
 ## How work is cut and ordered
 

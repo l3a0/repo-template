@@ -106,7 +106,7 @@ exceptions decide what is built from the first run whatever the count.
    clock-offset monitor and every queue's lag alarm.
 3. Guards whose price is paid by building them late, such as the id that drops
    a repeated write, the lease number on every write that needs one, and the
-   check that refuses an action that can lose money when its worst loss
+   check that refuses an action that adds to a position when its worst loss
    cannot be computed.
 
 ### Faults are expected, and the system checks itself while it runs
@@ -481,48 +481,60 @@ exceptions decide what is built from the first run whatever the count.
    experience rather than data, so the project sets each sample from the
    smallest effect worth detecting and the spread of the outcomes it
    expects, as the considered-and-rejected register records. The plan also
-   names the measures after costs, the smallest effect the sample can
+   names the sample's longest span in time, the measures after costs, the
+   smallest effect the sample can
    detect with the level and power behind it, and, where the process can
    lose money, the range of losses to expect, set without any data held
    back for the final test. Where a person can override the process, it
-   also names the most overrides the sample takes and the largest share of
-   cases it may score by replay rather than by its own results. Success is judged across every sample the
-   project opened toward a decision, under a declared false-discovery-rate
-   control such as
-   [the research pins module](optional-policies.md#module-1-research-pins). A project that judges
-   chance outcomes with no such control declares one before calling any
-   result registered. A review
-   checks that the plan existed before the first outcome.
+   also names the most overrides the sample takes, the longest a pause a
+   person starts or ends may last, and the largest share of cases it may
+   score by replay rather than by its own results. Success is judged across
+   every sample the project opened toward a decision, under a declared
+   false-discovery-rate control such as
+   [the research pins module](optional-policies.md#module-1-research-pins).
+   A project that judges chance outcomes with no such control declares one
+   before calling any result registered, meaning committed in writing before
+   the number was seen. A review checks that the plan existed before the
+   first outcome.
 2. **The parts that decide the outcomes run unchanged through the sample,
    every case is accounted for, and a change to those parts starts a new
    sample.** Douglas trades a system exactly as designed for every
    occurrence of its edge in the sample (TZ L3232), because taking every
    case is what lets the sample show the odds (TZ L1860). Here each outcome
    counted in a sample carries one version of the parts that decide it. A
-   replay of the sample's cases confirms that a change elsewhere left the
-   decisions the same, which keeps the sample open, and every sample opened
-   is counted, including one ended early, so a sample cannot be restarted
-   until one happens to look good. Every case the process should have acted
-   on maps to a recorded outcome for each action it produced, such as acted
-   on or skipped for a reason from a closed list, every action traces back
-   to a case, a recorded human act or a halt, and a skip never answers a
-   missing or invalid input. A test matches them one to one by id, the
-   running system checks the same match, shows how many cases it checked,
-   alarms on a mismatch and halts where the actions can lose money, and fault tests drop and duplicate an outcome to see the alarm
-   fire. Douglas finds that unplanned action cannot show what works
-   (TZ L559). Overrides also cluster on cases that look bad at the time, so
-   this project scores a case a person overrode as the process's own
+   replay of the sample's cases that shows no difference after a change
+   elsewhere keeps the sample open, though it speaks only for the cases
+   replayed. Every sample opened is counted, including one ended early, so
+   a sample cannot be restarted until one happens to look good. Every case
+   the process should have acted on maps to a recorded outcome for each
+   action it produced, such as acted on or skipped for a reason from a
+   closed list, every action traces back to its cause, such as a case, a
+   recorded human act, a halt or an outside event recorded with its source,
+   and a skip never answers a missing or invalid input. A test matches them
+   one to one by id, and fault tests drop and duplicate an outcome to see
+   the alarm fire. Where a running system acts on the process's decisions,
+   it checks the same match within a stated time, treats a case inside that
+   time as in flight, shows how many cases it checked, alarms on a mismatch
+   and halts where the actions can lose money, and each such halt says how
+   it is released. Douglas finds that unplanned action cannot show what
+   works (TZ L559). Overrides can also be expected to cluster on cases that
+   look bad at the time, so this project scores a case a person overrode as the process's own
    decision would have played out and keeps it in the sample, with the
    override's effect reported apart. A person stopping the process counts as
    an override of every case while it is stopped, though a stop, a cancel or
-   a cut in size never counts toward the most overrides, so no rule makes a
-   person hesitate to lower risk. A raise of the stake or of a limit closes
-   the sample, and a cut or a tightened limit keeps it open. Only a halt the
-   rules set in advance pauses the sample. A pause stops new cases counting,
-   while every position held through it keeps counting its results, and any
-   halt can happen at any time.
-3. **Each action that can lose money has its worst loss fixed first, and a
-   check refuses it rather than resizing it.** Douglas's exit for a losing
+   a cut in size never counts toward the most overrides, and no sample rule
+   delays or refuses one. The only price of a long stop is that it can use
+   up the share scored by replay and end the sample without a verdict. A
+   raise of the stake or of a limit closes the sample unless a rule written
+   before the sample moved it, and a cut or a tightened limit keeps it open.
+   A fix to a safety control or a rollback is never held back to keep a
+   sample whole. Only a halt the rules set in advance pauses the sample. A
+   pause stops new cases counting, while every position held through it
+   keeps counting its results and the cases it skipped are scored by replay
+   and reported apart. Past the limit the plan named for a pause a person
+   starts or ends, its cases count as overrides.
+3. **Each action that adds to a position has its worst loss fixed first, and
+   a check refuses rather than resizes.** Douglas's exit for a losing
    trade says in advance how much must be risked to learn whether the trade
    works (TZ L3095), and a trader whose total risk is too large cuts the
    size and leaves each trade's risk where the research set it (TZ L3220).
@@ -532,10 +544,12 @@ exceptions decide what is built from the first run whatever the count.
    planned exit where that is a fixed level and larger. The project adds the
    reason: a jump or a halt can carry the result past any exit. An action
    counts as reducing only when it reduces the position under every case,
-   and the part of an action that crosses zero counts as adding. A check
-   refuses an action that adds to a position whose worst loss it cannot
-   compute, never refuses an action that only reduces the position for want
-   of that figure, and never resizes. The step that sizes actions makes them
+   and the part of an action that crosses zero counts as adding. A stress
+   value that is missing or not a finite positive number is bad input, and
+   halts as bad input does. A check refuses an action that adds to a
+   position whose worst loss it cannot compute, never refuses an action that
+   only reduces the position for want of that figure, though a halt in force
+   can still hold it, and never resizes. The step that sizes actions makes them
    smaller, and makes actions sized together smaller together. Tests cover
    an action one step short of zero, at zero and past it, an action already
    sent on each side, and a loss that cannot be computed.
@@ -559,7 +573,7 @@ configuration that differs between environments, a correlation id, a
 synthetic transaction, an alarm at the level where planning the rewrite
 starts, a sample plan written before any process with chance outcomes is
 judged, a recorded outcome for every case with a running match that alarms,
-and a worst loss computed before each action that can lose money. What they
+and a worst loss computed before each action that adds to a position. What they
 buy is stored data that survives the bugs in the code around it, a 10x design
 that holds along parameters it has named, and judgements of a chance process
 that one outcome or one streak cannot move.

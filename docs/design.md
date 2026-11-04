@@ -519,7 +519,7 @@ exceptions decide what is built from the first run whatever the count.
    confirms, never the match itself, and a skip never answers a missing or invalid input. A test matches them
    one to one by id, and fault tests drop and duplicate an outcome, inject
    an action with no cause and stop the match, to see the alarm fire each
-   time. Where a running system acts on the process's decisions,
+   time and, where the actions can lose money, the halt. Where a running system acts on the process's decisions,
    it checks the same match, and the result that ends the process, within a
    stated time, treats a case inside that
    time as in flight, shows how many cases it checked, alarms on a mismatch
@@ -540,8 +540,8 @@ exceptions decide what is built from the first run whatever the count.
    A fix to a safety control or a rollback is never held back to keep a
    sample whole. Only a halt the rules set in advance or a stop of the
    system itself pauses the sample. A pause stops new cases counting, while every position held through it
-   keeps counting its results and the cases it skipped are scored by replay
-   and reported apart. Past the total the plan named for pauses a person
+   keeps counting its results and the cases it skipped are scored by replay,
+   reported apart and counted toward the share scored by replay. Past the total the plan named for pauses a person
    starts or ends, such as a drill recorded as one before it starts, their
    cases are scored as a stop's are.
 3. **Each action that adds to a position has its worst loss fixed first, and
@@ -556,8 +556,8 @@ exceptions decide what is built from the first run whatever the count.
    reason: a jump or a halt can carry the result past any exit. An action
    counts as reducing only when it reduces the position under every case,
    and the part of an action that crosses zero counts as adding. A stress
-   value that is missing, not a finite positive number or outside a stated
-   sane range is bad input, and halts as bad input does. A check refuses an action that adds to a
+   value that is missing, stale, not a finite positive number or outside a
+   stated sane range is bad input, and halts as bad input does. A check refuses an action that adds to a
    position whose worst loss it cannot compute, never refuses an action that
    only reduces the position for want of that figure, though a halt's own
    rule decides whether it holds that action, and never resizes. The step that sizes actions makes them
@@ -567,8 +567,8 @@ exceptions decide what is built from the first run whatever the count.
 4. **No process, agent or proposal raises the stake after a run of good
    results, except on a rule or evidence set out before the run.** Douglas holds that a trader is most likely
    to break rules and oversize while winning, and that a larger position
-   magnifies the next move against it (TZ L919, L943). A raise of a limit or
-   a stake cites the evidence the plan named before the run, never a streak.
+   magnifies the next move against it (TZ L919, L943). A proposed raise of a limit
+   or a stake cites the evidence the plan named before the run, never a streak.
    For a process whose sizing rule reads no results, a test runs the same
    inputs, account value and limits with no record of results, after a run
    of good ones and after a run of bad ones, and asserts the stake is

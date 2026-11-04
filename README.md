@@ -46,7 +46,7 @@ from whichever copy it was cloned off.
   seeded repo calls. The section below explains it.
 - **[docs/design.md](docs/design.md)** is the skeleton for the design doc
   CLAUDE.md refers to by name. Its design principles, drawn from *Designing
-  Data-Intensive Applications*, *Code Complete* and *Building Microservices*, hold for any seeded repo, which adds its own
+  Data-Intensive Applications*, *Code Complete*, *Building Microservices* and *The DevOps 2.0 Toolkit*, hold for any seeded repo, which adds its own
   after them.
 - **[docs/optional-policies.md](docs/optional-policies.md)** holds two policy
   modules that only some repos need, ready to move into CLAUDE.md.

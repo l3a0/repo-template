@@ -88,6 +88,15 @@ its own author's team found that splitting too soon was costly, so the rules
 split a component further only when evidence calls for it
 (BM L777, BM L796).
 
+Viktor Farcic's *The DevOps 2.0 Toolkit* (2016), cited by printed page, so DT
+p. 247 is page 247, supplies the group on releases, machines and healing. It
+covers what happens once code leaves the repository: how a release is checked
+on the machine that runs it, how those machines are built, and what an
+automatic restart may do. The book's pipeline deploys every passing commit to
+production with no person in it (DT p. 20). A project whose owner deploys by
+hand takes the book's continuous delivery instead, where every passing build
+could be deployed and a person decides when (DT p. 19).
+
 These are checks on a design, and a review applies all of them. The mechanism
 a rule names is built when the path it guards first runs, under the ranking
 rule in [CLAUDE.md](../CLAUDE.md), and no sooner. That rule's three
@@ -460,6 +469,155 @@ exceptions decide what is built from the first run whatever the count.
    the real adapters refuse anything carrying it, and the transaction never
    enters recorded data or an input the real system reads.
 
+### Releases are checked where they run, and nothing heals by hiding a fault
+
+1. **The checks that clear a release to act are the code its tests ran, run
+   where the release runs with only the target changed, and the release acts
+   only after they pass.** Farcic runs the same integration tests against a
+   new release twice, with only the address changed: once at its own address
+   before it is made publicly available, and once through the entry point
+   users reach after the switch (DT p. 173, p. 247, p. 248). So the checks that clear a release, whether at startup or from the pipeline,
+   are the same functions the tests run, rather than a
+   second list that would drift from them. A failure halts new irreversible
+   actions, or rolls back where the project allows an automatic rollback, and
+   tells a person, and the actions that reduce risk, such as a cancel or a
+   stop, stay served wherever their own record can still be written before
+   they are sent. A release that fails its own integrity check cannot be
+   trusted to serve them, so it serves nothing and the page names the person's
+   fallback. No such check takes an action that cannot be undone, such as an irreversible
+   send or a change to a customer's data, in any environment, so its code is the same
+   everywhere. A check that starts something waits on a readiness check
+   with a timeout, never on a fixed sleep, and a wait that expires fails the check. The book calls its own fixed pause
+   something to use rarely (DT p. 200), and this doc makes it never.
+2. **Every machine is built from committed code, a check of that code against
+   what it built finds no difference, and a change made by hand is committed
+   or undone.** Farcic runs every step from a delivery server and finds no
+   need to log in to a server and work on it by hand (DT p. 88), and a second
+   run of his playbook finds almost nothing left to do (DT p. 190). The code
+   names where each credential is read from and holds none, its state stays
+   out of the repository, every environment applies the same committed code,
+   differing only in the committed list of keys, and a setting only the owner may change stays
+   outside it. Applying the code to production is a deploy, timed so it cannot
+   cut an action that reduces risk, such as a cancel. An infrastructure change rolls back by a new commit on the default branch,
+   applied like any other change, that restores the code before it and
+   detaches, never destroys, any protected store the change created. It rolls
+   forward by bringing that store back under the code by its recorded id. The scheduled
+   check runs in a mode that only reports, under a role that cannot write and
+   reads no stored data, and a difference is drift, which alerts, as does a
+   check that has not reported past a written bound. Neither the code nor any
+   role that applies it can delete, overwrite, append to, expire or recreate data the project cannot recapture, a stop that only a person may release, a lease, or the channel
+   that carries actions that reduce risk, write a setting only the owner may
+   change, read, overwrite or delete a credential, grant read of one to any principal but the one
+   the design names, or change who can act as that principal. That guard sits where the role it
+   binds cannot edit it, such as an account-level policy, and a check on the
+   plan's machine-readable output refuses such a change, including one to a
+   lifecycle rule or a policy attached to the store, whether or not the store's block is still in the code. A store of a stop that is created again starts stopped
+   until a person releases it, and a store of records the project cannot
+   recapture that is found empty, or behind its own copies, reads as missing,
+   never as empty. A protected store found missing stops new irreversible actions, until a person
+   releases the stop, where the project has such a stop, and pages a person, while recording of data the
+   project cannot recapture keeps running. A store of such records found
+   missing, empty or behind takes no entry until it is restored, and where that
+   leaves an action that reduces risk unserved, the page names the person's
+   fallback. A comparison with a copy that cannot finish, or first-start evidence
+   that is absent or unreadable, stops new irreversible actions until a person releases the stop and alerts,
+   and never reads as current, and an entry written meanwhile stays through any
+   restore, as the rules on recorded data require. A store of such records starts empty only once, on a
+   record that says this is the first start. Such data is restored from its copies and never rebuilt
+   this way. Every interface that can control a host or a container takes only
+   authenticated calls from the identities the design names for it. The book's
+   own setup listens for remote requests from any address and says a real one
+   must be much more restrictive (DT p. 92). Deployment code swallows no error
+   either. The book's function that reads which release is live returns an
+   empty value on any failure (DT p. 246), so an outage there reads as no
+   release live, and the next deploy can land on the release that is serving.
+   A deployment state that cannot be read stops the deploy.
+3. **No run of a branch other than the default holds a production credential,
+   and a deploy by hand sits behind an approval no agent session can give.**
+   No workflow run whose code comes from a branch other than the default holds
+   a credential that can deploy to, act on or read production. Where the owner deploys
+   by hand, a deploy credential sits behind an environment per target account
+   that admits only the default branch, with an identity no agent session holds as its required reviewer and no
+   administrator bypass, and no login an agent session holds, on
+   GitHub or in the cloud, can change that environment, bypass the default
+   branch's ruleset or assume a role that deploys or applies the code. A deploy's cloud role trusted through OIDC trusts only that environment, and a job that uses it
+   runs only on a push or a manual dispatch on the default branch, never on
+   `pull_request_target` or `workflow_run`, and runs nothing but the default
+   branch's head. A deploy that holds no such credential, such as the build
+   board's Pages, is outside this. A deploy accepts only an artifact a run on the default branch recorded when it
+   built the commit then at that branch's head, in a store no other run and no login an agent
+   session holds can write, where that run was started by a
+   push or a manual dispatch, never by `pull_request_target` or `workflow_run`.
+   A plan's output and a deploy's log stay out of any public log or artifact,
+   and the code writes no secret into its state. A scheduled read-only check's role trusts one workflow and one event on the
+   default branch. These credential rules are this doc's, not the book's.
+4. **An automatic restart, reschedule or scale step is capped, recorded and
+   reported, a stop made on purpose is never a failure to heal, and a missing
+   reading leads to no step at all.** Farcic warns that recovery from a failed
+   process often needs a person to find the cause, so a notification goes with
+   it (DT p. 302), and he finds a bare redeploy incomplete for the same reason
+   (DT p. 263). Docker's `always` policy restarts a container without limit
+   (DT p. 345). A restart starts the artifact already deployed and cannot
+   change which one that is, and a record of what is deployed that cannot be
+   read takes no restart and alerts. Each component restarts at most a written
+   number of times in a written window before a person is paged, held by one implementation, such as the host supervisor's own start limit,
+   which does not bind the two kinds of component below, and the cap
+   is stated so a test at it has one answer: with a cap of N, the Nth restart
+   runs and the crash after it pages. A window can let a slow crash loop pass,
+   so a crash loop slower than the window must still reach a person.
+   Each restart, reschedule and scale step is recorded with its component, exit or
+   reason and count, and a component with no written kind takes the stricter
+   outcome below. Where a
+   component can move to another machine on its own, the count survives the
+   move without the restarter gaining write access where irreplaceable records
+   live. Two kinds of component keep restarting past the cap, with a delay that grows
+   to a written maximum and a page, and for one that serves actions that reduce risk the maximum, plus the time
+   from a start to serving those actions, sits below the written bound on them: one whose stop loses data the
+   project cannot recapture, and one that serves actions that reduce risk,
+   such as a cancel, which comes up stopped for everything else, as it does below the cap when its switch or count cannot be read or is absent,
+   or its switch is off. Neither an
+   unreadable record nor an unreadable or flipped switch stops their restarts.
+   Where the project has a halt that stops irreversible actions, a component
+   whose output the system acts on, or whose check it relies on, raises it at its cap rather than only paging, and a crash of any
+   component that takes no restart, for any reason, counts as reaching its cap.
+   There, a crash on one record that cannot be recaptured or repeated halts on
+   the first crash, names the record and takes no restart into it. The book's own average over the last hour
+   comes back null when no entry falls inside it (DT p. 383), and a null,
+   stale or failed reading takes no step and alerts. A person can switch these steps off without a deploy, through an authenticated
+   call, the code declares the switch and never its position, a switch left off
+   alerts when the component next starts, and one continuing cause raises one page
+   at a written interval, except the
+   restarts of the two kinds of component above, a flip is recorded, and an
+   unreadable switch takes no step and alerts. A scaling step has a written floor and ceiling on
+   instances. An instance that scaling removes stops taking work, where the
+   book's scale-down simply removes the instances it no longer wants (DT p.
+   286), and a write whose outcome it cannot learn follows the rule on writes with
+   an unknown outcome. A component stopped or halted on purpose reports that state,
+   so no health check reads it as failed and restarts it to clear it, and it
+   comes up halted after a restart. Neither a cap nor a scaling step leaves an action that reduces risk, such as
+   a cancel, with nothing to serve it, and where one would, or a restart cannot
+   serve it after all, the page names the person's fallback.
+5. **Where a component runs on more than one machine, or on a machine that
+   keeps no state, its logs leave the machine as structured records, into one
+   place that can be searched, and no log write waits on that place.** Farcic
+   finds a service's logs spread over several files and several servers, and
+   gathers them into one store that can be searched (DT p. 349, p. 350, p. 362). A
+   line goes through a bounded buffer that drops and counts what it cannot
+   write, so a stalled pipeline never stalls the work, and the buffer alarms
+   before it drops. A component's log credential can only write, and only the identities the
+   design names can read that store. A record that cannot
+   be recaptured, such as an audit trail, keeps its own store, which no log
+   pipeline, retention rule or cleanup reaches.
+
+Each run-time failure this group handles is a fault the faults rule above
+injects, with its test, such as a component that must come up halted, a null
+reading behind a step that heals, and a store found missing. A failure at
+deploy time, such as an unreadable deployment state, drift or an
+infrastructure change rolled back and forward, has a CI test
+and a drill, and so do the restart cap, every alarm this group adds, and the
+switch that stops restarts and scaling, flipped with the component left running, and a crash after it takes no
+restart, except on the two kinds of component the rule names.
+
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every
 write that needs one, histograms in place of averages, a test harness that can inject
@@ -469,7 +627,13 @@ implementation in the tests of each result whose error costs money, a
 measurement for each tuning change, a timeout per outside call, a limit and a
 breaker per dependency that can stall others, the artifact's hash, a test on
 configuration that differs between environments, a correlation id, a
-synthetic transaction, and an alarm at the level where planning the rewrite starts. What they buy is stored data that survives the bugs in the code
+synthetic transaction, an alarm at the level where planning the rewrite starts,
+startup checks that are the tested code, run where each release runs,
+an approval no agent session holds on every deploy credential, where the owner
+deploys by hand, a rollback that waits on a merge, a start that needs a copy to
+answer,
+infrastructure code with a scheduled check that finds no difference, a
+cap on every automatic restart, and a log pipeline off the machine. What they buy is stored data that survives the bugs in the code
 around it, and a 10x design that holds along parameters it has named.
 
 ## How work is cut and ordered
@@ -603,4 +767,7 @@ once rather than re-argued.
 | A warning on a pull request whose closing link GitHub did not register | l3a0/marketlake's page drew one. Neither generator can write the entry that draws it, because each writes `linked` false only beside `partOf`, which [#47](https://github.com/l3a0/repo-template/issues/47) measured over 73 mixes of closing link and body. The `pr_items` docstring in `scripts/build_board.py` carries the reason, and the page carries no such warning. |
 | Compiling assertions out of the production build | *Code Complete*'s default for assertions (CC p. 190), though it keeps the code that checks for important errors (CC p. 209). A guard that is tested and then compiled out is absent where it matters, so a guard raises explicitly and runs in every environment. [The code holds its own rules](#the-code-holds-its-own-rules-and-every-check-runs-in-production) carries the reasoning |
 | A neutral value, the closest legal value, or logging and carrying on, as the answer to bad input where a wrong result costs more than none | *Code Complete* offers each one (CC p. 194, p. 195). Each turns bad input into a value the project acts on. A project whose wrong result is cheap may choose robustness instead, and says so here |
+| Deploying every passing commit to production with no human step, where the owner deploys by hand | *The DevOps 2.0 Toolkit*'s continuous deployment runs from a commit to production with no human intervention (DT p. 20). A project whose owner deploys by hand takes the book's continuous delivery instead, where every passing build could be deployed and a person decides when (DT p. 19) |
+| Restarting a component without limit, as Docker's `always` policy does | The book lists the policy, which restarts a container whatever its exit status (DT p. 345). A restart without limit hides the cause of a crash loop, so each component has a written cap, and only a component whose stop loses unrecoverable data or a cancel keeps restarting past it, with a page |
+| A fixed sleep to wait for something to start | The book pauses its playbook for a fixed time and says such a pause should be rarely used (DT p. 200). A fixed sleep passes or fails by timing, so every check that starts something waits on readiness with a timeout |
 | TODO | TODO |

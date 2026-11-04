@@ -14,7 +14,7 @@ from whichever copy it was cloned off.
 ## What it carries
 
 - **[CLAUDE.md](CLAUDE.md)** is the agent instruction file. Scope authority,
-  how to rank work, plan audits, writing style, designing for 100x across
+  how to rank work, plan audits, writing style, designing for 10x across
   the whole lifecycle, markdown hygiene, secrets, committing, pull request
   review and the build board. It has template slots,
   marked as HTML comments, for what only the new repo can say, such as its
@@ -46,7 +46,7 @@ from whichever copy it was cloned off.
   seeded repo calls. The section below explains it.
 - **[docs/design.md](docs/design.md)** is the skeleton for the design doc
   CLAUDE.md refers to by name. Its design principles, drawn from *Designing
-  Data-Intensive Applications*, hold for any seeded repo, which adds its own
+  Data-Intensive Applications*, *Code Complete* and *Building Microservices*, hold for any seeded repo, which adds its own
   after them.
 - **[docs/optional-policies.md](docs/optional-policies.md)** holds two policy
   modules that only some repos need, ready to move into CLAUDE.md.

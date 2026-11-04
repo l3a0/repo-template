@@ -484,10 +484,9 @@ exceptions decide what is built from the first run whatever the count.
    stop, stay served wherever their own record can still be written before
    they are sent. A release that fails its own integrity check cannot be
    trusted to serve them, so it serves nothing and the page names the person's
-   fallback. While one release replaces another, something keeps serving the
-   actions that reduce risk. A check that would touch something that cannot be
-   undone, such as a live account or a customer's data, runs against a
-   stand-in instead. A check that starts something waits on a readiness check
+   fallback. No such check touches something that cannot be undone, such as a live
+   account or a customer's data, in any environment, so its code is the same
+   everywhere. A check that starts something waits on a readiness check
    with a timeout, never on a fixed sleep. The book calls its own fixed pause
    something to use rarely (DT p. 200), and this doc makes it never.
 2. **Every machine is built from committed code, a check of that code against
@@ -498,25 +497,26 @@ exceptions decide what is built from the first run whatever the count.
    names where each credential is read from and holds none, its state stays
    out of the repository, and a setting only the owner may change stays
    outside it. Applying the code to production is a deploy, timed so it cannot
-   cut an action that reduces risk, such as a cancel. An infrastructure change
-   rolls back by applying the commit before it while detaching, never
-   destroying, any protected store the change created, and rolls forward by
-   bringing that store back under the code by its recorded id. The scheduled
+   cut an action that reduces risk, such as a cancel. An infrastructure change rolls back by a new commit on the default branch,
+   applied like any other change, that restores the code before it and
+   detaches, never destroys, any protected store the change created. It rolls
+   forward by bringing that store back under the code by its recorded id. The scheduled
    check runs in a mode that only reports, under a role that cannot write and
    reads no stored data, and a difference is drift, which alerts, as does a
    check that has not reported past a written bound. Neither the code nor any
-   role that applies it can delete, overwrite, expire or recreate data the
-   project cannot recapture, or a stop that only a person may release, grant
-   read of a credential to any principal but the one the design names, or
-   change who can act as that principal. That guard sits where the role it
+   role that applies it can delete, overwrite, expire or recreate data the project cannot
+   recapture, a stop that only a person may release, a lease, or the channel
+   that carries actions that reduce risk, write a setting only the owner may
+   change, read a credential, grant read of one to any principal but the one
+   the design names, or change who can act as that principal. That guard sits where the role it
    binds cannot edit it, such as an account-level policy, and a check on the
    plan's machine-readable output refuses such a change, including one to a
-   lifecycle rule or a policy attached to the store, whether or not the
-   store's block is still in the code, since a mark inside the block goes when
-   a revert removes it. A store of a stop that is created again starts stopped
+   lifecycle rule or a policy attached to the store, whether or not the store's block is still in the code. A store of a stop that is created again starts stopped
    until a person releases it, and a store of records the project cannot
    recapture that is found empty, or behind its own copies, reads as missing,
-   never as empty. Such data is restored from its copies and never rebuilt
+   never as empty. A protected store found missing stops new irreversible
+   actions where the project has such a stop and pages a person, while capture
+   keeps recording. Such data is restored from its copies and never rebuilt
    this way. Every interface that can control a host or a container takes only
    authenticated calls from the identities the design names for it. The book's
    own setup listens for remote requests from any address and says a real one
@@ -530,8 +530,9 @@ exceptions decide what is built from the first run whatever the count.
    No workflow run whose code comes from a branch other than the default holds
    a credential that can deploy or act on production. Where the owner deploys
    by hand, a deploy credential sits behind an environment per target account
-   that admits only the default branch, with an identity no agent session
-   holds as its required reviewer and no administrator bypass. A cloud role
+   that admits only the default branch, with an identity no agent session holds as its required reviewer and no
+   administrator bypass, and no login an agent session holds can change that
+   environment or bypass the default branch's ruleset. A cloud role
    trusted through OIDC trusts only that environment, and a job that uses it
    runs only on a push or a manual dispatch on the default branch, never on
    `pull_request_target` or `workflow_run`, and runs nothing but the default
@@ -562,13 +563,13 @@ exceptions decide what is built from the first run whatever the count.
    such as a cancel, which comes up stopped for everything else. Neither an
    unreadable record nor an unreadable or flipped switch stops their restarts.
    Where the project has a halt that stops irreversible actions, a component
-   whose output the system acts on, or whose check it relies on, raises it at
-   its cap rather than only paging. The book's own average over the last hour
+   whose output the system acts on, or whose check it relies on, raises it at its cap rather than only paging, and a crash of such a
+   component that takes no restart, for any reason, counts as reaching its cap. The book's own average over the last hour
    comes back null when no entry falls inside it (DT p. 383), and a null,
    stale or failed reading takes no step and alerts. A person can switch these
    steps off without a deploy, through an authenticated call, except the
-   restarts of the two kinds of component above, and an unreadable switch
-   takes no step and alerts. A scaling step has a written floor and ceiling on
+   restarts of the two kinds of component above, a flip is recorded, and an
+   unreadable switch takes no step and alerts. A scaling step has a written floor and ceiling on
    instances. An instance that scaling removes stops taking work, where the
    book's scale-down simply removes the instances it no longer wants (DT p.
    286), and a write whose outcome it cannot learn stays unknown, never marked
@@ -584,8 +585,8 @@ exceptions decide what is built from the first run whatever the count.
    gathers them into one store that can be searched (DT p. 349, p. 362). A
    line goes through a bounded buffer that drops and counts what it cannot
    write, so a stalled pipeline never stalls the work, and the buffer alarms
-   before it drops. Lines written are compared with lines received, and a gap
-   alerts. A component's log credential can only write. A record that cannot
+   before it drops. Lines written are compared with lines received, per process run so a restart
+   cannot mask a gap, and a gap alerts. A component's log credential can only write. A record that cannot
    be recaptured, such as an audit trail, keeps its own store, which no log
    pipeline, retention rule or cleanup reaches.
 
@@ -608,6 +609,7 @@ breaker per dependency that can stall others, the artifact's hash, a test on
 configuration that differs between environments, a correlation id, a
 synthetic transaction, an alarm at the level where planning the rewrite starts,
 startup checks that are the tested code, run where each release runs,
+an approval no agent session holds on every production credential,
 infrastructure code with a scheduled check that finds no difference, a
 cap on every automatic restart, and a log pipeline off the machine. What they buy is stored data that survives the bugs in the code
 around it, and a 10x design that holds along parameters it has named.

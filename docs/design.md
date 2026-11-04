@@ -7,7 +7,7 @@
 ## Contents
 
 - [Premise](#premise)
-- [Design for 100x, build at 1x](#design-for-100x-build-at-1x)
+- [Design for 10x, plan the rewrite before 100x, build at 1x](#design-for-10x-plan-the-rewrite-before-100x-build-at-1x)
 - [Every design weighs the whole lifecycle](#every-design-weighs-the-whole-lifecycle)
 - [Design principles](#design-principles)
 - [How work is cut and ordered](#how-work-is-cut-and-ordered)
@@ -32,14 +32,17 @@
 
 TODO.
 
-## Design for 100x, build at 1x
+## Design for 10x, plan the rewrite before 100x, build at 1x
 
 <!-- TEMPLATE: say what this project's first load is, in the load
-     parameters the design principles below ask a design to name, what 100
-     times it would be, what carries the design to 100x without a rewrite,
-     how load is measured and what alarm says it nears the 1x limit, and
-     which 100x parts are designed now and built later. CLAUDE.md carries
-     the rule. -->
+     parameters the design principles below ask a design to name, what 10
+     times it would be, what carries the design to 10x without a rewrite,
+     how load is measured, the alarm that says it nears the 1x limit and the
+     one that says it reached the rewrite-planning level, which 10x parts
+     are designed now and built later, and, for growth beyond 10x, the load
+     at which planning a rewrite starts, what it would replace and what must
+     carry over unchanged, such as recorded data, its formats and its
+     partition layout. CLAUDE.md carries the rule. -->
 
 TODO.
 
@@ -69,12 +72,21 @@ race, and stored records have to outlive the bugs in the code that reads them.
 The rules serve the book's three goals for maintainable software: operability,
 simplicity and evolvability (DDIA L645, L646, L648).
 
-The next group comes from Steve McConnell's *Code Complete* (2nd ed.,
+The group on the code comes from Steve McConnell's *Code Complete* (2nd ed.,
 Microsoft Press, 2004), cited by printed page, so CC p. 470 is page 470. It
 covers how the code holds the design's rules. Its case for writing each rule
 as a check is measured: no single way of finding defects reaches more than
 about 75% at its typical rate, and two methods combined find almost twice
 what one finds (CC p. 470, p. 471).
+
+The group on modules and releases comes from Sam Newman's *Building
+Microservices* (O'Reilly Media, 2015), cited by Kindle location, so BM L4252
+is location 4252 and BM L\~932 is good to about one screen. It covers where
+modules are cut, how one build reaches every environment, and how each
+dependency fails. The book argues for splitting a system into services, and
+its own author's team found that splitting too soon was costly, so the rules
+split a component further only when evidence calls for it
+(BM L777, BM L796).
 
 The last group comes from Mark Douglas's book *Trading in the Zone* (Prentice
 Hall Press, 2000), cited by Kindle location, so TZ L2038 is location 2038. It
@@ -170,7 +182,10 @@ exceptions decide what is built from the first run whatever the count.
    request can still land after its sender has gone. Where the write is
    irreversible or moves money, its record reaches stable storage, through
    `fsync` or the store's acknowledged write, before the write is sent, and a
-   write in doubt is resent only to a receiver shown to reject a repeated id.
+   write in doubt is resent only to a receiver shown to reject a repeated id and
+   only within the time it is shown to remember one, or,
+   for a cancel by the receiver's own id, one a test against its sandbox shows
+   applies a repeated cancel at most once.
 2. **A lease or a lock is enforced by a fencing token where the protected
    resource checks one, and where it cannot, the design says the write is
    unfenced and guards the window that is left.** A process can pause past
@@ -185,7 +200,7 @@ exceptions decide what is built from the first run whatever the count.
    L9292). That lets a late write be found afterwards and stops none, and the
    book offers nothing more. So where the resource does not check, the design
    checks the lease just before each write, names the window between that
-   check and the write, never resends a write whose outcome is in doubt, and
+   check and the write, never resends a write whose outcome is in doubt except as rule 1 allows, and
    halts when it finds a write that names an older lease after a takeover. No
    id or lease number comes from a counter that a failover or a restore from
    backup can wind back. The book's case is a promoted replica whose lagging
@@ -273,7 +288,7 @@ exceptions decide what is built from the first run whatever the count.
 ### Load is named before it is scaled
 
 1. **A design names its load parameters and the operations it assumes are
-   common, and its 100x holds only along them.** A load parameter is one of
+   common, and its 10x holds only along them.** A load parameter is one of
    the few numbers that describe load, such as requests per second or records
    per day. The book asks two questions of each one: how performance changes
    when it rises and resources stay fixed, and how far resources must grow to
@@ -282,10 +297,10 @@ exceptions decide what is built from the first run whatever the count.
    wastes the scaling work or makes it harmful (DDIA L627). The book also
    finds that an architecture rarely copes with ten times its load, so a
    fast-growing service rethinks it at each tenfold rise (DDIA L598). That
-   finding sits beside the directive in [CLAUDE.md](../CLAUDE.md) to design
-   for 100 times the first load rather than against it. A 100x design holds
-   only along the parameters it names, so
-   [Design for 100x, build at 1x](#design-for-100x-build-at-1x) names them,
+   finding matches the directive in [CLAUDE.md](../CLAUDE.md) to
+   design for 10 times the first load and plan the rewrite before 100
+   times. A 10x design holds only along the parameters it names, so
+   [Design for 10x, plan the rewrite before 100x, build at 1x](#design-for-10x-plan-the-rewrite-before-100x-build-at-1x) names them,
    and a review checks them against measured use. Load along a parameter
    nobody named is what forces a rewrite. Stateful parts stay on one machine
    until cost or an availability target forces a split, which the book
@@ -299,8 +314,10 @@ exceptions decide what is built from the first run whatever the count.
    whenever a machine is added (DDIA L6411). Many more partitions than
    machines lets a new machine take whole partitions, so no key changes
    partition (DDIA L6418). The count chosen at the start caps the machines
-   the split can use, and each partition carries overhead, so the count is
-   sized for the 100x load and no higher (DDIA L6443).
+   the split can use, and each partition carries overhead, and changing the
+   count moves stored data, so the count is sized for 100 times the first
+   load, the ceiling a rewrite must come before, and no higher, since the partition layout is part of
+   what must survive a rewrite (DDIA L6411, L6443).
 3. **Latency is reported as percentiles from merged histograms, and every
    queue has a bound and an alarm on how far behind it is.** A mean hides how
    many requests were slow, percentiles show it, and the slowest requests
@@ -388,6 +405,70 @@ exceptions decide what is built from the first run whatever the count.
    measures each change alone and reverts one that does not help, since more
    than half of attempted tunings gain little or slow the code (CC p. 606).
 
+### Modules are cut by capability, and every release and dependency is bounded
+
+1. **A module is cut along a capability of the domain, and no other module
+   reads its internal state except through its interface.** Newman draws
+   boundaries along bounded contexts, the parts of a domain that keep their
+   internal models to themselves (BM L740), and finds that services sharing
+   one database lose both cohesion and loose coupling (BM L\~932). A
+   module's interface may be the files it publishes in a versioned format. A
+   backup, a scheduled read-back or a replay that copies files whole is not a
+   read of a module's records, and any parse of a copied file goes through the
+   owning module's reader. A module cut along a technical layer, such as one that only
+   wraps storage, names its reason, such as a performance goal, because the
+   book makes the technical seam the second driver (BM L866).
+2. **A component splits further than the design already does only with a
+   named reason and the history of changes across its boundary.** Newman's
+   team split a product into services early, merged them back, and split
+   again a year later along boundaries that held (BM L777, BM L796). The
+   reason names the load, the isolation or the credential that calls for the
+   split. Clones of a component and a split by key follow the scale rules and
+   need no such reason.
+3. **One artifact is built once and runs in every environment, and
+   configuration may differ by environment only in a committed list of
+   keys.** Newman builds an artifact once so that what is deployed is what
+   was tested (BM L\~2160), and keeps configuration that changes between
+   environments to an absolute minimum (BM L2393). The list holds adapter
+   selection and parameters, references to where each credential is read
+   from and never its value. A limit that configuration must never raise sits outside the
+   configuration. A test fails
+   on any other difference, and the deploy and the running process each
+   record the artifact's hash so a mismatch halts startup or a running process, and a rollback re-points the deploy's record to the kept hash. Where only one
+   instance may act at a time, a new release acts only after the old one has
+   stopped taking new work and exited, as the host shows. Blue/green runs two versions side by side (BM L3044), and where replay must attribute each decision to one version, two versions acting by turns would apply different rules to one record and replay could not say which decided what. Throughout the handover something reads the actions that reduce risk, the old release until the new one's own checks have passed, and the new one from the start of its wait, each under the one-actor guard and re-reading the record so a cancel already recorded is recognised, and is sent again only as rule 1 of [Writes happen once, from one writer at a time](#writes-happen-once-from-one-writer-at-a-time) allows, and a release serves them once the checks the action itself needs have passed, such as its own artifact and a record it can append to, while a failure of any other check stops new work only. Every takeover, a rollback's included, rebuilds its state after it
+   takes over, and an alarm fires when no release has been acting past a
+   written bound, watched from outside every release and started by a risk-reducing action that waits.
+4. **Every outside call has a timeout, every dependency that can stall
+   others has its own limit and a breaker, each limit keeps a slice for actions that reduce risk, and a breaker never stops an
+   action that reduces risk.** Newman puts a timeout on every outside call,
+   and names bulkheads and circuit breakers as tools to use where they fit
+   (BM L4252, BM L4292, BM L4995). Where a wrong result costs more than none,
+   an open breaker stops new irreversible actions rather than serving a stale
+   value, and an action that reduces risk passes through it with every call it needs. A cancel with no
+   answer is looked up rather than sent again, unless it is a cancel by the receiver's own id that rule 1 of [Writes happen once, from one writer at a time](#writes-happen-once-from-one-writer-at-a-time) allows to be resent, and one still unsettled past a written time pages a person. Where a breaker raises a halt, the halt releases itself at most a written number of times
+   before it waits for a person. The call that tests recovery has no side effect, a breaker
+   closing releases no halt before the state it guards is reconciled, and
+   recording data the project cannot recapture never waits on a breaker. His
+   cautionary tale is a queue with no retry limit, where one request that
+   crashed its worker went back on the queue and crashed the next (BM L1286).
+   So a retried job that builds something regenerable has a maximum, past
+   which it is set aside and alerts, and a write that is not safe to repeat,
+   such as a new order, that got no answer is looked up, and resent only to a
+   receiver shown to reject a repeated id, and only within the time it is shown
+   to remember one.
+5. **One correlation id runs from where a request starts through everything
+   it leads to, and a synthetic transaction watches the running system
+   without reaching anything irreversible.** Newman finds correlation ids
+   very hard to add later (BM L3354). Each write to an outside system still
+   gets an id of its own that contains the correlation id, so a request that
+   leads to several writes gives each a unique one. He found a scheduled fake
+   event, with an alert when its result did not appear, a far better sign of
+   trouble than lower-level metrics (BM L3250, BM L3300). Every synthetic
+   transaction carries a marker that passes to every record built from it,
+   the real adapters refuse anything carrying it, and the transaction never
+   enters recorded data or an input the real system reads.
+
 ### A process with chance outcomes is judged over a sample set in advance
 
 1. **The sample, the measures, the result that counts as success and the
@@ -472,12 +553,16 @@ write that needs one, histograms in place of averages, a test harness that can i
 faults, an import check in CI, a run of the suite under `python -O`, a type
 for each kind of outside value, a contract suite for each stand-in, a second
 implementation in the tests of each result whose error costs money, a
-measurement for each tuning change, a sample plan written before any
-process with chance outcomes is judged, a recorded outcome for every case
-with a running match that alarms, and a worst loss computed before each
-action that can lose money. What they buy is stored data that survives the bugs in the code
-around it, a 100x design that holds along parameters it has named, and
-judgements of a chance process that one outcome or one streak cannot move.
+measurement for each tuning change, a timeout per outside call, a limit and a
+breaker per dependency that can stall others, the artifact's hash, a test on
+configuration that differs between environments, a correlation id, a
+synthetic transaction, an alarm at the level where planning the rewrite
+starts, a sample plan written before any process with chance outcomes is
+judged, a recorded outcome for every case with a running match that alarms,
+and a worst loss computed before each action that can lose money. What they
+buy is stored data that survives the bugs in the code around it, a 10x design
+that holds along parameters it has named, and judgements of a chance process
+that one outcome or one streak cannot move.
 
 ## How work is cut and ordered
 

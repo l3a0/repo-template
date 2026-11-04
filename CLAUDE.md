@@ -93,11 +93,24 @@ Two conventions keep [docs/design.md](docs/design.md) usable as the project grow
 
 One lesson is worth keeping in view. Reviews armor what exists. They rarely ask whether it should exist. Ask "why is this needed" before "is this correct."
 
-## Design for 100x, across the whole lifecycle
+## Design for 10x, across the whole lifecycle
 
 The owner's global `~/.claude/CLAUDE.md` is the source for these two rules. This section repeats them because the repo is public and a reader or an agent may arrive without that file. The price is that the two copies can drift. The global file wins, and this section is what gets corrected.
 
-**Design for 100x, build at 1x (owner directive, 2026-11-02).** Every architecture is designed for 100 times the load it first carries, and its first version, the MVP, is built at that first load. A design passes when reaching 100x takes configuration and more infrastructure, such as more instances, more machines or more partitions, and no rewrite of a component, a file format or a rule. The parts that only matter at 100x are designed now, built when load calls for them, and drilled before anything relies on them. This fits the ranking rule a repo's own CLAUDE.md carries, which defers a path that has run zero times. Two things are built at 1x all the same. The first is the measure of load and the alarm that says when it nears the 1x limit, because otherwise the first sign of needing 100x is an outage, and an alarm already sits outside that deferral. The second is least privilege, so a credential carries only what its 1x use needs from the first day. On 2026-11-02 an architecture review of l3a0/ithildin-runtime had written a cluster of three VMs into its first slice, and the owner moved the cluster to the scale-out path and started the slice on one VM.
+**Design for 10x, plan the rewrite before 100x, build at 1x (owner directive, 2026-11-03).** This is Jeff Dean's rule, as Sam Newman's *Building Microservices* quotes it: design for about ten times growth, and plan to rewrite before about a hundred times (BM L4428). The owner adopted it on 2026-11-03 in place of the earlier directive to design for 100x. Every architecture is designed for 10 times the load it first carries, and its first version, the MVP, is built at that first load.
+
+A design passes when reaching 10x takes configuration and more infrastructure, such as more instances, more machines or more partitions, and no rewrite of a component, a file format or a rule. The parts that only matter at 10x are designed now, built when load calls for them, and drilled before anything relies on them. Beyond 10x the design expects a rewrite rather than promising to avoid one, so it writes down three things.
+
+1. The load parameter and the level, short of 100x, at which planning the rewrite starts.
+2. What it expects the rewrite to replace.
+3. What must survive the rewrite unchanged, such as recorded data and its formats.
+
+That last point keeps the rewrite from becoming a migration of data that cannot be recaptured. This fits the ranking rule a repo's own CLAUDE.md carries, which defers a path that has run zero times. Two things are built at 1x all the same.
+
+1. The measure of load, and the alarms that say when it nears the 1x limit and when it reaches the level where the rewrite's planning starts. Otherwise the first sign of either is an outage, and an alarm already sits outside that deferral.
+2. Least privilege, so a credential carries only what its 1x use needs from the first day.
+
+On 2026-11-02 an architecture review of l3a0/ithildin-runtime had written a cluster of three VMs into its first slice, and the owner moved the cluster to the scale-out path and started the slice on one VM. On 2026-11-03 the owner read Dean's rule in Newman's book and adopted it, because a design that promises no rewrite at 100x tends to build for load it may never see.
 
 **Weigh the whole lifecycle (owner directive, 2026-11-02).** A design considers every stage of the software development lifecycle, from planning, building and testing through deploying and operating to retiring, and follows best practice for ten qualities.
 
@@ -114,7 +127,7 @@ The owner's global `~/.claude/CLAUDE.md` is the source for these two rules. This
 
 A design that serves one stage and breaks another, such as a fast path no test can reach or a deployment nobody can roll back, is not finished. A design pull request says which of the ten it changes and what each change costs. A quality it leaves untouched needs no line.
 
-[docs/design.md](docs/design.md)'s `## Design for 100x, build at 1x` and `## Every design weighs the whole lifecycle` are where a repo records how it applies them, including what 1x and 100x mean for it and where each of the ten qualities lives. Its `## Design principles` holds the checks a review applies to every design.
+[docs/design.md](docs/design.md)'s `## Design for 10x, plan the rewrite before 100x, build at 1x` and `## Every design weighs the whole lifecycle` are where a repo records how it applies them, including what 1x, 10x and the rewrite point mean for it and where each of the ten qualities lives. Its `## Design principles` holds the checks a review applies to every design.
 
 ## Markdown hygiene
 

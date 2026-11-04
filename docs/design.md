@@ -515,8 +515,9 @@ exceptions decide what is built from the first run whatever the count.
    until a person releases it, and a store of records the project cannot
    recapture that is found empty, or behind its own copies, reads as missing,
    never as empty. A protected store found missing stops new irreversible
-   actions where the project has such a stop and pages a person, while capture
-   keeps recording. Such data is restored from its copies and never rebuilt
+   actions where the project has such a stop and pages a person, while recording of data the project cannot recapture keeps running. A
+   store of such records starts empty only on a record that says this is a
+   first start. Such data is restored from its copies and never rebuilt
    this way. Every interface that can control a host or a container takes only
    authenticated calls from the identities the design names for it. The book's
    own setup listens for remote requests from any address and says a real one
@@ -528,17 +529,19 @@ exceptions decide what is built from the first run whatever the count.
 3. **No run of a branch other than the default holds a production credential,
    and a deploy by hand sits behind an approval no agent session can give.**
    No workflow run whose code comes from a branch other than the default holds
-   a credential that can deploy or act on production. Where the owner deploys
+   a credential that can deploy to, act on or read production. Where the owner deploys
    by hand, a deploy credential sits behind an environment per target account
    that admits only the default branch, with an identity no agent session holds as its required reviewer and no
-   administrator bypass, and no login an agent session holds can change that
-   environment or bypass the default branch's ruleset. A cloud role
+   administrator bypass, and no login an agent session holds, on
+   GitHub or in the cloud, can change that environment, bypass the default
+   branch's ruleset or assume a role that deploys or applies the code. A cloud role
    trusted through OIDC trusts only that environment, and a job that uses it
    runs only on a push or a manual dispatch on the default branch, never on
    `pull_request_target` or `workflow_run`, and runs nothing but the default
    branch's head. A deploy that holds no such credential, such as the build
-   board's Pages, is outside this. A deploy accepts only an artifact a run on
-   the default branch built and recorded, in a store no other run can write.
+   board's Pages, is outside this. A deploy accepts only an artifact a run on the default branch built and
+   recorded, in a store no other run can write, where that run was started by a
+   push or a manual dispatch, never by `pull_request_target` or `workflow_run`.
    These credential rules are this doc's, not the book's.
 4. **An automatic restart, reschedule or scale step is capped, recorded and
    reported, a stop made on purpose is never a failure to heal, and a missing
@@ -549,8 +552,8 @@ exceptions decide what is built from the first run whatever the count.
    (DT p. 345). So a restart starts the artifact already deployed and cannot
    change which one that is, and a record of what is deployed that cannot be
    read takes no restart and alerts. Each component restarts at most a written
-   number of times in a written window before a person is paged, held by one
-   implementation, such as the host supervisor's own start limit, and the cap
+   number of times in a written window before a person is paged, held by one implementation, such as the host supervisor's own start limit,
+   which does not bind the two kinds of component below, and the cap
    is stated so a test at it has one answer: with a cap of N, the Nth restart
    runs and the crash after it pages. A window can let a slow crash loop pass,
    so a restart of a component the system depends on pages a person as well.
@@ -563,8 +566,10 @@ exceptions decide what is built from the first run whatever the count.
    such as a cancel, which comes up stopped for everything else. Neither an
    unreadable record nor an unreadable or flipped switch stops their restarts.
    Where the project has a halt that stops irreversible actions, a component
-   whose output the system acts on, or whose check it relies on, raises it at its cap rather than only paging, and a crash of such a
-   component that takes no restart, for any reason, counts as reaching its cap. The book's own average over the last hour
+   whose output the system acts on, or whose check it relies on, raises it at its cap rather than only paging, and a crash of any
+   component that takes no restart, for any reason, counts as reaching its cap.
+   A crash on one record that cannot be recaptured or repeated halts on the
+   first crash, names the record and takes no restart into it. The book's own average over the last hour
    comes back null when no entry falls inside it (DT p. 383), and a null,
    stale or failed reading takes no step and alerts. A person can switch these
    steps off without a deploy, through an authenticated call, except the
@@ -572,17 +577,17 @@ exceptions decide what is built from the first run whatever the count.
    unreadable switch takes no step and alerts. A scaling step has a written floor and ceiling on
    instances. An instance that scaling removes stops taking work, where the
    book's scale-down simply removes the instances it no longer wants (DT p.
-   286), and a write whose outcome it cannot learn stays unknown, never marked
-   as not sent. A component stopped or halted on purpose reports that state,
+   286), and a write whose outcome it cannot learn follows the rule on writes with
+   an unknown outcome. A component stopped or halted on purpose reports that state,
    so no health check reads it as failed and restarts it to clear it, and it
-   comes up halted after a restart. Neither a cap nor a scaling step leaves an
-   action that reduces risk, such as a cancel, with nothing to serve it, and
-   where one would, the page names the person's fallback.
+   comes up halted after a restart. Neither a cap nor a scaling step leaves an action that reduces risk, such as
+   a cancel, with nothing to serve it, and where one would, or a restart cannot
+   serve it after all, the page names the person's fallback.
 5. **Where a component runs on more than one machine, or on a machine that
    keeps no state, its logs leave the machine as structured records, into one
    place that can be searched, and no log write waits on that place.** Farcic
    finds a service's logs spread over several files and several servers, and
-   gathers them into one store that can be searched (DT p. 349, p. 362). A
+   gathers them into one store that can be searched (DT p. 349, p. 350, p. 362). A
    line goes through a bounded buffer that drops and counts what it cannot
    write, so a stalled pipeline never stalls the work, and the buffer alarms
    before it drops. Lines written are compared with lines received, per process run so a restart
@@ -747,5 +752,5 @@ once rather than re-argued.
 | A neutral value, the closest legal value, or logging and carrying on, as the answer to bad input where a wrong result costs more than none | *Code Complete* offers each one (CC p. 194, p. 195). Each turns bad input into a value the project acts on. A project whose wrong result is cheap may choose robustness instead, and says so here |
 | Deploying every passing commit to production with no human step, where the owner deploys by hand | *The DevOps 2.0 Toolkit*'s continuous deployment runs from a commit to production with no human intervention (DT p. 20). A project whose owner deploys by hand takes the book's continuous delivery instead, where every passing build could be deployed and a person decides when (DT p. 19) |
 | Restarting a component without limit, as Docker's `always` policy does | The book lists the policy, which restarts a container whatever its exit status (DT p. 345). A restart without limit hides the cause of a crash loop, so each component has a written cap, and only a component whose stop loses unrecoverable data or a cancel keeps restarting past it, with a page |
-| A fixed sleep to wait for something to start | The book pauses its playbook for a fixed time and says such a pause should be rarely used (DT p. 200). A fixed sleep passes or fails by timing, so every check waits on readiness with a timeout |
+| A fixed sleep to wait for something to start | The book pauses its playbook for a fixed time and says such a pause should be rarely used (DT p. 200). A fixed sleep passes or fails by timing, so every check that starts something waits on readiness with a timeout |
 | TODO | TODO |

@@ -524,30 +524,32 @@ exceptions decide what is built from the first run whatever the count.
    within a stated time, treats a case inside that time as in flight, shows
    how many cases it checked, alarms on a mismatch and when it has not run
    within that time, and on either halts where the actions can lose money, and
-   each such halt says how it is released. Fault tests drop and duplicate an
-   outcome, inject an action with no cause and stop the match, to see the
-   alarm fire each time and, where the actions can lose money, the halt.
-   Douglas finds that unplanned action cannot show what works (TZ L559).
-   Overrides can also be expected to cluster on cases that look bad at the
-   time, so this project scores a case a person overrode as the process's own
-   decision would have played out and keeps it in the sample, with the
-   override's effect reported apart. A person stopping the process counts as
-   an override of every case while it is stopped, though a stop, a cancel or a
-   cut in size never counts toward the most overrides, and no sample rule
-   delays or refuses one. The only price of a long stop is that it can use up
-   the share scored by replay and end the sample without a verdict. A raise of
-   the stake or of a limit closes the sample without a verdict unless a rule
-   written before the sample moved it, and a cut, a tightened limit or its
-   return to the value it held when the sample opened keeps it open, with
-   results judged per unit of risk and a case refused because a person
-   tightened a limit scored by replay. A fix to a safety control or a rollback
-   is never held back to keep a sample whole. Only a halt the rules set in
-   advance or a stop of the system itself pauses the sample. A pause stops new
-   cases counting, while every position held through it keeps counting its
-   results and the cases it skipped are scored by replay, reported apart and
-   counted toward the share scored by replay. Past the total the plan named
-   for pauses a person starts or ends, such as a drill recorded as one before
-   it starts, their cases are scored as a stop's are.
+   each such halt says why it halted and how it is released. Fault tests drop
+   and duplicate an outcome, inject an action with no cause and stop the
+   match, to see the alarm fire each time and, where the actions can lose
+   money, the halt. Douglas finds that unplanned action cannot show what works
+   (TZ L559). Overrides can also be expected to cluster on cases that look bad
+   at the time, so this project scores a case a person overrode as the
+   process's own decision would have played out and keeps it in the sample,
+   with the override's effect reported apart. A person stopping the process
+   counts as an override of every case while it is stopped, though a stop, a
+   cancel or a cut in size never counts toward the most overrides, and no
+   sample rule delays or refuses one. The only price of a long stop is that it
+   can use up the share scored by replay and end the sample without a verdict.
+   A raise of the stake or of a limit closes the sample without a verdict
+   unless a rule written before the sample moved it, and a cut, a tightened
+   limit or its return to the value it held when the sample opened keeps it
+   open, with results judged per unit of risk and a case refused because a
+   person tightened a limit scored by replay. A fix to a safety control or a
+   rollback is never held back to keep a sample whole. Only a halt the rules
+   set in advance or a stop of the system itself pauses the sample. A pause
+   stops new cases counting, while every position held through it keeps
+   counting its results and the cases it skipped are scored by replay,
+   reported apart and counted toward the share scored by replay. Past the
+   total the plan named for pauses a person starts or ends, such as a drill
+   recorded as one before it starts, their cases are scored as a stop's are.
+   Numbers from a sample that ended without a verdict, and cases reported
+   apart, are labelled exploratory.
 3. **Where a process's actions can lose money, each action that adds to a
    position has its worst loss fixed first, and a check refuses rather than
    resizes.** Douglas's exit for a losing trade says in advance how much must

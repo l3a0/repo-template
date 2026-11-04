@@ -487,7 +487,7 @@ exceptions decide what is built from the first run whatever the count.
    fallback. No such check takes an action that cannot be undone, such as an irreversible
    send or a change to a customer's data, in any environment, so its code is the same
    everywhere. A check that starts something waits on a readiness check
-   with a timeout, never on a fixed sleep. The book calls its own fixed pause
+   with a timeout, never on a fixed sleep, and a wait that expires fails the check. The book calls its own fixed pause
    something to use rarely (DT p. 200), and this doc makes it never.
 2. **Every machine is built from committed code, a check of that code against
    what it built finds no difference, and a change made by hand is committed
@@ -495,7 +495,8 @@ exceptions decide what is built from the first run whatever the count.
    need to log in to a server and work on it by hand (DT p. 88), and a second
    run of his playbook finds almost nothing left to do (DT p. 190). The code
    names where each credential is read from and holds none, its state stays
-   out of the repository, and a setting only the owner may change stays
+   out of the repository, every environment applies the same committed code,
+   differing only in the committed list of keys, and a setting only the owner may change stays
    outside it. Applying the code to production is a deploy, timed so it cannot
    cut an action that reduces risk, such as a cancel. An infrastructure change rolls back by a new commit on the default branch,
    applied like any other change, that restores the code before it and
@@ -513,14 +514,15 @@ exceptions decide what is built from the first run whatever the count.
    lifecycle rule or a policy attached to the store, whether or not the store's block is still in the code. A store of a stop that is created again starts stopped
    until a person releases it, and a store of records the project cannot
    recapture that is found empty, or behind its own copies, reads as missing,
-   never as empty. A protected store found missing stops new irreversible actions where the
-   project has such a stop and pages a person, while recording of data the
+   never as empty. A protected store found missing stops new irreversible actions, until a person
+   releases the stop, where the project has such a stop, and pages a person, while recording of data the
    project cannot recapture keeps running. A store of such records found
    missing, empty or behind takes no entry until it is restored, and where that
    leaves an action that reduces risk unserved, the page names the person's
    fallback. A comparison with a copy that cannot finish, or first-start evidence
-   that is absent or unreadable, stops new irreversible actions and alerts, and
-   never reads as current. A store of such records starts empty only once, on a
+   that is absent or unreadable, stops new irreversible actions until a person releases the stop and alerts,
+   and never reads as current, and an entry written meanwhile stays through any
+   restore, as the rules on recorded data require. A store of such records starts empty only once, on a
    record that says this is the first start. Such data is restored from its copies and never rebuilt
    this way. Every interface that can control a host or a container takes only
    authenticated calls from the identities the design names for it. The book's
@@ -577,8 +579,8 @@ exceptions decide what is built from the first run whatever the count.
    Where the project has a halt that stops irreversible actions, a component
    whose output the system acts on, or whose check it relies on, raises it at its cap rather than only paging, and a crash of any
    component that takes no restart, for any reason, counts as reaching its cap.
-   A crash on one record that cannot be recaptured or repeated halts on the
-   first crash, names the record and takes no restart into it. The book's own average over the last hour
+   There, a crash on one record that cannot be recaptured or repeated halts on
+   the first crash, names the record and takes no restart into it. The book's own average over the last hour
    comes back null when no entry falls inside it (DT p. 383), and a null,
    stale or failed reading takes no step and alerts. A person can switch these
    steps off without a deploy, through an authenticated call, except the
@@ -608,7 +610,8 @@ exceptions decide what is built from the first run whatever the count.
 Each run-time failure this group handles is a fault the faults rule above
 injects, with its test, such as a component that must come up halted, a null
 reading behind a step that heals, and a store found missing. A failure at
-deploy time, such as an unreadable deployment state or drift, has a CI test
+deploy time, such as an unreadable deployment state, drift or an
+infrastructure change rolled back and forward, has a CI test
 and a drill, and so do the restart cap, every alarm this group adds, and the
 switch that stops restarts and scaling, flipped with the component left running, and a crash after it takes no
 restart, except on the two kinds of component the rule names.
@@ -625,7 +628,8 @@ configuration that differs between environments, a correlation id, a
 synthetic transaction, an alarm at the level where planning the rewrite starts,
 startup checks that are the tested code, run where each release runs,
 an approval no agent session holds on every deploy credential, where the owner
-deploys by hand,
+deploys by hand, a rollback that waits on a merge, a start that needs a copy to
+answer,
 infrastructure code with a scheduled check that finds no difference, a
 cap on every automatic restart, and a log pipeline off the machine. What they buy is stored data that survives the bugs in the code
 around it, and a 10x design that holds along parameters it has named.

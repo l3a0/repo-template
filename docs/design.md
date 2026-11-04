@@ -604,9 +604,8 @@ exceptions decide what is built from the first run whatever the count.
    gathers them into one store that can be searched (DT p. 349, p. 350, p. 362). A
    line goes through a bounded buffer that drops and counts what it cannot
    write, so a stalled pipeline never stalls the work, and the buffer alarms
-   before it drops. Lines written are compared with lines received, per process run so a restart
-   cannot mask a gap, a gap alerts, and so does a comparison that stops running. A component's log credential can only write, and only the identities the
-   design names can read that store. The comparison is this doc's, not the book's. A record that cannot
+   before it drops. A component's log credential can only write, and only the identities the
+   design names can read that store. A record that cannot
    be recaptured, such as an audit trail, keeps its own store, which no log
    pipeline, retention rule or cleanup reaches.
 

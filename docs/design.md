@@ -660,27 +660,27 @@ restart, except on the two kinds of component the rule names.
    the number was seen. A review checks that the plan existed before the
    sample's first outcome.
 2. **The parts that decide the outcomes run unchanged through the sample,
-   every case is accounted for, and a change to those parts ends the sample
-   without a verdict and starts a new one.** Douglas trades a system exactly
-   as designed for every occurrence of its edge in the sample (TZ L3232),
-   because taking every case is what lets the sample show the odds (TZ L1860).
-   Here each outcome counted in a sample carries one version of the parts that
-   decide it. A replay of the sample's cases that shows no difference after a
-   change elsewhere keeps the sample open, though it speaks only for the cases
-   replayed, and a difference counts as a change to those parts. Every sample
-   opened is counted, including one ended early, so a sample cannot be
-   restarted until one happens to look good. Every case the process should
-   have acted on ends in one recorded outcome per action, or one for the case
-   where no action followed, such as a skip for a reason from a closed list,
-   every action traces back to its cause, such as a case, a recorded human
-   act, a halt, where the project's own rule allows it an event the outside
-   system itself originates, shown by its own record, or an outside action a
-   person confirms, never the match itself, and a skip never answers a
-   missing, stale or invalid input. A test matches them one to one by id.
-   Where a running system acts on the process's decisions, it checks the same
-   match, and the result that ends the process, within a stated time, treats a
-   case inside that time as in flight, shows how many cases it checked, alarms
-   on a mismatch and when it has not run within that time, and on either halts
+   every case is accounted for, and a change to those parts closes the sample
+   without a verdict.** Douglas trades a system exactly as designed for every
+   occurrence of its edge in the sample (TZ L3232), because taking every case
+   is what lets the sample show the odds (TZ L1860). Here each outcome counted
+   in a sample carries one version of the parts that decide it. A replay of
+   the sample's cases that shows no difference after a change elsewhere keeps
+   the sample open, though it speaks only for the cases replayed, and a
+   difference counts as a change to those parts. Every sample opened is
+   counted, including one ended early, so a sample cannot be restarted until
+   one happens to look good. Every case the process should have acted on ends
+   in one recorded outcome per action, or one for the case where no action
+   followed, such as a skip for a reason from a closed list, every action
+   traces back to its cause, such as a case, a recorded human act, a halt,
+   where the project's own rule allows it an event the outside system itself
+   originates, shown by its own record, or an outside action a person
+   confirms, never the match itself, and a skip never answers a missing, stale
+   or invalid input. A test matches them one to one by id. Where a running
+   system acts on the process's decisions, it checks the same match, and the
+   result that ends the process, within a stated time, treats a case inside
+   that time as in flight, shows how many cases it checked, alarms on a
+   mismatch and when it has not run within that time, and on either halts
    where the actions can lose money, and each such halt says why it halted and
    how it is released. Fault tests drop and duplicate an outcome, feed a skip
    a bad input, inject an action with no cause and stop the match, to see the
@@ -695,8 +695,9 @@ restart, except on the two kinds of component the rule names.
    delays or refuses one. The only price of a long stop is that it can use up
    the share scored by replay and end the sample without a verdict. A raise of
    the stake or of a limit closes the sample without a verdict unless a rule
-   written before the sample moved it, and a cut, a tightened limit or its
-   return to the value it held when the sample opened keeps it open, with
+   written before the sample moved it, a raise that comes from a lower
+   estimate of the risk closes it even then, and a cut, a tightened limit or
+   its return to the value it held when the sample opened keeps it open, with
    results judged per unit of risk and a case refused because a person
    tightened a limit scored by replay. A fix to a safety control or a rollback
    is never held back to keep a sample whole. Only a halt the rules set in
@@ -708,7 +709,8 @@ restart, except on the two kinds of component the rule names.
    it starts, their cases are scored as a stop's are. Numbers from a sample
    that ended without a verdict, from a run with no sample open, and cases
    reported apart, are labelled exploratory, and what is promoted is the exact
-   version the passing sample ran on.
+   version the passing sample ran on, and a result that ends the process,
+   reached after the pass, withdraws it.
 3. **Where a process's actions can lose money, each action that adds to a
    position has its worst loss fixed first, and a check refuses rather than
    resizes.** Douglas's exit for a losing trade says in advance how much must
@@ -720,17 +722,17 @@ restart, except on the two kinds of component the rule names.
    under each case of which ones fill, or from the planned exit where that is
    a fixed level and larger. The project adds the reason: a jump or a halt can
    carry the result past any exit. An action counts as reducing only when it
-   reduces the position under every case, and the part of an action that
-   crosses zero counts as adding. A stress value that is missing, stale, not a
-   finite positive number or outside a stated sane range is bad input, and
-   halts as bad input does. A check refuses an action that adds to a position
-   whose worst loss it cannot compute, never refuses an action that only
-   reduces the position for want of that figure, though a halt's own rule
-   decides whether it holds that action, and never resizes. The step that
-   sizes actions makes them smaller, and makes actions sized together smaller
-   together. Tests cover an action one step short of zero, at zero and past
-   it, an action already sent on each side, a loss that cannot be computed,
-   and a bad stress value.
+   reduces that position and the total the limit covers, under every case, and
+   the part of an action that crosses zero counts as adding. A stress value
+   that is missing, stale, not a finite positive number or outside a stated
+   sane range is bad input, and halts as bad input does. A check refuses an
+   action that adds to a position whose worst loss it cannot compute, never
+   refuses an action that only reduces the position for want of that figure,
+   though a halt's own rule decides whether it holds that action, and never
+   resizes. The step that sizes actions makes them smaller, and makes actions
+   sized together smaller together. Tests cover an action one step short of
+   zero, at zero and past it, an action already sent on each side, a loss that
+   cannot be computed, and a bad stress value.
 4. **Where a process's actions can lose money, no process, agent or proposal
    raises the stake after a run of good results, except on a rule or evidence
    set out before the run.** Douglas holds that a trader is most likely to
@@ -890,7 +892,7 @@ once rather than re-argued.
 | Cut | Why |
 | --- | --- |
 | A build-plan doc listing each slice's deliverables and tests | It would restate scope the tracker holds, so the two would drift. A slice's tests are its parent issue's acceptance criteria, and what each deliverable waits on is its sub-issue's "blocked by" links. The rule for cutting a slice is the one part GitHub cannot hold, and it lives in [How work is cut and ordered](#how-work-is-cut-and-ordered) |
-| *Trading in the Zone*'s sample of at least 20 trades as the unit that judges a process | Douglas found it from his own trading and gives no data for it (TZ L3198). A sample that small can detect only a large effect, so each project sets its sample from the smallest effect worth detecting and the spread of the outcomes it expects, under [A process with chance outcomes is judged over a sample set in advance](#a-process-with-chance-outcomes-is-judged-over-a-sample-set-in-advance) |
+| *Trading in the Zone*'s sample of at least 20 trades as the unit that judges a process | Douglas found it from his experience and gives no data for it (TZ L3198). A sample that small can detect only a large effect, so each project sets its sample from the smallest effect worth detecting and the spread of the outcomes it expects, under [A process with chance outcomes is judged over a sample set in advance](#a-process-with-chance-outcomes-is-judged-over-a-sample-set-in-advance) |
 | A copy of the build board's skills in each repository | Four repositories held their own copies of the build board's skills, and each copy held something the others lacked, which [l3a0/claude-plugins#28](https://github.com/l3a0/claude-plugins/issues/28) inventoried. The skills moved into the `l3a0` Claude Code plugin on 2026-10-29, and a seeded repository installs the plugin rather than copying them. [#24](https://github.com/l3a0/repo-template/issues/24) had kept them per repository because a repository pins the generator to one commit while a plugin skill moves with each release. That is the price, and a second comes with it: every session runs what the plugin's `main` holds, hooks included, with no pull request in this repository to show a change. The plugin skill's `## Generator compatibility` table names the generator commits its formats were checked against. `tests/test_build_board_generator.py` reads the skill at a pinned plugin commit, so renaming a marker or a label the generator reads fails here until a matching plugin release exists. Other format changes rest on the plugin's release rule |
 | Holding a reviewed, green branch back only while a build session holds its card | l3a0/marketlake's own page held such a branch back from the owner's queue only for `working:build`. The shared page holds it back for any `working:` label, and [#47](https://github.com/l3a0/repo-template/issues/47) kept that rule when it ported marketlake's review rule. The plugin's `sync-prune-next` skill already applied the stricter hold to marketlake's queue because it fails safe. marketlake's build-only check was the fix for [l3a0/marketlake PR #713](https://github.com/l3a0/marketlake/pull/713), adding a hold the sync skill had promised, rather than a decision that a decompose loop frees a branch. The price is that a reviewed, green pull request whose card carries `working:decompose` waits under "Waiting on my review" until the loop ends. Porting marketlake's rule would need a flag in `board.json`, because a change to the page alone would move a current caller's card. |
 | A warning on a pull request whose closing link GitHub did not register | l3a0/marketlake's page drew one. Neither generator can write the entry that draws it, because each writes `linked` false only beside `partOf`, which [#47](https://github.com/l3a0/repo-template/issues/47) measured over 73 mixes of closing link and body. The `pr_items` docstring in `scripts/build_board.py` carries the reason, and the page carries no such warning. |

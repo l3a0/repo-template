@@ -630,15 +630,15 @@ restart, except on the two kinds of component the rule names.
 ### A process with chance outcomes is judged over a sample set in advance
 
 1. **The sample, the measures, the result that counts as success and the
-   result that ends the process are written down before the first outcome, and
-   no conclusion rests on one outcome or one streak.** Douglas holds that wins
-   and losses fall at random within any set of conditions that defines an edge
-   (TZ L2038). He judges an edge over a sample large enough to test it fairly
-   and small enough that a fading edge shows before it has cost too much (TZ
-   L3198). His own sample of at least 20 trades comes from his experience
-   rather than data, so the project sets each sample from the smallest effect
-   worth detecting and the spread of the outcomes it expects, as the
-   considered-and-rejected register records. The plan also names, for a
+   result that ends the process are written down before the sample's first
+   outcome, and no conclusion rests on one outcome or one streak.** Douglas
+   holds that wins and losses fall at random within any set of conditions that
+   defines an edge (TZ L2038). He judges an edge over a sample large enough to
+   test it fairly and small enough that a fading edge shows before it has cost
+   too much (TZ L3198). His own sample of at least 20 trades comes from his
+   experience rather than data, so the project sets each sample from the
+   smallest effect worth detecting and the spread of the outcomes it expects,
+   as the considered-and-rejected register records. The plan also names, for a
    process that keeps running, the sample's longest span in time and when the
    result that ends it is checked, and the measures after costs, which count
    every position the sample opened, with one still open at the end marked at
@@ -657,8 +657,8 @@ restart, except on the two kinds of component the rule names.
    module](https://github.com/l3a0/repo-template/blob/main/docs/optional-policies.md#module-1-research-pins).
    A project that judges chance outcomes with no such control declares one
    before calling any result registered, meaning committed in writing before
-   the number was seen. A review checks that the plan existed before the first
-   outcome.
+   the number was seen. A review checks that the plan existed before the
+   sample's first outcome.
 2. **The parts that decide the outcomes run unchanged through the sample,
    every case is accounted for, and a change to those parts ends the sample
    without a verdict and starts a new one.** Douglas trades a system exactly
@@ -673,41 +673,42 @@ restart, except on the two kinds of component the rule names.
    have acted on ends in one recorded outcome per action, or one for the case
    where no action followed, such as a skip for a reason from a closed list,
    every action traces back to its cause, such as a case, a recorded human
-   act, a halt, an event the outside system itself originates, shown by its
-   own record, or an outside action a person confirms, never the match itself,
-   and a skip never answers a missing, stale or invalid input. A test matches
-   them one to one by id. Where a running system acts on the process's
-   decisions, it checks the same match, and the result that ends the process,
-   within a stated time, treats a case inside that time as in flight, shows
-   how many cases it checked, alarms on a mismatch and when it has not run
-   within that time, and on either halts where the actions can lose money, and
-   each such halt says why it halted and how it is released. Fault tests drop
-   and duplicate an outcome, feed a skip a bad input, inject an action with no
-   cause and stop the match, to see the alarm fire each time and, where the
-   actions can lose money, the halt. Douglas finds that unplanned action
-   cannot show what works (TZ L559). Overrides can also be expected to cluster
-   on cases that look bad at the time, so this project scores a case a person
-   overrode as the process's own decision would have played out and keeps it
-   in the sample, with the override's effect reported apart. A person stopping
-   the process counts as an override of every case while it is stopped, though
-   a stop, a cancel or a cut in size never counts toward the most overrides,
-   and no sample rule delays or refuses one. The only price of a long stop is
-   that it can use up the share scored by replay and end the sample without a
-   verdict. A raise of the stake or of a limit closes the sample without a
-   verdict unless a rule written before the sample moved it, and a cut, a
-   tightened limit or its return to the value it held when the sample opened
-   keeps it open, with results judged per unit of risk and a case refused
-   because a person tightened a limit scored by replay. A fix to a safety
-   control or a rollback is never held back to keep a sample whole. Only a
-   halt the rules set in advance or a stop of the system itself pauses the
-   sample. A pause stops new cases counting, while every position held through
-   it keeps counting its results and the cases it skipped are scored by
-   replay, reported apart and counted toward the share scored by replay. Past
-   the total the plan named for pauses a person starts or ends, such as a
-   drill recorded as one before it starts, their cases are scored as a stop's
-   are. Numbers from a sample that ended without a verdict, and cases reported
-   apart, are labelled exploratory, and what is promoted is the exact version
-   the passing sample ran on.
+   act, a halt, where the project's own rule allows it an event the outside
+   system itself originates, shown by its own record, or an outside action a
+   person confirms, never the match itself, and a skip never answers a
+   missing, stale or invalid input. A test matches them one to one by id.
+   Where a running system acts on the process's decisions, it checks the same
+   match, and the result that ends the process, within a stated time, treats a
+   case inside that time as in flight, shows how many cases it checked, alarms
+   on a mismatch and when it has not run within that time, and on either halts
+   where the actions can lose money, and each such halt says why it halted and
+   how it is released. Fault tests drop and duplicate an outcome, feed a skip
+   a bad input, inject an action with no cause and stop the match, to see the
+   alarm fire each time and, where the actions can lose money, the halt.
+   Douglas finds that unplanned action cannot show what works (TZ L559).
+   Overrides can also be expected to cluster on cases that look bad at the
+   time, so this project scores a case a person overrode as the process's own
+   decision would have played out and keeps it in the sample, with the
+   override's effect reported apart. A person stopping the process counts as
+   an override of every case while it is stopped, though a stop, a cancel or a
+   cut in size never counts toward the most overrides, and no sample rule
+   delays or refuses one. The only price of a long stop is that it can use up
+   the share scored by replay and end the sample without a verdict. A raise of
+   the stake or of a limit closes the sample without a verdict unless a rule
+   written before the sample moved it, and a cut, a tightened limit or its
+   return to the value it held when the sample opened keeps it open, with
+   results judged per unit of risk and a case refused because a person
+   tightened a limit scored by replay. A fix to a safety control or a rollback
+   is never held back to keep a sample whole. Only a halt the rules set in
+   advance or a stop of the system itself pauses the sample. A pause stops new
+   cases counting, while every position held through it keeps counting its
+   results and the cases it skipped are scored by replay, reported apart and
+   counted toward the share scored by replay. Past the total the plan named
+   for pauses a person starts or ends, such as a drill recorded as one before
+   it starts, their cases are scored as a stop's are. Numbers from a sample
+   that ended without a verdict, from a run with no sample open, and cases
+   reported apart, are labelled exploratory, and what is promoted is the exact
+   version the passing sample ran on.
 3. **Where a process's actions can lose money, each action that adds to a
    position has its worst loss fixed first, and a check refuses rather than
    resizes.** Douglas's exit for a losing trade says in advance how much must

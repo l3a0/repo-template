@@ -484,8 +484,8 @@ exceptions decide what is built from the first run whatever the count.
    stop, stay served wherever their own record can still be written before
    they are sent. A release that fails its own integrity check cannot be
    trusted to serve them, so it serves nothing and the page names the person's
-   fallback. No such check touches something that cannot be undone, such as a production
-   system or a customer's data, in any environment, so its code is the same
+   fallback. No such check takes an action that cannot be undone, such as an irreversible
+   send or a change to a customer's data, in any environment, so its code is the same
    everywhere. A check that starts something waits on a readiness check
    with a timeout, never on a fixed sleep. The book calls its own fixed pause
    something to use rarely (DT p. 200), and this doc makes it never.
@@ -518,8 +518,10 @@ exceptions decide what is built from the first run whatever the count.
    project cannot recapture keeps running. A store of such records found
    missing, empty or behind takes no entry until it is restored, and where that
    leaves an action that reduces risk unserved, the page names the person's
-   fallback. A store of such records starts empty only once, on a record that says this
-   is the first start. Such data is restored from its copies and never rebuilt
+   fallback. A comparison with a copy that cannot finish, or first-start evidence
+   that is absent or unreadable, stops new irreversible actions and alerts, and
+   never reads as current. A store of such records starts empty only once, on a
+   record that says this is the first start. Such data is restored from its copies and never rebuilt
    this way. Every interface that can control a host or a container takes only
    authenticated calls from the identities the design names for it. The book's
    own setup listens for remote requests from any address and says a real one
@@ -541,8 +543,8 @@ exceptions decide what is built from the first run whatever the count.
    runs only on a push or a manual dispatch on the default branch, never on
    `pull_request_target` or `workflow_run`, and runs nothing but the default
    branch's head. A deploy that holds no such credential, such as the build
-   board's Pages, is outside this. A deploy accepts only an artifact a run on the default branch built from the
-   branch's head and recorded, in a store no other run and no login an agent
+   board's Pages, is outside this. A deploy accepts only an artifact a run on the default branch recorded when it
+   built the commit then at that branch's head, in a store no other run and no login an agent
    session holds can write, where that run was started by a
    push or a manual dispatch, never by `pull_request_target` or `workflow_run`.
    A plan's output and a deploy's log stay out of any public log or artifact,
@@ -569,7 +571,8 @@ exceptions decide what is built from the first run whatever the count.
    to a written maximum and a page, and for one that serves actions that reduce
    risk the maximum sits below the written bound on those actions: one whose stop loses data the
    project cannot recapture, and one that serves actions that reduce risk,
-   such as a cancel, which comes up stopped for everything else. Neither an
+   such as a cancel, which comes up stopped for everything else, as it does below
+   the cap when its switch or count cannot be read or its switch is off. Neither an
    unreadable record nor an unreadable or flipped switch stops their restarts.
    Where the project has a halt that stops irreversible actions, a component
    whose output the system acts on, or whose check it relies on, raises it at its cap rather than only paging, and a crash of any
@@ -597,7 +600,8 @@ exceptions decide what is built from the first run whatever the count.
    line goes through a bounded buffer that drops and counts what it cannot
    write, so a stalled pipeline never stalls the work, and the buffer alarms
    before it drops. Lines written are compared with lines received, per process run so a restart
-   cannot mask a gap, a gap alerts, and so does a comparison that stops running. A component's log credential can only write. A record that cannot
+   cannot mask a gap, a gap alerts, and so does a comparison that stops running. A component's log credential can only write, and only the identities the
+   design names can read that store. The comparison is this doc's, not the book's. A record that cannot
    be recaptured, such as an audit trail, keeps its own store, which no log
    pipeline, retention rule or cleanup reaches.
 

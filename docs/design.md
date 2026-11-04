@@ -483,7 +483,7 @@ exceptions decide what is built from the first run whatever the count.
    smallest effect worth detecting and the spread of the outcomes it
    expects, as the considered-and-rejected register records. The plan also
    names, for a process that keeps running, the sample's longest span in
-   time, and the measures after costs, which count every position the sample
+   time and when the result that ends it is checked, and the measures after costs, which count every position the sample
    opened, with one still open at the end marked at recorded prices. It
    names the smallest effect the sample can detect with the level and power
    behind it, and, where the process can lose money, the range of losses to expect, set without any data held
@@ -513,13 +513,15 @@ exceptions decide what is built from the first run whatever the count.
    a sample cannot be restarted until one happens to look good. Every case
    the process should have acted on ends in one recorded outcome per action,
    or one for the case where no action followed, such as a skip for a reason
-   from a closed list, every action traces back to its cause, such as a case, a
-   recorded human act, a halt or an outside event whose source the outside
-   system's own record or a person confirms, never the match itself, and a
-   skip never answers a missing or invalid input. A test matches them
-   one to one by id, and fault tests drop and duplicate an outcome to see
-   the alarm fire. Where a running system acts on the process's decisions,
-   it checks the same match within a stated time, treats a case inside that
+   from a closed list, every action traces back to its cause, such as a
+   case, a recorded human act, a halt, an event the outside system itself
+   originates, shown by its own record, or an outside action a person
+   confirms, never the match itself, and a skip never answers a missing or invalid input. A test matches them
+   one to one by id, and fault tests drop and duplicate an outcome, inject
+   an action with no cause and stop the match, to see the alarm fire each
+   time. Where a running system acts on the process's decisions,
+   it checks the same match, and the result that ends the process, within a
+   stated time, treats a case inside that
    time as in flight, shows how many cases it checked, alarms on a mismatch
    and when it has not run within that time, and on either halts where the
    actions can lose money, and each such halt says how it is released. Douglas finds that unplanned action cannot show what
@@ -533,7 +535,7 @@ exceptions decide what is built from the first run whatever the count.
    up the share scored by replay and end the sample without a verdict. A
    raise of the stake or of a limit closes the sample without a verdict
    unless a rule written before the sample moved it, and a cut, a tightened limit or its return to
-   the planned value keeps it open, with results judged per unit of risk and
+   the value it held when the sample opened keeps it open, with results judged per unit of risk and
    a case refused because a person tightened a limit scored by replay.
    A fix to a safety control or a rollback is never held back to keep a
    sample whole. Only a halt the rules set in advance or a stop of the
@@ -568,8 +570,9 @@ exceptions decide what is built from the first run whatever the count.
    magnifies the next move against it (TZ L919, L943). A raise of a limit or
    a stake cites the evidence the plan named before the run, never a streak.
    For a process whose sizing rule reads no results, a test runs the same
-   inputs, account value and limits after no record of results and after a
-   run of good ones, and asserts the stake is no larger.
+   inputs, account value and limits with no record of results, after a run
+   of good ones and after a run of bad ones, and asserts the stake is
+   identical.
 
 The price of these rules is a checksum and a format version on every stored
 record, an id on every write to another system, a lease number on every

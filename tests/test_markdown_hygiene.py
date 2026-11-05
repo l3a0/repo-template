@@ -514,3 +514,19 @@ def test_every_table_in_the_repo_has_a_title() -> None:
         for finding in untitled_tables(path.read_text(encoding="utf-8"), path)
     ]
     assert findings == [], "\n".join(str(finding) for finding in findings)
+
+
+@pytest.mark.parametrize(
+    ("text", "lines"),
+    [
+        ("**Table:** One\n\n| A |\n| --- |\n\n| B |\n| --- |\n", [6]),
+        ("**Table:** One\n\nProse.\n\n| A |\n| --- |\n", [5]),
+        ("**Table:** One\n| A |\n| --- |\n", []),
+        ("**Table:**\n\n| A |\n| --- |\n", [3]),
+        ("See **Table:** One\n\n| A |\n| --- |\n", [3]),
+        ("Prose.\n\n| A | B |\n| :--- | ---: |\n", [3]),
+    ],
+    ids=["two-under-one", "prose-between", "touching", "empty", "prefixed", "aligned"],
+)
+def test_a_title_covers_only_the_table_right_below_it(text: str, lines: list[int]) -> None:
+    assert [f.line_number for f in untitled_tables(text, Path("x.md"))] == lines

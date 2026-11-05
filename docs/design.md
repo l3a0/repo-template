@@ -731,6 +731,8 @@ candidate for a synonym. Anything not listed here follows the writing-style
 rule in [CLAUDE.md](../CLAUDE.md), which prefers deleting an in-group term to
 glossing it.
 
+**Table:** Pinned vocabulary
+
 | Term | Definition |
 | --- | --- |
 | TODO | TODO |
@@ -745,6 +747,8 @@ glossing it.
 Machine-local config lives under `~/.config/PROJECT_NAME/`. Nothing tracked in
 this repository carries a secret or a machine-specific path.
 
+**Table:** Configuration settings
+
 | Setting | Secret | Lives in | Read by |
 | --- | --- | --- | --- |
 | TODO | TODO | TODO | TODO |
@@ -758,6 +762,8 @@ the same change that cuts it.
 Reviews armor what exists and rarely ask whether it should exist, so this
 register is also where the answer to "why is this needed" gets written down
 once rather than re-argued.
+
+**Table:** The considered-and-rejected register
 
 | Cut | Why |
 | --- | --- |

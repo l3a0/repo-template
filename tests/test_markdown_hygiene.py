@@ -24,6 +24,7 @@ from tests.support.markdown_sweep import (
     markdown_files,
     sweep_file,
     sweep_text,
+    untitled_tables,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -488,3 +489,28 @@ class TestIssueReferencesAreLinked:
             for n in _unlinked_references(path.read_text("utf-8"))
         ]
         assert not offenders, "unlinked issue or pull request numbers: " + ", ".join(offenders)
+
+
+def test_a_table_with_no_title_is_flagged() -> None:
+    text = "Some prose.\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n"
+    findings = untitled_tables(text, Path("x.md"))
+    assert [finding.line_number for finding in findings] == [3]
+
+
+def test_a_table_under_a_title_is_left_alone() -> None:
+    text = "**Table:** What A holds\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n"
+    assert untitled_tables(text, Path("x.md")) == []
+
+
+def test_a_table_inside_a_fence_is_left_alone() -> None:
+    text = "```text\n| A | B |\n| --- | --- |\n```\n"
+    assert untitled_tables(text, Path("x.md")) == []
+
+
+def test_every_table_in_the_repo_has_a_title() -> None:
+    findings = [
+        finding
+        for path in markdown_files(REPO_ROOT)
+        for finding in untitled_tables(path.read_text(encoding="utf-8"), path)
+    ]
+    assert findings == [], "\n".join(str(finding) for finding in findings)

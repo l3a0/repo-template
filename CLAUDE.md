@@ -79,7 +79,7 @@ Clarity comes first. Write plain sentences a reader understands on one read. Pre
 3. A label holds one idea. Several ideas become several arrows or a note, and a long label wraps.
 4. Code identifiers, state names, entry names and the design doc's pinned vocabulary stay exact, and a restyle changes no fact, actor, arrow or order.
 
-**Say what a rule says, then point to it (owner directive, 2026-11-06).** A number chain such as "under case 3 of rule 5 of design.md's `### A fill is measured from the decision`" makes the reader open another file to learn what the sentence means, and the number breaks when the list moves. So a chat reply, a design doc, the charter and a diagram state what the rule requires in plain words, and a link to the section by name follows for a reader who wants more. A section link alone is fine where the sentence already says what happens. A list item in view of the sentence naming it needs no gloss, and neither does a heading.
+**Say what a rule says, then point to it (owner directive, 2026-11-06).** A number chain such as "under case 3 of rule 5 of design.md's `### A fill is measured from the decision`" makes the reader open another file to learn what the sentence means, and the number breaks when the list moves. So a design doc, a charter, a CLAUDE.md or a diagram states what the rule requires in plain words, and a link to the section by name follows for a reader who wants more. A section link alone is fine where the sentence already says what happens. A list item in view of the sentence naming it needs no gloss, and neither does a heading.
 
 <!-- TEMPLATE: replace OWNER/REPO in the two link forms below with this
      repository's owner and name, such as l3a0/new-repo. -->

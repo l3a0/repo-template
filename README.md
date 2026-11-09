@@ -53,6 +53,9 @@ from whichever copy it was cloned off.
 - **[tests/test_markdown_hygiene.py](tests/test_markdown_hygiene.py)** runs the
   prose checks CLAUDE.md names, so they fail the suite rather than waiting
   for someone to remember the command.
+- **[tests/test_markdown_links.py](tests/test_markdown_links.py)** fails any
+  relative link whose file or heading is gone, so a doc split into pages
+  cannot break a link silently when a heading is renamed.
 
 ## Starting a repo from it
 

@@ -3,8 +3,8 @@
 A link to a file that moved, or to a heading that was renamed, renders as an
 ordinary link and fails only when a reader clicks it. A doc split into
 pages links across them, so a heading renamed on one page can break a
-sentence on another with nothing red anywhere. This check reads every relative link and asks two things:
-does the file exist, and, when the link names an anchor, does that file have
+sentence on another with nothing red anywhere. This check reads every
+relative link and asks two things: does the file exist, and, when the link names an anchor, does that file have
 a heading whose anchor matches.
 
 An anchor follows GitHub's rule for headings: lowercase the heading's text,

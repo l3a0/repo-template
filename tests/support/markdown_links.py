@@ -1,17 +1,19 @@
 """Check that every relative link in the repo's Markdown reaches its target.
 
 A link to a file that moved, or to a heading that was renamed, renders as an
-ordinary link and fails only when a reader clicks it. The architecture pages
-are split by section and link across each other hundreds of times, so a
-heading renamed on one page can break a sentence on another with nothing
-red anywhere. This check reads every relative link and asks two things:
+ordinary link and fails only when a reader clicks it. A doc split into
+pages links across them, so a heading renamed on one page can break a
+sentence on another with nothing red anywhere. This check reads every relative link and asks two things:
 does the file exist, and, when the link names an anchor, does that file have
 a heading whose anchor matches.
 
 An anchor follows GitHub's rule for headings: lowercase the heading's text,
 drop every character that is not a letter, a digit, an underscore, a hyphen
 or a space, and turn each space into a hyphen. A second heading with the same
-anchor gets `-1`, a third `-2`, and so on.
+anchor gets `-1`, a third `-2`, and so on, skipping any number another
+heading already took. Inline markup goes first, as GitHub renders it: a code
+span keeps its words, a link keeps its text, and HTML tags and emphasis
+markers drop out.
 
 Links inside a fenced block or a backtick span are not links, so they are
 skipped, the same way the prose sweeps skip them.
